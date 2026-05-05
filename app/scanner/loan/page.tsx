@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import StaffPinGate from '@/app/components/StaffPinGate'
+
+type StaffUser = {
+  id: string
+  name: string
+}
 
 type LoanItem = {
   id: string
@@ -53,6 +59,7 @@ export default function LoanPage() {
   const [scanValue, setScanValue] = useState('')
   const [loanItems, setLoanItems] = useState<LoanItem[]>([])
   const [selectedItems, setSelectedItems] = useState<string[]>([])
+  const [activeStaff, setActiveStaff] = useState<StaffUser | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -137,6 +144,11 @@ export default function LoanPage() {
 
     if (!sku || busy) return
 
+    if (!activeStaff) {
+      setMessage('Select staff member first.')
+      return
+    }
+
     setScanValue('')
     setMessage('')
 
@@ -151,6 +163,11 @@ export default function LoanPage() {
   }
 
   async function loanOutItem(sku: string) {
+    if (!activeStaff) {
+      setMessage('Select staff member first.')
+      return
+    }
+
     setBusy(true)
     setMessage('Checking item...')
 
@@ -196,7 +213,7 @@ export default function LoanPage() {
     }
 
     const confirmed = window.confirm(
-      `Mark SKU ${sku} as ON LOAN?\n\nThis will set stock level to 0.`
+      `Mark SKU ${sku} as ON LOAN by ${activeStaff.name}?\n\nThis will set stock level to 0.`
     )
 
     if (!confirmed) {
@@ -214,6 +231,7 @@ export default function LoanPage() {
         loan_status: 'on_loan',
         loaned_at: now,
         loan_returned_at: null,
+        loaned_by: activeStaff.id,
         linnworks_location_sync_status: 'pending',
         updated_at: now,
       })
@@ -230,6 +248,7 @@ export default function LoanPage() {
       sku: itemRow.sku,
       status: 'on_loan',
       loaned_at: now,
+      loaned_by: activeStaff.id,
     })
 
     if (loanError) {
@@ -249,6 +268,7 @@ export default function LoanPage() {
           stock_level: 0,
           reason: 'loan_out',
           loaned_at: now,
+          loaned_by: activeStaff.name,
         },
         status: 'pending',
       })
@@ -260,13 +280,18 @@ export default function LoanPage() {
     }
 
     setBusy(false)
-    setMessage(`${sku} marked as on loan.`)
+    setMessage(`${sku} marked as on loan by ${activeStaff.name}.`)
     await fetchLoans()
   }
 
   async function markReturned(item: LoanItem) {
+    if (!activeStaff) {
+      setMessage('Select staff member first.')
+      return
+    }
+
     const confirmed = window.confirm(
-      `Mark SKU ${item.sku} as RETURNED?\n\nThis will set stock level back to 1.`
+      `Mark SKU ${item.sku} as RETURNED by ${activeStaff.name}?\n\nThis will set stock level back to 1.`
     )
 
     if (!confirmed) return
@@ -283,6 +308,7 @@ export default function LoanPage() {
         loan_status: 'not_on_loan',
         loan_returned_at: now,
         loan_notes: null,
+        returned_by: activeStaff.id,
         linnworks_location_sync_status: 'pending',
         updated_at: now,
       })
@@ -299,6 +325,7 @@ export default function LoanPage() {
       .update({
         status: 'returned',
         returned_at: now,
+        returned_by: activeStaff.id,
         updated_at: now,
       })
       .eq('item_id', item.id)
@@ -321,6 +348,7 @@ export default function LoanPage() {
           stock_level: 1,
           reason: 'loan_returned',
           returned_at: now,
+          returned_by: activeStaff.name,
         },
         status: 'pending',
       })
@@ -333,7 +361,7 @@ export default function LoanPage() {
 
     setSelectedItems((prev) => prev.filter((id) => id !== item.id))
     setBusy(false)
-    setMessage(`${item.sku} returned and back in stock.`)
+    setMessage(`${item.sku} returned by ${activeStaff.name} and back in stock.`)
     await fetchLoans()
     focusInput()
   }
@@ -365,11 +393,19 @@ export default function LoanPage() {
                 Scan SKU before removing the tag. Return items here to reprint
                 labels and put stock back live.
               </p>
+
+              {activeStaff && (
+                <p className="mt-2 text-sm font-bold text-green-300">
+                  Active staff: {activeStaff.name}
+                </p>
+              )}
             </div>
 
             <AppNav current="loan" />
           </div>
         </header>
+
+        <StaffPinGate onStaffSelected={setActiveStaff} />
 
         <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
           <h2 className="mb-3 text-2xl font-black">Scan Item Out on Loan</h2>
@@ -381,8 +417,10 @@ export default function LoanPage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleScan()
             }}
-            placeholder="Scan item SKU"
-            disabled={busy}
+            placeholder={
+              activeStaff ? 'Scan item SKU' : 'Select staff member first'
+            }
+            disabled={busy || !activeStaff}
             inputMode="none"
             autoComplete="off"
             autoCorrect="off"
@@ -393,7 +431,7 @@ export default function LoanPage() {
 
           <button
             onClick={handleScan}
-            disabled={busy || !scanValue.trim()}
+            disabled={busy || !scanValue.trim() || !activeStaff}
             className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
           >
             {busy ? 'PROCESSING...' : 'MARK ON LOAN'}
@@ -484,7 +522,7 @@ export default function LoanPage() {
                     <div className="grid grid-cols-1 gap-2 sm:flex">
                       <button
                         onClick={() => markReturned(item)}
-                        disabled={busy}
+                        disabled={busy || !activeStaff}
                         className="rounded-xl bg-green-600 px-4 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
                       >
                         RETURN / IN STOCK
