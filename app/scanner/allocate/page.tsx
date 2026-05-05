@@ -1,9 +1,16 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import AppNav from '@/app/components/AppNav'
+import StaffPinGate from '@/app/components/StaffPinGate'
 import { supabase } from '@/lib/supabase'
 
 type ScanMode = 'bin' | 'items'
+
+type StaffUser = {
+  id: string
+  name: string
+}
 
 type WarehouseBin = {
   id: string
@@ -27,6 +34,7 @@ export default function AllocatePage() {
   const [mode, setMode] = useState<ScanMode>('bin')
   const [activeBin, setActiveBin] = useState<WarehouseBin | null>(null)
   const [pendingItems, setPendingItems] = useState<PendingItem[]>([])
+  const [activeStaff, setActiveStaff] = useState<StaffUser | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -50,6 +58,11 @@ export default function AllocatePage() {
     const value = cleanScan(scanValue)
 
     if (!value || busy) return
+
+    if (!activeStaff) {
+      setMessage('Select staff member first.')
+      return
+    }
 
     setScanValue('')
     setMessage('')
@@ -93,7 +106,7 @@ export default function AllocatePage() {
     setActiveBin(data as WarehouseBin)
     setMode('items')
     setPendingItems([])
-    setMessage(`Bin selected: ${data.bin_code}. Now scan item SKUs.`)
+    setMessage(`Bin selected: ${data.bin_code}`)
   }
 
   async function scanItem(sku: string) {
@@ -151,6 +164,11 @@ export default function AllocatePage() {
   }
 
   async function allocateItems() {
+    if (!activeStaff) {
+      setMessage('Select staff member first.')
+      return
+    }
+
     if (!activeBin) {
       setMessage('Scan a bin first.')
       return
@@ -162,13 +180,13 @@ export default function AllocatePage() {
     }
 
     const confirmed = window.confirm(
-      `Allocate ${pendingItems.length} item(s) to bin ${activeBin.bin_code}?\n\nThis will move already-allocated items to this new bin.`
+      `Allocate ${pendingItems.length} item(s) to ${activeBin.bin_code} by ${activeStaff.name}?\n\nThis will move already allocated items to this new bin.`
     )
 
     if (!confirmed) return
 
     setBusy(true)
-    setMessage('Allocating items...')
+    setMessage('Allocating...')
 
     const now = new Date().toISOString()
     const itemIds = pendingItems.map((item) => item.id)
@@ -180,6 +198,7 @@ export default function AllocatePage() {
         current_bin: activeBin.bin_code,
         location_status: 'stored',
         allocated_at: now,
+        allocated_by: activeStaff.id,
         linnworks_location_sync_status: 'pending',
         updated_at: now,
       })
@@ -202,6 +221,7 @@ export default function AllocatePage() {
           to_location: 'WAREHOUSE',
           to_bin: activeBin.bin_code,
           movement_type: 'allocate',
+          moved_by: activeStaff.id,
         }))
       )
 
@@ -224,6 +244,7 @@ export default function AllocatePage() {
             bin: activeBin.bin_code,
             movement_type: 'allocate',
             allocated_at: now,
+            allocated_by: activeStaff.name,
           },
           status: 'pending',
         }))
@@ -236,44 +257,62 @@ export default function AllocatePage() {
     }
 
     setBusy(false)
-    setMessage(`Allocated ${pendingItems.length} item(s) to ${activeBin.bin_code}`)
+    setMessage(
+      `Allocated ${pendingItems.length} item(s) to ${activeBin.bin_code} by ${activeStaff.name}`
+    )
     setPendingItems([])
     focusInput()
   }
 
   return (
     <main
-      className="min-h-screen bg-neutral-950 p-4 text-white"
+      className="min-h-screen bg-neutral-950 p-3 text-white select-none sm:p-5"
       onClick={focusInput}
     >
-      <div className="mx-auto max-w-4xl space-y-4">
+      <div className="mx-auto max-w-5xl space-y-4">
         <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <h1 className="text-3xl font-bold">Allocate to Bin</h1>
-          <p className="text-sm text-neutral-400">
-            Scan a warehouse bin first, scan item SKUs, then confirm allocation.
-          </p>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-2xl font-bold sm:text-3xl">Allocate</h1>
+              <p className="text-sm text-neutral-400">
+                Scan bin first, then scan item SKUs.
+              </p>
+
+              {activeStaff && (
+                <p className="mt-2 text-sm font-bold text-green-300">
+                  Active staff: {activeStaff.name}
+                </p>
+              )}
+            </div>
+
+            <AppNav current="allocate" />
+          </div>
         </header>
 
+        <StaffPinGate onStaffSelected={setActiveStaff} />
+
         <section
-          className={`rounded-2xl border p-5 ${
+          className={`rounded-2xl border p-4 ${
             mode === 'bin'
               ? 'border-yellow-700 bg-yellow-950/30'
               : 'border-green-700 bg-green-950/30'
           }`}
         >
-          <p className="text-sm font-bold uppercase tracking-wide text-neutral-400">
-            Current Step
+          <p className="text-xs font-bold uppercase tracking-wide text-neutral-400">
+            Current step
           </p>
 
-          <h2 className="mt-1 text-2xl font-bold">
-            {mode === 'bin' ? 'Scan Bin Barcode' : 'Scan Item SKUs'}
+          <h2 className="mt-1 text-3xl font-black">
+            {mode === 'bin' ? 'SCAN BIN' : 'SCAN ITEMS'}
           </h2>
 
           <div className="mt-4 rounded-xl bg-neutral-950 p-4">
-            <p className="text-sm text-neutral-400">Active Bin</p>
-            <p className="mt-1 font-mono text-3xl font-bold">
-              {activeBin?.bin_code || 'None'}
+            <p className="text-sm text-neutral-400">Active bin</p>
+
+            <p className="mt-1 break-all font-mono text-4xl font-black">
+              {activeBin?.bin_code || 'NONE'}
             </p>
+
             {activeBin?.label && (
               <p className="mt-1 text-sm text-neutral-400">{activeBin.label}</p>
             )}
@@ -288,18 +327,28 @@ export default function AllocatePage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleScan()
             }}
-            placeholder={mode === 'bin' ? 'Scan bin barcode' : 'Scan item SKU'}
-            disabled={busy}
-            className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-4 font-mono text-2xl outline-none focus:border-white disabled:opacity-50"
+            placeholder={
+              !activeStaff
+                ? 'Select staff member first'
+                : mode === 'bin'
+                  ? 'Scan bin barcode'
+                  : 'Scan item SKU'
+            }
+            disabled={busy || !activeStaff}
+            inputMode="none"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-5 font-mono text-2xl font-bold outline-none focus:border-white disabled:opacity-50"
             autoFocus
           />
 
           <button
             onClick={handleScan}
-            disabled={busy || !scanValue.trim()}
-            className="mt-3 w-full rounded-xl bg-white px-5 py-4 text-lg font-bold text-black disabled:opacity-50"
+            disabled={busy || !scanValue.trim() || !activeStaff}
+            className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
           >
-            {busy ? 'Processing...' : mode === 'bin' ? 'Set Bin' : 'Add Item'}
+            {busy ? 'PROCESSING...' : mode === 'bin' ? 'SET BIN' : 'ADD ITEM'}
           </button>
         </section>
 
@@ -310,28 +359,30 @@ export default function AllocatePage() {
         )}
 
         <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-xl font-bold">Items to Allocate</h2>
+              <h2 className="text-2xl font-black">Items to Allocate</h2>
               <p className="text-sm text-neutral-400">
                 {pendingItems.length} item(s) scanned
               </p>
             </div>
 
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:flex">
               <button
                 onClick={resetBin}
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-bold"
+                className="rounded-xl border border-neutral-700 px-4 py-4 text-sm font-black"
               >
-                Change Bin
+                CHANGE BIN
               </button>
 
               <button
                 onClick={allocateItems}
-                disabled={busy || !activeBin || pendingItems.length === 0}
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-500 disabled:opacity-40"
+                disabled={
+                  busy || !activeStaff || !activeBin || pendingItems.length === 0
+                }
+                className="rounded-xl bg-green-600 px-4 py-4 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
               >
-                Allocate
+                ALLOCATE
               </button>
             </div>
           </div>
@@ -342,27 +393,40 @@ export default function AllocatePage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {pendingItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3"
-                >
-                  <div>
-                    <p className="font-mono text-lg font-bold">{item.sku}</p>
-                    <p className="text-sm text-neutral-400">
-                      Current: {item.current_location || 'None'}
-                      {item.current_bin ? ` / ${item.current_bin}` : ''}
-                    </p>
-                  </div>
+              {pendingItems.map((item) => {
+                const alreadyInBin =
+                  item.current_location === 'WAREHOUSE' &&
+                  item.current_bin === activeBin?.bin_code
 
-                  <button
-                    onClick={() => removeItem(item.sku)}
-                    className="rounded-lg border border-red-800 px-3 py-2 text-sm font-bold text-red-300"
+                return (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-4"
                   >
-                    Remove
-                  </button>
-                </div>
-              ))}
+                    <div className="min-w-0">
+                      <p className="font-mono text-xl font-black">{item.sku}</p>
+
+                      <p className="truncate text-sm text-neutral-400">
+                        Current: {item.current_location || 'None'}
+                        {item.current_bin ? ` / ${item.current_bin}` : ''}
+                      </p>
+
+                      {alreadyInBin && (
+                        <p className="mt-1 text-sm font-bold text-yellow-300">
+                          Already in this bin
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => removeItem(item.sku)}
+                      className="rounded-lg border border-red-800 px-3 py-3 text-sm font-black text-red-300"
+                    >
+                      REMOVE
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
         </section>
