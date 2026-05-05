@@ -16,21 +16,24 @@ type AppNavProps = {
   onNavigate?: (url: string) => void
 }
 
-const navItems = [
+type NavItem = {
+  key: NavKey
+  label: string
+  href: string
+  iconOnly?: boolean
+}
+
+const navItems: NavItem[] = [
   { key: 'sku', label: 'SKU Search', href: '/' },
   { key: 'working', label: 'Working', href: '/working' },
   { key: 'review', label: 'Review', href: '/review' },
   { key: 'finalised', label: 'Finalised', href: '/finalised' },
   { key: 'photo-imports', label: 'Photo Imports', href: '/photo-imports' },
   { key: 'transfers', label: 'Transfers', href: '/transfers' },
-
-  // 👇 NEW (scanner tools)
   { key: 'allocate', label: 'Allocate', href: '/scanner/allocate' },
   { key: 'loan', label: 'Loan', href: '/scanner/loan' },
-
-  // settings icon only
   { key: 'settings', label: '⚙', href: '/settings', iconOnly: true },
-] as const
+]
 
 export default function AppNav({ current, onNavigate }: AppNavProps) {
   return (
@@ -38,8 +41,10 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
       {navItems.map((item) => {
         const isCurrent = current === item.key
 
-        const normalClass = `rounded-lg px-4 py-2 text-xs font-bold bg-zinc-800 hover:bg-zinc-700`
-        const iconClass = `px-2 text-lg text-zinc-400 hover:text-white`
+        const normalClass =
+          'rounded-lg px-4 py-2 text-xs font-bold bg-zinc-800 hover:bg-zinc-700'
+
+        const iconClass = 'px-2 text-lg text-zinc-400 hover:text-white'
 
         if (isCurrent) {
           return (
