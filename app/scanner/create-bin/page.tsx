@@ -260,7 +260,7 @@ export default function CreateBinPage() {
               </p>
             </div>
 
-            <AppNav current="scanner-create-bin" />
+            <AppNav />
           </div>
         </header>
 
