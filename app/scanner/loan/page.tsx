@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
-import StaffPinGate from '@/app/components/StaffPinGate'
 
 type StaffUser = {
   id: string
@@ -64,6 +63,16 @@ export default function LoanPage() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    const saved = window.localStorage.getItem('active_staff_user')
+
+    if (saved) {
+      try {
+        setActiveStaff(JSON.parse(saved))
+      } catch {
+        window.localStorage.removeItem('active_staff_user')
+      }
+    }
+
     fetchLoans()
     focusInput()
   }, [])
@@ -145,7 +154,7 @@ export default function LoanPage() {
     if (!sku || busy) return
 
     if (!activeStaff) {
-      setMessage('Select staff member first.')
+      setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
@@ -164,7 +173,7 @@ export default function LoanPage() {
 
   async function loanOutItem(sku: string) {
     if (!activeStaff) {
-      setMessage('Select staff member first.')
+      setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
@@ -286,7 +295,7 @@ export default function LoanPage() {
 
   async function markReturned(item: LoanItem) {
     if (!activeStaff) {
-      setMessage('Select staff member first.')
+      setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
@@ -394,9 +403,13 @@ export default function LoanPage() {
                 labels and put stock back live.
               </p>
 
-              {activeStaff && (
+              {activeStaff ? (
                 <p className="mt-2 text-sm font-bold text-green-300">
                   Active staff: {activeStaff.name}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm font-bold text-yellow-300">
+                  No active staff selected
                 </p>
               )}
             </div>
@@ -404,8 +417,6 @@ export default function LoanPage() {
             <AppNav current="loan" />
           </div>
         </header>
-
-        <StaffPinGate onStaffSelected={setActiveStaff} />
 
         <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
           <h2 className="mb-3 text-2xl font-black">Scan Item Out on Loan</h2>
@@ -418,7 +429,7 @@ export default function LoanPage() {
               if (e.key === 'Enter') handleScan()
             }}
             placeholder={
-              activeStaff ? 'Scan item SKU' : 'Select staff member first'
+              activeStaff ? 'Scan item SKU' : 'Go to staff PIN screen first'
             }
             disabled={busy || !activeStaff}
             inputMode="none"

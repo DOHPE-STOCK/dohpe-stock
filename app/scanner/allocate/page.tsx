@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
-import StaffPinGate from '@/app/components/StaffPinGate'
 import { supabase } from '@/lib/supabase'
 
 type ScanMode = 'bin' | 'items'
@@ -39,6 +38,16 @@ export default function AllocatePage() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    const saved = window.localStorage.getItem('active_staff_user')
+
+    if (saved) {
+      try {
+        setActiveStaff(JSON.parse(saved))
+      } catch {
+        window.localStorage.removeItem('active_staff_user')
+      }
+    }
+
     focusInput()
   }, [])
 
@@ -60,7 +69,7 @@ export default function AllocatePage() {
     if (!value || busy) return
 
     if (!activeStaff) {
-      setMessage('Select staff member first.')
+      setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
@@ -165,7 +174,7 @@ export default function AllocatePage() {
 
   async function allocateItems() {
     if (!activeStaff) {
-      setMessage('Select staff member first.')
+      setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
@@ -278,9 +287,13 @@ export default function AllocatePage() {
                 Scan bin first, then scan item SKUs.
               </p>
 
-              {activeStaff && (
+              {activeStaff ? (
                 <p className="mt-2 text-sm font-bold text-green-300">
                   Active staff: {activeStaff.name}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm font-bold text-yellow-300">
+                  No active staff selected
                 </p>
               )}
             </div>
@@ -288,8 +301,6 @@ export default function AllocatePage() {
             <AppNav current="allocate" />
           </div>
         </header>
-
-        <StaffPinGate onStaffSelected={setActiveStaff} />
 
         <section
           className={`rounded-2xl border p-4 ${
@@ -329,7 +340,7 @@ export default function AllocatePage() {
             }}
             placeholder={
               !activeStaff
-                ? 'Select staff member first'
+                ? 'Go to staff PIN screen first'
                 : mode === 'bin'
                   ? 'Scan bin barcode'
                   : 'Scan item SKU'
