@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import { useStaff } from '@/app/context/StaffContext'
 
+type ReturnTarget = 'shop' | 'warehouse'
+
 type LoanItem = {
   id: string
   sku: string
@@ -36,9 +38,7 @@ function getSizeText(item: LoanItem) {
     return `W${item.waist_in}"`
   }
 
-  if (item.tagged_size) {
-    return item.tagged_size
-  }
+  if (item.tagged_size) return item.tagged_size
 
   return ''
 }
@@ -55,6 +55,10 @@ export default function LoanPage() {
   const [scanValue, setScanValue] = useState('')
   const [loanItems, setLoanItems] = useState<LoanItem[]>([])
   const [selectedItems, setSelectedItems] = useState<string[]>([])
+  const [pendingReturn, setPendingReturn] = useState<{
+    item: LoanItem
+    target: ReturnTarget
+  } | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -149,6 +153,12 @@ export default function LoanPage() {
 
     if (!isValidSku(sku)) {
       setMessage(`Invalid SKU: ${sku}`)
+      focusInput()
+      return
+    }
+
+    if (pendingReturn) {
+      await confirmReturnScan(sku)
       focusInput()
       return
     }
@@ -279,14 +289,54 @@ export default function LoanPage() {
     await fetchLoans()
   }
 
-  async function markReturned(item: LoanItem) {
+  function startReturn(item: LoanItem, target: ReturnTarget) {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
+    setPendingReturn({ item, target })
+    setScanValue('')
+    setMessage(
+      `Scan SKU ${item.sku} now to confirm return to ${
+        target === 'shop' ? 'SHOP' : 'WAREHOUSE'
+      }.`
+    )
+    focusInput()
+  }
+
+  function cancelReturn() {
+    setPendingReturn(null)
+    setScanValue('')
+    setMessage('Return cancelled.')
+    focusInput()
+  }
+
+  async function confirmReturnScan(scannedSku: string) {
+    if (!pendingReturn) return
+
+    if (scannedSku !== pendingReturn.item.sku) {
+      setMessage(
+        `Wrong SKU scanned. Expected ${pendingReturn.item.sku}, scanned ${scannedSku}.`
+      )
+      return
+    }
+
+    await markReturned(pendingReturn.item, pendingReturn.target)
+  }
+
+  async function markReturned(item: LoanItem, target: ReturnTarget) {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
+    const returnLocation = target === 'shop' ? 'SHOP-1' : 'WAREHOUSE'
+    const returnReason =
+      target === 'shop' ? 'loan_returned_to_shop' : 'loan_returned_to_warehouse'
+
     const confirmed = window.confirm(
-      `Mark SKU ${item.sku} as RETURNED by ${staff.name}?\n\nThis will set stock level back to 1.`
+      `Return SKU ${item.sku} to ${returnLocation} by ${staff.name}?\n\nThis will set stock level back to 1.`
     )
 
     if (!confirmed) return
@@ -304,6 +354,9 @@ export default function LoanPage() {
         loan_returned_at: now,
         loan_notes: null,
         returned_by: staff.id,
+        current_location: returnLocation,
+        current_bin: returnLocation,
+        location_status: 'available',
         linnworks_location_sync_status: 'pending',
         updated_at: now,
       })
@@ -341,7 +394,9 @@ export default function LoanPage() {
         payload: {
           sku: item.sku,
           stock_level: 1,
-          reason: 'loan_returned',
+          location: returnLocation,
+          bin: returnLocation,
+          reason: returnReason,
           returned_at: now,
           returned_by: staff.name,
         },
@@ -354,9 +409,10 @@ export default function LoanPage() {
       return
     }
 
+    setPendingReturn(null)
     setSelectedItems((prev) => prev.filter((id) => id !== item.id))
     setBusy(false)
-    setMessage(`${item.sku} returned by ${staff.name} and back in stock.`)
+    setMessage(`${item.sku} returned to ${returnLocation} by ${staff.name}.`)
     await fetchLoans()
     focusInput()
   }
@@ -404,8 +460,39 @@ export default function LoanPage() {
           </div>
         </header>
 
+        {pendingReturn && (
+          <section className="rounded-2xl border border-orange-700 bg-orange-950 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-black text-orange-200">
+                  Confirm Return Scan
+                </h2>
+
+                <p className="text-sm text-orange-200">
+                  Scan SKU{' '}
+                  <span className="font-mono font-black">
+                    {pendingReturn.item.sku}
+                  </span>{' '}
+                  to return to{' '}
+                  {pendingReturn.target === 'shop' ? 'SHOP' : 'WAREHOUSE'}.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={cancelReturn}
+                className="rounded-xl border border-orange-500 px-4 py-3 text-sm font-black text-orange-100"
+              >
+                CANCEL RETURN
+              </button>
+            </div>
+          </section>
+        )}
+
         <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="mb-3 text-2xl font-black">Scan Item Out on Loan</h2>
+          <h2 className="mb-3 text-2xl font-black">
+            {pendingReturn ? 'Scan SKU to Confirm Return' : 'Scan Item Out on Loan'}
+          </h2>
 
           <input
             ref={inputRef}
@@ -414,7 +501,13 @@ export default function LoanPage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleScan()
             }}
-            placeholder={staff ? 'Scan item SKU' : 'Go to staff PIN screen first'}
+            placeholder={
+              staff
+                ? pendingReturn
+                  ? `Scan ${pendingReturn.item.sku} to confirm return`
+                  : 'Scan item SKU'
+                : 'Go to staff PIN screen first'
+            }
             disabled={busy || !staff}
             inputMode="none"
             autoComplete="off"
@@ -429,7 +522,11 @@ export default function LoanPage() {
             disabled={busy || !scanValue.trim() || !staff}
             className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
           >
-            {busy ? 'PROCESSING...' : 'MARK ON LOAN'}
+            {busy
+              ? 'PROCESSING...'
+              : pendingReturn
+                ? 'CONFIRM RETURN'
+                : 'MARK ON LOAN'}
           </button>
         </section>
 
@@ -516,11 +613,19 @@ export default function LoanPage() {
 
                     <div className="grid grid-cols-1 gap-2 sm:flex">
                       <button
-                        onClick={() => markReturned(item)}
+                        onClick={() => startReturn(item, 'shop')}
                         disabled={busy || !staff}
                         className="rounded-xl bg-green-600 px-4 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
                       >
-                        RETURN / IN STOCK
+                        RETURN TO SHOP
+                      </button>
+
+                      <button
+                        onClick={() => startReturn(item, 'warehouse')}
+                        disabled={busy || !staff}
+                        className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-500 disabled:opacity-40"
+                      >
+                        RETURN TO WAREHOUSE
                       </button>
                     </div>
                   </div>
