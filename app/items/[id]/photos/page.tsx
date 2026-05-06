@@ -9,6 +9,7 @@ import { useStaff } from '@/app/context/StaffContext'
 export default function PhotosPage() {
   const params = useParams()
   const id = params.id as string
+
   const { staff } = useStaff()
 
   const [item, setItem] = useState<any>(null)
@@ -41,18 +42,6 @@ export default function PhotosPage() {
     return () => window.clearTimeout(timer)
   }, [message])
 
-  async function touchItemLastSavedBy() {
-    if (!staff) return
-
-    await supabase
-      .from('items')
-      .update({
-        last_saved_by: staff.id,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-  }
-
   async function fetchItem() {
     const { data } = await supabase
       .from('items')
@@ -75,12 +64,36 @@ export default function PhotosPage() {
     setImages(imageList)
 
     if (imageList.length > 0) {
-      setSelectedImage(imageList[0])
+      const currentSelectedId = selectedImage?.id
+
+      if (currentSelectedId) {
+        const updatedSelected = imageList.find(
+          (img) => img.id === currentSelectedId
+        )
+
+        setSelectedImage(updatedSelected || imageList[0])
+      } else {
+        setSelectedImage(imageList[0])
+      }
+    } else {
+      setSelectedImage(null)
     }
   }
 
   function getImageUrl(image: any) {
     return image?.processed_url || image?.original_url || ''
+  }
+
+  async function touchItemLastSavedBy() {
+    if (!staff) return
+
+    await supabase
+      .from('items')
+      .update({
+        last_saved_by: staff.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
   }
 
   function confirmNavigation(url: string) {
@@ -96,11 +109,6 @@ export default function PhotosPage() {
   }
 
   async function uploadFiles(event: any) {
-    if (!staff) {
-      setMessage('No active staff selected. Go to staff PIN screen first.')
-      return
-    }
-
     const files = event.target.files
 
     if (!files || files.length === 0) return
@@ -112,6 +120,7 @@ export default function PhotosPage() {
       const file = files[i]
 
       const filename = `${id}/${Date.now()}-${file.name}`
+
       const storagePath = `originals/${filename}`
 
       const { error: uploadError } = await supabase.storage
@@ -137,22 +146,26 @@ export default function PhotosPage() {
     await touchItemLastSavedBy()
 
     setUploading(false)
-    setMessage(`Upload complete by ${staff.name}`)
+    setMessage(
+      staff
+        ? `Upload complete by ${staff.name}`
+        : 'Upload complete'
+    )
 
     await fetchImages()
   }
 
   async function moveImage(image: any, direction: 'up' | 'down') {
-    if (!staff) {
-      setMessage('No active staff selected. Go to staff PIN screen first.')
-      return
-    }
-
-    const currentIndex = images.findIndex((img) => img.id === image.id)
+    const currentIndex = images.findIndex(
+      (img) => img.id === image.id
+    )
 
     if (currentIndex === -1) return
 
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1
+    const targetIndex =
+      direction === 'up'
+        ? currentIndex - 1
+        : currentIndex + 1
 
     if (targetIndex < 0 || targetIndex >= images.length) {
       return
@@ -176,17 +189,16 @@ export default function PhotosPage() {
 
     await touchItemLastSavedBy()
 
-    setMessage(`Image order updated by ${staff.name}`)
+    setMessage(
+      staff
+        ? `Image order updated by ${staff.name}`
+        : 'Image order updated'
+    )
 
     await fetchImages()
   }
 
   async function saveProcessedImage() {
-    if (!staff) {
-      setMessage('No active staff selected. Go to staff PIN screen first.')
-      return
-    }
-
     if (!selectedImage) return
 
     setSavingEdit(true)
@@ -201,7 +213,11 @@ export default function PhotosPage() {
 
       await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve()
-        img.onerror = () => reject(new Error('Could not load image for editing'))
+
+        img.onerror = () =>
+          reject(
+            new Error('Could not load image for editing')
+          )
       })
 
       const size = 1600
@@ -222,7 +238,10 @@ export default function PhotosPage() {
 
       ctx.save()
 
-      ctx.translate(size / 2 + offsetX, size / 2 + offsetY)
+      ctx.translate(
+        size / 2 + offsetX,
+        size / 2 + offsetY
+      )
 
       ctx.rotate((rotate * Math.PI) / 180)
 
@@ -243,53 +262,80 @@ export default function PhotosPage() {
 
       ctx.restore()
 
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (outputBlob) => {
-            if (outputBlob) {
-              resolve(outputBlob)
-            } else {
-              reject(new Error('Could not export image'))
-            }
-          },
-          'image/jpeg',
-          0.85
-        )
-      })
+      const blob = await new Promise<Blob>(
+        (resolve, reject) => {
+          canvas.toBlob(
+            (outputBlob) => {
+              if (outputBlob) {
+                resolve(outputBlob)
+              } else {
+                reject(
+                  new Error('Could not export image')
+                )
+              }
+            },
+            'image/jpeg',
+            0.85
+          )
+        }
+      )
 
-      const storagePath = `processed/${id}/${selectedImage.id}-${Date.now()}.jpg`
+      const storagePath =
+        `processed/${id}/${selectedImage.id}-${Date.now()}.jpg`
 
-      const { error: uploadError } = await supabase.storage
-        .from('item-images')
-        .upload(storagePath, blob, {
-          contentType: 'image/jpeg',
-        })
+      const { error: uploadError } =
+        await supabase.storage
+          .from('item-images')
+          .upload(storagePath, blob, {
+            contentType: 'image/jpeg',
+          })
 
       if (uploadError) {
         throw new Error(uploadError.message)
       }
 
-      const { data: publicUrlData } = supabase.storage
-        .from('item-images')
-        .getPublicUrl(storagePath)
+      const { data: publicUrlData } =
+        supabase.storage
+          .from('item-images')
+          .getPublicUrl(storagePath)
 
-      const { error: updateError } = await supabase
-        .from('item_images')
-        .update({
-          processed_url: publicUrlData.publicUrl,
-        })
-        .eq('id', selectedImage.id)
+      const { error: updateError } =
+        await supabase
+          .from('item_images')
+          .update({
+            processed_url:
+              publicUrlData.publicUrl,
+          })
+          .eq('id', selectedImage.id)
 
       if (updateError) {
         throw new Error(updateError.message)
       }
 
+      const updatedSelectedImage = {
+        ...selectedImage,
+        processed_url: publicUrlData.publicUrl,
+      }
+
+      setSelectedImage(updatedSelectedImage)
+
+      setImages((prev) =>
+        prev.map((image) =>
+          image.id === selectedImage.id
+            ? updatedSelectedImage
+            : image
+        )
+      )
+
       await touchItemLastSavedBy()
 
-      setMessage(`Processed image saved by ${staff.name}`)
-      setHasUnsavedChanges(false)
+      setMessage(
+        staff
+          ? `Processed image saved by ${staff.name}`
+          : 'Processed image saved'
+      )
 
-      await fetchImages()
+      setHasUnsavedChanges(false)
     } catch (error: any) {
       setMessage(error.message)
     } finally {
@@ -297,7 +343,8 @@ export default function PhotosPage() {
     }
   }
 
-  const selectedImageUrl = getImageUrl(selectedImage)
+  const selectedImageUrl =
+    getImageUrl(selectedImage)
 
   return (
     <main className="min-h-screen bg-zinc-950 p-5 text-white">
@@ -310,21 +357,22 @@ export default function PhotosPage() {
 
             <p className="text-sm text-zinc-400">
               {images.length} image(s)
-              {hasUnsavedChanges ? ' · Unsaved photo edits' : ''}
+              {hasUnsavedChanges
+                ? ' · Unsaved photo edits'
+                : ''}
             </p>
 
-            {staff ? (
-              <p className="mt-1 text-sm font-bold text-green-300">
+            {staff && (
+              <p className="mt-1 text-xs text-green-400">
                 Active staff: {staff.name}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm font-bold text-yellow-300">
-                No active staff selected
               </p>
             )}
           </div>
 
-          <AppNav current={undefined} onNavigate={confirmNavigation} />
+          <AppNav
+            current={undefined}
+            onNavigate={confirmNavigation}
+          />
         </div>
 
         <div className="flex items-center gap-3">
@@ -336,7 +384,9 @@ export default function PhotosPage() {
 
           <button
             type="button"
-            onClick={() => confirmNavigation(`/items/${id}`)}
+            onClick={() =>
+              confirmNavigation(`/items/${id}`)
+            }
             className="rounded-lg bg-zinc-800 px-5 py-2 text-sm font-bold hover:bg-zinc-700"
           >
             Back to Item
@@ -353,7 +403,9 @@ export default function PhotosPage() {
 
             <label className="flex h-32 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-950 text-center hover:border-white">
               <div>
-                <p className="text-lg font-bold">Click to upload photos</p>
+                <p className="text-lg font-bold">
+                  Click to upload photos
+                </p>
 
                 <p className="mt-1 text-sm text-zinc-400">
                   Multiple images supported
@@ -365,28 +417,21 @@ export default function PhotosPage() {
                 multiple
                 accept="image/*"
                 onChange={uploadFiles}
-                disabled={!staff}
                 className="hidden"
               />
             </label>
 
-            {!staff && (
-              <p className="mt-3 text-sm font-bold text-yellow-300">
-                Select staff before uploading.
-              </p>
-            )}
-
             {uploading && (
-              <p className="mt-3 text-sm text-yellow-400">Uploading...</p>
+              <p className="mt-3 text-sm text-yellow-400">
+                Uploading...
+              </p>
             )}
           </section>
 
           <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
-                Gallery
-              </h2>
-            </div>
+            <h2 className="mb-4 text-sm font-bold uppercase tracking-wide text-zinc-300">
+              Gallery
+            </h2>
 
             {images.length === 0 ? (
               <div className="rounded-lg border border-dashed border-zinc-700 p-10 text-center text-zinc-500">
@@ -395,20 +440,26 @@ export default function PhotosPage() {
             ) : (
               <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6">
                 {images.map((image, index) => {
-                  const imageUrl = getImageUrl(image)
+                  const imageUrl =
+                    getImageUrl(image)
 
-                  const isSelected = selectedImage?.id === image.id
+                  const isSelected =
+                    selectedImage?.id === image.id
 
                   return (
                     <div
                       key={image.id}
                       className={`overflow-hidden rounded-xl border bg-zinc-950 ${
-                        isSelected ? 'border-white' : 'border-zinc-700'
+                        isSelected
+                          ? 'border-white'
+                          : 'border-zinc-700'
                       }`}
                     >
                       <button
                         type="button"
-                        onClick={() => setSelectedImage(image)}
+                        onClick={() =>
+                          setSelectedImage(image)
+                        }
                         className="block w-full"
                       >
                         <img
@@ -419,13 +470,17 @@ export default function PhotosPage() {
                       </button>
 
                       <div className="space-y-2 p-2 text-xs text-zinc-400">
-                        <p>Order: {image.image_order}</p>
+                        <p>
+                          Order: {image.image_order}
+                        </p>
 
                         <div className="grid grid-cols-2 gap-1">
                           <button
                             type="button"
-                            onClick={() => moveImage(image, 'up')}
-                            disabled={index === 0 || !staff}
+                            onClick={() =>
+                              moveImage(image, 'up')
+                            }
+                            disabled={index === 0}
                             className="rounded bg-zinc-800 px-2 py-1 text-white disabled:opacity-30"
                           >
                             ↑
@@ -433,8 +488,12 @@ export default function PhotosPage() {
 
                           <button
                             type="button"
-                            onClick={() => moveImage(image, 'down')}
-                            disabled={index === images.length - 1 || !staff}
+                            onClick={() =>
+                              moveImage(image, 'down')
+                            }
+                            disabled={
+                              index === images.length - 1
+                            }
                             className="rounded bg-zinc-800 px-2 py-1 text-white disabled:opacity-30"
                           >
                             ↓
@@ -594,10 +653,12 @@ export default function PhotosPage() {
                     <button
                       type="button"
                       onClick={saveProcessedImage}
-                      disabled={savingEdit || !staff}
+                      disabled={savingEdit}
                       className="rounded-lg bg-green-600 px-3 py-2 text-sm font-bold hover:bg-green-500 disabled:opacity-50"
                     >
-                      {savingEdit ? 'Saving...' : 'Save Processed'}
+                      {savingEdit
+                        ? 'Saving...'
+                        : 'Save Processed'}
                     </button>
                   </div>
                 </div>
