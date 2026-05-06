@@ -7,12 +7,33 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import { useStaff } from '@/app/context/StaffContext'
 
+type ItemImage = {
+  processed_url: string | null
+  original_url: string | null
+  image_order: number | null
+}
+
+type LinkedItem = {
+  id: string
+  sku: string
+  brand: string | null
+  reporting_category: string | null
+  colour_primary: string | null
+  colour_secondary: string | null
+  tagged_size: string | null
+  waist_in: string | number | null
+  ai_title: string | null
+  basic_title: string | null
+  item_images?: ItemImage[]
+}
+
 type TransferItem = {
   id: string
   item_id: string | null
   sku: string
   status: string
   received_at: string | null
+  items?: LinkedItem | null
 }
 
 type Transfer = {
@@ -60,7 +81,24 @@ export default function TransferDetailPage() {
           item_id,
           sku,
           status,
-          received_at
+          received_at,
+          items (
+            id,
+            sku,
+            brand,
+            reporting_category,
+            colour_primary,
+            colour_secondary,
+            tagged_size,
+            waist_in,
+            ai_title,
+            basic_title,
+            item_images (
+              processed_url,
+              original_url,
+              image_order
+            )
+          )
         )
       `)
       .eq('id', id)
@@ -73,7 +111,16 @@ export default function TransferDetailPage() {
       return
     }
 
-    setTransfer(data as Transfer)
+    const transferData = data as Transfer
+
+    transferData.stock_transfer_items = [
+      ...(transferData.stock_transfer_items || []),
+    ].sort((a, b) => {
+      if (a.status !== b.status) return a.status.localeCompare(b.status)
+      return a.sku.localeCompare(b.sku)
+    })
+
+    setTransfer(transferData)
   }
 
   function counts() {
@@ -104,6 +151,39 @@ export default function TransferDetailPage() {
     if (status === 'missing') return 'bg-red-950 text-red-300 border-red-800'
     if (status === 'part_received') return 'bg-yellow-950 text-yellow-300 border-yellow-800'
     return 'bg-blue-950 text-blue-300 border-blue-800'
+  }
+
+  function getSizeText(item?: LinkedItem | null) {
+    if (!item) return 'No size'
+
+    if (
+      item.waist_in !== null &&
+      item.waist_in !== undefined &&
+      item.waist_in !== ''
+    ) {
+      return `W${item.waist_in}"`
+    }
+
+    return item.tagged_size || 'No size'
+  }
+
+  function getColourText(item?: LinkedItem | null) {
+    if (!item) return 'No colour'
+
+    const colours = [item.colour_primary, item.colour_secondary].filter(Boolean)
+
+    return colours.length > 0 ? colours.join(' / ') : 'No colour'
+  }
+
+  function getThumbnail(item?: LinkedItem | null) {
+    const images = item?.item_images || []
+
+    const firstImage =
+      images
+        .filter((image) => image.processed_url || image.original_url)
+        .sort((a, b) => (a.image_order ?? 0) - (b.image_order ?? 0))[0] || null
+
+    return firstImage?.processed_url || firstImage?.original_url || null
   }
 
   async function markTransferReceived() {
@@ -321,27 +401,61 @@ export default function TransferDetailPage() {
           </div>
         ) : (
           <div className="space-y-2">
-            {transfer.stock_transfer_items.map((item) => (
-              <div
-                key={item.id}
-                className="flex items-center justify-between gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-4"
-              >
-                <div>
-                  <p className="font-mono text-xl font-black">{item.sku}</p>
-                  <p className="text-sm text-neutral-500">
-                    Received: {formatDate(item.received_at)}
-                  </p>
-                </div>
+            {transfer.stock_transfer_items.map((transferItem) => {
+              const linkedItem = transferItem.items
+              const thumbnailUrl = getThumbnail(linkedItem)
 
-                <span
-                  className={`rounded-full border px-3 py-1 text-xs font-black uppercase ${statusClass(
-                    item.status
-                  )}`}
+              return (
+                <div
+                  key={transferItem.id}
+                  className="grid grid-cols-[64px_1fr_auto] items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3"
                 >
-                  {item.status.replace('_', ' ')}
-                </span>
-              </div>
-            ))}
+                  <div className="h-16 w-16 overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900">
+                    {thumbnailUrl ? (
+                      <img
+                        src={thumbnailUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-500">
+                        No image
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-baseline gap-2">
+                      <p className="font-mono text-base font-black">
+                        {transferItem.sku}
+                      </p>
+
+                      <p className="text-xs text-neutral-500">
+                        Received: {formatDate(transferItem.received_at)}
+                      </p>
+                    </div>
+
+                    <p className="truncate text-sm font-bold text-neutral-200">
+                      {linkedItem?.ai_title || linkedItem?.basic_title || 'Untitled item'}
+                    </p>
+
+                    <p className="truncate text-xs text-neutral-400">
+                      {linkedItem?.brand || 'No brand'} ·{' '}
+                      {linkedItem?.reporting_category || 'No category'} ·{' '}
+                      {getColourText(linkedItem)} · {getSizeText(linkedItem)}
+                    </p>
+                  </div>
+
+                  <span
+                    className={`rounded-full border px-3 py-1 text-xs font-black uppercase ${statusClass(
+                      transferItem.status
+                    )}`}
+                  >
+                    {transferItem.status.replace('_', ' ')}
+                  </span>
+                </div>
+              )
+            })}
           </div>
         )}
       </section>
