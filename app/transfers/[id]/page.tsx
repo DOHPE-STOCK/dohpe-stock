@@ -7,12 +7,6 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import { useStaff } from '@/app/context/StaffContext'
 
-type ItemImage = {
-  processed_url: string | null
-  original_url: string | null
-  image_order: number | null
-}
-
 type LinkedItem = {
   id: string
   sku: string
@@ -24,7 +18,11 @@ type LinkedItem = {
   waist_in: string | number | null
   ai_title: string | null
   basic_title: string | null
-  item_images?: ItemImage[]
+  item_images?: {
+    processed_url: string | null
+    original_url: string | null
+    image_order: number | null
+  }[]
 }
 
 type TransferItem = {
@@ -33,7 +31,7 @@ type TransferItem = {
   sku: string
   status: string
   received_at: string | null
-  items?: LinkedItem | null
+  items?: LinkedItem[] | LinkedItem | null
 }
 
 type Transfer = {
@@ -46,6 +44,34 @@ type Transfer = {
   sent_at: string | null
   received_at: string | null
   stock_transfer_items: TransferItem[]
+}
+
+function getSizeText(item: LinkedItem | null | undefined) {
+  if (!item) return ''
+
+  if (
+    item.waist_in !== null &&
+    item.waist_in !== undefined &&
+    item.waist_in !== ''
+  ) {
+    return `W${item.waist_in}"`
+  }
+
+  if (item.tagged_size) {
+    return item.tagged_size
+  }
+
+  return ''
+}
+
+function getThumbnail(item?: LinkedItem | null) {
+  if (!item?.item_images || item.item_images.length === 0) return null
+
+  const sorted = [...item.item_images].sort(
+    (a, b) => (a.image_order ?? 0) - (b.image_order ?? 0)
+  )
+
+  return sorted[0]?.processed_url || sorted[0]?.original_url || null
 }
 
 export default function TransferDetailPage() {
@@ -111,16 +137,7 @@ export default function TransferDetailPage() {
       return
     }
 
-    const transferData = data as Transfer
-
-    transferData.stock_transfer_items = [
-      ...(transferData.stock_transfer_items || []),
-    ].sort((a, b) => {
-      if (a.status !== b.status) return a.status.localeCompare(b.status)
-      return a.sku.localeCompare(b.sku)
-    })
-
-    setTransfer(transferData)
+    setTransfer(data as unknown as Transfer)
   }
 
   function counts() {
@@ -147,50 +164,26 @@ export default function TransferDetailPage() {
   }
 
   function statusClass(status: string) {
-    if (status === 'received') return 'bg-green-950 text-green-300 border-green-800'
-    if (status === 'missing') return 'bg-red-950 text-red-300 border-red-800'
-    if (status === 'part_received') return 'bg-yellow-950 text-yellow-300 border-yellow-800'
-    return 'bg-blue-950 text-blue-300 border-blue-800'
-  }
-
-  function getSizeText(item?: LinkedItem | null) {
-    if (!item) return 'No size'
-
-    if (
-      item.waist_in !== null &&
-      item.waist_in !== undefined &&
-      item.waist_in !== ''
-    ) {
-      return `W${item.waist_in}"`
+    if (status === 'received') {
+      return 'bg-green-950 text-green-300 border-green-800'
     }
 
-    return item.tagged_size || 'No size'
-  }
+    if (status === 'missing') {
+      return 'bg-red-950 text-red-300 border-red-800'
+    }
 
-  function getColourText(item?: LinkedItem | null) {
-    if (!item) return 'No colour'
+    if (status === 'part_received') {
+      return 'bg-yellow-950 text-yellow-300 border-yellow-800'
+    }
 
-    const colours = [item.colour_primary, item.colour_secondary].filter(Boolean)
-
-    return colours.length > 0 ? colours.join(' / ') : 'No colour'
-  }
-
-  function getThumbnail(item?: LinkedItem | null) {
-    const images = item?.item_images || []
-
-    const firstImage =
-      images
-        .filter((image) => image.processed_url || image.original_url)
-        .sort((a, b) => (a.image_order ?? 0) - (b.image_order ?? 0))[0] || null
-
-    return firstImage?.processed_url || firstImage?.original_url || null
+    return 'bg-blue-950 text-blue-300 border-blue-800'
   }
 
   async function markTransferReceived() {
     if (!transfer) return
 
     if (!staff) {
-      setMessage('No active staff selected. Go to staff PIN screen first.')
+      setMessage('No active staff selected.')
       return
     }
 
@@ -204,7 +197,7 @@ export default function TransferDetailPage() {
     }
 
     const confirmed = window.confirm(
-      `Receive transfer #${transfer.transfer_number} by ${staff.name}?\n\nExpected quantity: ${receivableItems.length}\nDestination: ${transfer.to_location}`
+      `Receive transfer #${transfer.transfer_number} by ${staff.name}?\n\nExpected quantity: ${receivableItems.length}`
     )
 
     if (!confirmed) return
@@ -268,8 +261,10 @@ export default function TransferDetailPage() {
       return
     }
 
-    setMessage(`Transfer #${transfer.transfer_number} received by ${staff.name}.`)
+    setMessage(`Transfer #${transfer.transfer_number} received.`)
+
     await fetchTransfer()
+
     setLoading(false)
   }
 
@@ -341,6 +336,7 @@ export default function TransferDetailPage() {
         <div className="grid gap-3 md:grid-cols-4">
           <div className="rounded-xl bg-neutral-950 p-4">
             <p className="text-xs uppercase text-neutral-500">Status</p>
+
             <span
               className={`mt-2 inline-block rounded-full border px-3 py-1 text-xs font-black uppercase ${statusClass(
                 transfer.status
@@ -351,18 +347,29 @@ export default function TransferDetailPage() {
           </div>
 
           <div className="rounded-xl bg-neutral-950 p-4">
-            <p className="text-xs uppercase text-neutral-500">Expected Qty</p>
+            <p className="text-xs uppercase text-neutral-500">
+              Expected Qty
+            </p>
+
             <p className="mt-1 text-3xl font-black">{c.total}</p>
           </div>
 
           <div className="rounded-xl bg-neutral-950 p-4">
             <p className="text-xs uppercase text-neutral-500">Received</p>
-            <p className="mt-1 text-3xl font-black text-green-300">{c.received}</p>
+
+            <p className="mt-1 text-3xl font-black text-green-300">
+              {c.received}
+            </p>
           </div>
 
           <div className="rounded-xl bg-neutral-950 p-4">
-            <p className="text-xs uppercase text-neutral-500">Still Expected</p>
-            <p className="mt-1 text-3xl font-black text-blue-300">{c.expected}</p>
+            <p className="text-xs uppercase text-neutral-500">
+              Still Expected
+            </p>
+
+            <p className="mt-1 text-3xl font-black text-blue-300">
+              {c.expected}
+            </p>
           </div>
         </div>
 
@@ -402,18 +409,21 @@ export default function TransferDetailPage() {
         ) : (
           <div className="space-y-2">
             {transfer.stock_transfer_items.map((transferItem) => {
-              const linkedItem = transferItem.items
-              const thumbnailUrl = getThumbnail(linkedItem)
+              const linkedItem = Array.isArray(transferItem.items)
+                ? transferItem.items[0] || null
+                : transferItem.items
+
+              const imageUrl = getThumbnail(linkedItem)
 
               return (
                 <div
                   key={transferItem.id}
-                  className="grid grid-cols-[64px_1fr_auto] items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3"
+                  className="flex items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3"
                 >
-                  <div className="h-16 w-16 overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900">
-                    {thumbnailUrl ? (
+                  <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-neutral-900">
+                    {imageUrl ? (
                       <img
-                        src={thumbnailUrl}
+                        src={imageUrl}
                         alt=""
                         className="h-full w-full object-cover"
                       />
@@ -424,35 +434,63 @@ export default function TransferDetailPage() {
                     )}
                   </div>
 
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <p className="font-mono text-base font-black">
-                        {transferItem.sku}
-                      </p>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-mono text-sm text-neutral-500">
+                      {transferItem.sku}
+                    </p>
 
-                      <p className="text-xs text-neutral-500">
-                        Received: {formatDate(transferItem.received_at)}
-                      </p>
+                    <h3 className="truncate text-sm font-bold text-white">
+                      {linkedItem?.ai_title ||
+                        linkedItem?.basic_title ||
+                        'Untitled item'}
+                    </h3>
+
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-400">
+                      <span>
+                        {linkedItem?.brand || 'No brand'}
+                      </span>
+
+                      <span>·</span>
+
+                      <span>
+                        {linkedItem?.reporting_category || 'No category'}
+                      </span>
+
+                      <span>·</span>
+
+                      <span>
+                        {linkedItem?.colour_primary || 'No colour'}
+                      </span>
+
+                      {linkedItem?.colour_secondary && (
+                        <>
+                          <span>·</span>
+                          <span>{linkedItem.colour_secondary}</span>
+                        </>
+                      )}
+
+                      {getSizeText(linkedItem) && (
+                        <>
+                          <span>·</span>
+                          <span>{getSizeText(linkedItem)}</span>
+                        </>
+                      )}
                     </div>
-
-                    <p className="truncate text-sm font-bold text-neutral-200">
-                      {linkedItem?.ai_title || linkedItem?.basic_title || 'Untitled item'}
-                    </p>
-
-                    <p className="truncate text-xs text-neutral-400">
-                      {linkedItem?.brand || 'No brand'} ·{' '}
-                      {linkedItem?.reporting_category || 'No category'} ·{' '}
-                      {getColourText(linkedItem)} · {getSizeText(linkedItem)}
-                    </p>
                   </div>
 
-                  <span
-                    className={`rounded-full border px-3 py-1 text-xs font-black uppercase ${statusClass(
-                      transferItem.status
-                    )}`}
-                  >
-                    {transferItem.status.replace('_', ' ')}
-                  </span>
+                  <div className="flex flex-col items-end gap-2">
+                    <span
+                      className={`rounded-full border px-3 py-1 text-xs font-black uppercase ${statusClass(
+                        transferItem.status
+                      )}`}
+                    >
+                      {transferItem.status.replace('_', ' ')}
+                    </span>
+
+                    <p className="text-[11px] text-neutral-500">
+                      {formatDate(transferItem.received_at)}
+                    </p>
+                  </div>
                 </div>
               )
             })}
