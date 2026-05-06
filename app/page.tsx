@@ -147,16 +147,21 @@ export default function SkuSearchPage() {
   )
 
   const selectedLoanCount = selectedLoanItems.length
+  const hasSelectedLoanItems = selectedLoanCount > 0
+  const hasMixedLoanSelection =
+    selectedLoanCount > 0 && selectedLoanCount < selectedCount
 
   const allSelected =
     scannedItems.length > 0 && scannedItems.every((item) => item.selected)
 
   const showTransferToShop =
     selectedCount > 0 &&
+    !hasSelectedLoanItems &&
     selectedItems.some((item) => item.current_location !== 'SHOP-1')
 
   const showTransferToWarehouse =
     selectedCount > 0 &&
+    !hasSelectedLoanItems &&
     selectedItems.some((item) => item.current_location !== 'WAREHOUSE')
 
   async function getStaffName(staffId?: string | null) {
@@ -410,12 +415,17 @@ export default function SkuSearchPage() {
       JSON.stringify(selectedLoanItems.map((item) => item.sku))
     )
 
-    router.push('/loan')
+    router.push('/scanner/loan')
   }
 
   async function moveSelected(to: 'warehouse' | 'shop') {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
+    if (hasSelectedLoanItems) {
+      setMessage('One or more selected items are on loan. Return them before transferring.')
       return
     }
 
@@ -754,6 +764,13 @@ export default function SkuSearchPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            {hasMixedLoanSelection && (
+              <div className="w-full rounded-xl border border-orange-700 bg-orange-950 p-3 text-sm font-bold text-orange-200">
+                {selectedLoanCount} of {selectedCount} selected item(s) are on loan.
+                Return loan items before transferring stock.
+              </div>
+            )}
+
             {selectedLoanCount > 0 && (
               <button
                 onClick={openLoanReturn}
@@ -879,8 +896,7 @@ export default function SkuSearchPage() {
                               </span>
 
                               <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
-                                Loaned by:{' '}
-                                {item.loaned_by_name || 'Unknown'}
+                                Loaned by: {item.loaned_by_name || 'Unknown'}
                               </span>
                             </>
                           ) : (
