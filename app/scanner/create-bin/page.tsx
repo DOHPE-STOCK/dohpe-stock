@@ -220,40 +220,34 @@ export default function CreateBinPage() {
               background: #fff;
               display: flex;
               flex-wrap: wrap;
-              gap: 6px;
+              gap: 4px;
             }
 
             .label {
-              width: 48mm;
-              height: 48mm;
+              width: 50mm;
+              height: 30mm;
               border: 1px solid #000;
-              display: flex;
-              flex-direction: column;
+              display: grid;
+              grid-template-columns: 21mm 1fr;
               align-items: center;
-              justify-content: center;
               page-break-inside: avoid;
               overflow: hidden;
               padding: 2mm;
             }
 
-            .code {
-              font-size: 15px;
-              font-weight: 900;
-              margin-bottom: 1mm;
-              letter-spacing: 0.5px;
-            }
-
             .qr {
-              width: 32mm;
-              height: 32mm;
+              width: 19mm;
+              height: 19mm;
               object-fit: contain;
             }
 
-            .hint {
-              margin-top: 1mm;
-              font-size: 7px;
-              font-weight: 700;
+            .code {
+              font-size: 24px;
+              font-weight: 900;
+              line-height: 1;
               text-align: center;
+              word-break: break-word;
+              letter-spacing: -0.5px;
             }
 
             @media print {
@@ -274,9 +268,8 @@ export default function CreateBinPage() {
             .map(
               (bin) => `
                 <div class="label">
-                  <div class="code">${bin}</div>
                   <img class="qr" src="${getQrUrl(bin)}" />
-                  <div class="hint">SCAN TO ALLOCATE</div>
+                  <div class="code">${bin}</div>
                 </div>
               `
             )
