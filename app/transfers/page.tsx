@@ -27,6 +27,10 @@ type Transfer = {
 
 type TimePeriod = '7days' | 'month' | 'year'
 
+function formatTransferNumber(value: number) {
+  return String(value).padStart(7, '0')
+}
+
 export default function TransfersPage() {
   const { staff } = useStaff()
 
@@ -102,18 +106,9 @@ export default function TransfersPage() {
   }
 
   function statusClass(status: string) {
-    if (status === 'received') {
-      return 'bg-green-950 text-green-300 border-green-800'
-    }
-
-    if (status === 'part_received') {
-      return 'bg-yellow-950 text-yellow-300 border-yellow-800'
-    }
-
-    if (status === 'cancelled') {
-      return 'bg-red-950 text-red-300 border-red-800'
-    }
-
+    if (status === 'received') return 'bg-green-950 text-green-300 border-green-800'
+    if (status === 'part_received') return 'bg-yellow-950 text-yellow-300 border-yellow-800'
+    if (status === 'cancelled') return 'bg-red-950 text-red-300 border-red-800'
     return 'bg-blue-950 text-blue-300 border-blue-800'
   }
 
@@ -127,6 +122,10 @@ export default function TransfersPage() {
       hour: '2-digit',
       minute: '2-digit',
     })
+  }
+
+  function printManifest(transfer: Transfer) {
+    window.open(`/transfers/${transfer.id}/manifest`, '_blank')
   }
 
   async function markTransferReceived(transfer: Transfer) {
@@ -143,8 +142,10 @@ export default function TransfersPage() {
       return
     }
 
+    const transferNo = formatTransferNumber(transfer.transfer_number)
+
     const confirmed = window.confirm(
-      `Accept transfer #${transfer.transfer_number} by ${staff.name}?\n\nThis will mark ${receivableItems.length} item(s) as received into ${transfer.to_location}.`
+      `Accept transfer #${transferNo} by ${staff.name}?\n\nThis will mark ${receivableItems.length} item(s) as received into ${transfer.to_location}.`
     )
 
     if (!confirmed) return
@@ -207,7 +208,7 @@ export default function TransfersPage() {
       return
     }
 
-    setMessage(`Transfer #${transfer.transfer_number} received by ${staff.name}.`)
+    setMessage(`Transfer #${transferNo} received by ${staff.name}.`)
     await fetchTransfers()
     setLoading(false)
   }
@@ -280,6 +281,7 @@ export default function TransfersPage() {
           {transfers.map((transfer) => {
             const counts = getCounts(transfer)
             const isReceived = transfer.status === 'received'
+            const transferNo = formatTransferNumber(transfer.transfer_number)
 
             return (
               <section
@@ -290,7 +292,7 @@ export default function TransfersPage() {
                   <div>
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <h2 className="text-xl font-bold">
-                        Transfer #{transfer.transfer_number}
+                        Transfer #{transferNo}
                       </h2>
 
                       <span
@@ -352,6 +354,14 @@ export default function TransfersPage() {
                     >
                       Open Transfer
                     </Link>
+
+                    <button
+                      type="button"
+                      onClick={() => printManifest(transfer)}
+                      className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-bold text-white hover:bg-neutral-800"
+                    >
+                      Print Manifest
+                    </button>
 
                     <button
                       onClick={() => markTransferReceived(transfer)}

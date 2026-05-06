@@ -102,9 +102,7 @@ function getSizeText(item: ScannedItem) {
     return `W${item.waist_in}"`
   }
 
-  if (item.tagged_size) {
-    return item.tagged_size
-  }
+  if (item.tagged_size) return item.tagged_size
 
   return ''
 }
@@ -492,9 +490,20 @@ export default function SkuSearchPage() {
     )
 
     setBusy(false)
+
+    const paddedTransferNumber = String(transfer.transfer_number).padStart(7, '0')
+
     setMessage(
-      `Created transfer #${transfer.transfer_number} for ${existingItems.length} item(s) by ${staff.name}.`
+      `Created transfer #${paddedTransferNumber} for ${existingItems.length} item(s) by ${staff.name}.`
     )
+
+    const printManifest = window.confirm(
+      `Transfer #${paddedTransferNumber} created.\n\nPrint manifest now?`
+    )
+
+    if (printManifest) {
+      window.open(`/transfers/${transfer.id}/manifest`, '_blank')
+    }
   }
 
   function reprintSelectedLabels() {
