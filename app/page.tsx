@@ -89,6 +89,15 @@ function isValidSku(sku: string) {
   return luhnCheckDigit(body) === checkDigit
 }
 
+function extractTransferIdFromScan(value: string) {
+  const cleaned = value.trim()
+  const match = cleaned.match(/\/transfers\/([^/?#]+)/)
+
+  if (match?.[1]) return match[1]
+
+  return null
+}
+
 function randomSequenceNumber() {
   return Math.floor(Math.random() * 10000000)
 }
@@ -133,6 +142,14 @@ export default function SkuSearchPage() {
   const allSelected =
     scannedItems.length > 0 && scannedItems.every((item) => item.selected)
 
+  const showTransferToShop =
+    selectedCount > 0 &&
+    selectedItems.some((item) => item.current_location !== 'SHOP-1')
+
+  const showTransferToWarehouse =
+    selectedCount > 0 &&
+    selectedItems.some((item) => item.current_location !== 'WAREHOUSE')
+
   async function createItemFromSku(sku: string) {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
@@ -176,6 +193,14 @@ export default function SkuSearchPage() {
     const rawSku = scanValue.trim()
 
     if (!rawSku) return
+
+    const transferId = extractTransferIdFromScan(rawSku)
+
+    if (transferId) {
+      setScanValue('')
+      router.push(`/transfers/${transferId}`)
+      return
+    }
 
     setMessage('')
 
@@ -414,6 +439,12 @@ export default function SkuSearchPage() {
     const toLocation = to === 'warehouse' ? 'WAREHOUSE' : 'SHOP-1'
     const inTransitLocation =
       to === 'warehouse' ? 'IN-TRANSIT-TO-WAREHOUSE' : 'IN-TRANSIT-TO-SHOP'
+
+    const confirmedTransfer = window.confirm(
+      `Transfer stock OK?\n\n${existingItems.length} item(s) will be transferred to ${toLocation}.`
+    )
+
+    if (!confirmedTransfer) return
 
     const now = new Date().toISOString()
 
@@ -690,7 +721,7 @@ export default function SkuSearchPage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleScan()
             }}
-            placeholder={staff ? 'Scan or type SKU' : 'Go to staff PIN screen first'}
+            placeholder={staff ? 'Scan SKU or transfer QR' : 'Go to staff PIN screen first'}
             disabled={busy || !staff}
             className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-lg outline-none focus:border-white disabled:opacity-50"
             autoFocus
@@ -727,21 +758,25 @@ export default function SkuSearchPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => moveSelected('warehouse')}
-              disabled={busy || !staff || selectedCount === 0}
-              className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
-            >
-              Transfer to Warehouse
-            </button>
+            {showTransferToWarehouse && (
+              <button
+                onClick={() => moveSelected('warehouse')}
+                disabled={busy || !staff || selectedCount === 0}
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
+              >
+                Transfer to Warehouse
+              </button>
+            )}
 
-            <button
-              onClick={() => moveSelected('shop')}
-              disabled={busy || !staff || selectedCount === 0}
-              className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
-            >
-              Transfer to Shop
-            </button>
+            {showTransferToShop && (
+              <button
+                onClick={() => moveSelected('shop')}
+                disabled={busy || !staff || selectedCount === 0}
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
+              >
+                Transfer to Shop
+              </button>
+            )}
 
             <button
               onClick={reprintSelectedLabels}
