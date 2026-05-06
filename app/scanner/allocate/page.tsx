@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import AppNav from '@/app/components/AppNav'
 import { useStaff } from '@/app/context/StaffContext'
 import { supabase } from '@/lib/supabase'
@@ -24,6 +25,7 @@ type PendingItem = {
 
 export default function AllocatePage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const searchParams = useSearchParams()
   const { staff } = useStaff()
 
   const [scanValue, setScanValue] = useState('')
@@ -34,8 +36,14 @@ export default function AllocatePage() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    const binFromUrl = searchParams.get('bin')
+
+    if (binFromUrl) {
+      scanBin(cleanScan(binFromUrl))
+    }
+
     focusInput()
-  }, [])
+  }, [searchParams])
 
   function focusInput() {
     setTimeout(() => inputRef.current?.focus(), 50)
@@ -73,6 +81,8 @@ export default function AllocatePage() {
   }
 
   async function scanBin(binCode: string) {
+    if (!binCode) return
+
     setBusy(true)
 
     const { data, error } = await supabase
@@ -101,7 +111,8 @@ export default function AllocatePage() {
     setActiveBin(data as WarehouseBin)
     setMode('items')
     setPendingItems([])
-    setMessage(`Bin selected: ${data.bin_code}`)
+    setMessage(`Bin selected: ${data.bin_code}. Scan item SKUs now.`)
+    focusInput()
   }
 
   async function scanItem(sku: string) {
@@ -270,7 +281,7 @@ export default function AllocatePage() {
             <div>
               <h1 className="text-2xl font-bold sm:text-3xl">Allocate</h1>
               <p className="text-sm text-neutral-400">
-                Scan bin first, then scan item SKUs.
+                Scan a bin QR to open this page with the bin already selected.
               </p>
 
               {staff ? (
