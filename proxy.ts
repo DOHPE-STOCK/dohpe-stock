@@ -35,7 +35,11 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const isLoginPage = request.nextUrl.pathname.startsWith('/login')
+  const pathname = request.nextUrl.pathname
+  const isLoginPage = pathname.startsWith('/login')
+  const isStaffPage = pathname.startsWith('/staff')
+
+  const hasStaffCookie = Boolean(request.cookies.get('active_staff_user')?.value)
 
   if (!user && !isLoginPage) {
     const url = request.nextUrl.clone()
@@ -44,6 +48,18 @@ export async function proxy(request: NextRequest) {
   }
 
   if (user && isLoginPage) {
+    const url = request.nextUrl.clone()
+    url.pathname = hasStaffCookie ? '/' : '/staff'
+    return NextResponse.redirect(url)
+  }
+
+  if (user && !hasStaffCookie && !isStaffPage) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/staff'
+    return NextResponse.redirect(url)
+  }
+
+  if (user && hasStaffCookie && isStaffPage) {
     const url = request.nextUrl.clone()
     url.pathname = '/'
     return NextResponse.redirect(url)
