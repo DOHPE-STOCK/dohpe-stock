@@ -11,13 +11,7 @@ type TransferItem = {
   status: string
   items?: {
     id: string
-    brand: string | null
     reporting_category: string | null
-    colour_primary: string | null
-    tagged_size: string | null
-    waist_in: string | number | null
-    ai_title: string | null
-    basic_title: string | null
   } | null
 }
 
@@ -32,18 +26,6 @@ type Transfer = {
 
 function formatTransferNumber(num: number) {
   return String(num).padStart(7, '0')
-}
-
-function getSizeText(item: any) {
-  if (
-    item?.waist_in !== null &&
-    item?.waist_in !== undefined &&
-    item?.waist_in !== ''
-  ) {
-    return `W${item.waist_in}"`
-  }
-
-  return item?.tagged_size || ''
 }
 
 export default function TransferManifestPage() {
@@ -74,13 +56,7 @@ export default function TransferManifestPage() {
           status,
           items (
             id,
-            brand,
-            reporting_category,
-            colour_primary,
-            tagged_size,
-            waist_in,
-            ai_title,
-            basic_title
+            reporting_category
           )
         )
       `)
@@ -104,10 +80,27 @@ export default function TransferManifestPage() {
   }
 
   const transferUrl = `${window.location.origin}/transfers/${transfer.id}`
+  const totalCount = transfer.stock_transfer_items.length
+
+  const categoryCounts = transfer.stock_transfer_items.reduce(
+    (acc: Record<string, number>, transferItem) => {
+      const category =
+        transferItem.items?.reporting_category || 'Uncategorised'
+
+      acc[category] = (acc[category] || 0) + 1
+
+      return acc
+    },
+    {}
+  )
+
+  const sortedCategoryCounts = Object.entries(categoryCounts).sort(
+    ([a], [b]) => a.localeCompare(b)
+  )
 
   return (
     <main className="min-h-screen bg-white p-8 text-black">
-      <div className="mx-auto max-w-5xl">
+      <div className="mx-auto max-w-4xl">
         <div className="mb-8 flex items-start justify-between border-b-4 border-black pb-6">
           <div>
             <h1 className="text-5xl font-black tracking-tight">
@@ -118,7 +111,7 @@ export default function TransferManifestPage() {
               #{formatTransferNumber(transfer.transfer_number)}
             </p>
 
-            <div className="mt-4 space-y-1 text-lg">
+            <div className="mt-4 space-y-1 text-xl">
               <p>
                 <strong>FROM:</strong> {transfer.from_location}
               </p>
@@ -127,18 +120,14 @@ export default function TransferManifestPage() {
                 <strong>TO:</strong> {transfer.to_location}
               </p>
 
-              <p>
-                <strong>ITEM COUNT:</strong>{' '}
-                {transfer.stock_transfer_items.length}
+              <p className="text-3xl font-black">
+                TOTAL ITEMS: {totalCount}
               </p>
             </div>
           </div>
 
           <div className="rounded-xl border-4 border-black bg-white p-4">
-            <QRCode
-              value={transferUrl}
-              size={180}
-            />
+            <QRCode value={transferUrl} size={180} />
 
             <p className="mt-3 text-center text-sm font-bold">
               Scan to open transfer
@@ -146,69 +135,28 @@ export default function TransferManifestPage() {
           </div>
         </div>
 
-        <div className="space-y-2">
-          {transfer.stock_transfer_items.map((transferItem, index) => {
-            const item = transferItem.items
+        <section>
+          <h2 className="mb-4 text-3xl font-black">
+            Category Summary
+          </h2>
 
-            return (
+          <div className="space-y-3">
+            {sortedCategoryCounts.map(([category, count]) => (
               <div
-                key={transferItem.id}
-                className="grid grid-cols-[60px_160px_1fr_140px] gap-4 border border-black p-3"
+                key={category}
+                className="flex items-center justify-between border-2 border-black p-4"
               >
-                <div className="flex items-center justify-center text-xl font-black">
-                  {index + 1}
-                </div>
+                <p className="text-2xl font-black">
+                  {category}
+                </p>
 
-                <div>
-                  <p className="font-mono text-lg font-black">
-                    {transferItem.sku}
-                  </p>
-
-                  <p className="mt-1 text-xs uppercase">
-                    {transferItem.status}
-                  </p>
-                </div>
-
-                <div className="min-w-0">
-                  <p className="truncate text-lg font-bold">
-                    {item?.ai_title ||
-                      item?.basic_title ||
-                      'Untitled Item'}
-                  </p>
-
-                  <p className="mt-1 text-sm">
-                    {item?.brand || 'No brand'} ·{' '}
-                    {item?.reporting_category || 'No category'} ·{' '}
-                    {item?.colour_primary || 'No colour'} ·{' '}
-                    {getSizeText(item) || 'No size'}
-                  </p>
-                </div>
-
-                <div className="flex items-center justify-center">
-                  <div className="h-10 w-10 rounded-full border-2 border-black" />
-                </div>
+                <p className="text-3xl font-black">
+                  {count}x
+                </p>
               </div>
-            )
-          })}
-        </div>
-
-        <div className="mt-10 grid grid-cols-2 gap-8">
-          <div>
-            <p className="mb-12 text-sm font-bold">
-              SENT BY:
-            </p>
-
-            <div className="border-b-2 border-black" />
+            ))}
           </div>
-
-          <div>
-            <p className="mb-12 text-sm font-bold">
-              RECEIVED BY:
-            </p>
-
-            <div className="border-b-2 border-black" />
-          </div>
-        </div>
+        </section>
       </div>
     </main>
   )
