@@ -3,11 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
-
-type StaffUser = {
-  id: string
-  name: string
-}
+import { useStaff } from '@/app/context/StaffContext'
 
 type LoanItem = {
   id: string
@@ -54,25 +50,15 @@ function openLabelPreview(items: PreviewLabelItem[]) {
 
 export default function LoanPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const { staff } = useStaff()
 
   const [scanValue, setScanValue] = useState('')
   const [loanItems, setLoanItems] = useState<LoanItem[]>([])
   const [selectedItems, setSelectedItems] = useState<string[]>([])
-  const [activeStaff, setActiveStaff] = useState<StaffUser | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    const saved = window.localStorage.getItem('active_staff_user')
-
-    if (saved) {
-      try {
-        setActiveStaff(JSON.parse(saved))
-      } catch {
-        window.localStorage.removeItem('active_staff_user')
-      }
-    }
-
     fetchLoans()
     focusInput()
   }, [])
@@ -153,7 +139,7 @@ export default function LoanPage() {
 
     if (!sku || busy) return
 
-    if (!activeStaff) {
+    if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
@@ -172,7 +158,7 @@ export default function LoanPage() {
   }
 
   async function loanOutItem(sku: string) {
-    if (!activeStaff) {
+    if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
@@ -222,7 +208,7 @@ export default function LoanPage() {
     }
 
     const confirmed = window.confirm(
-      `Mark SKU ${sku} as ON LOAN by ${activeStaff.name}?\n\nThis will set stock level to 0.`
+      `Mark SKU ${sku} as ON LOAN by ${staff.name}?\n\nThis will set stock level to 0.`
     )
 
     if (!confirmed) {
@@ -240,7 +226,7 @@ export default function LoanPage() {
         loan_status: 'on_loan',
         loaned_at: now,
         loan_returned_at: null,
-        loaned_by: activeStaff.id,
+        loaned_by: staff.id,
         linnworks_location_sync_status: 'pending',
         updated_at: now,
       })
@@ -257,7 +243,7 @@ export default function LoanPage() {
       sku: itemRow.sku,
       status: 'on_loan',
       loaned_at: now,
-      loaned_by: activeStaff.id,
+      loaned_by: staff.id,
     })
 
     if (loanError) {
@@ -277,7 +263,7 @@ export default function LoanPage() {
           stock_level: 0,
           reason: 'loan_out',
           loaned_at: now,
-          loaned_by: activeStaff.name,
+          loaned_by: staff.name,
         },
         status: 'pending',
       })
@@ -289,18 +275,18 @@ export default function LoanPage() {
     }
 
     setBusy(false)
-    setMessage(`${sku} marked as on loan by ${activeStaff.name}.`)
+    setMessage(`${sku} marked as on loan by ${staff.name}.`)
     await fetchLoans()
   }
 
   async function markReturned(item: LoanItem) {
-    if (!activeStaff) {
+    if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
     const confirmed = window.confirm(
-      `Mark SKU ${item.sku} as RETURNED by ${activeStaff.name}?\n\nThis will set stock level back to 1.`
+      `Mark SKU ${item.sku} as RETURNED by ${staff.name}?\n\nThis will set stock level back to 1.`
     )
 
     if (!confirmed) return
@@ -317,7 +303,7 @@ export default function LoanPage() {
         loan_status: 'not_on_loan',
         loan_returned_at: now,
         loan_notes: null,
-        returned_by: activeStaff.id,
+        returned_by: staff.id,
         linnworks_location_sync_status: 'pending',
         updated_at: now,
       })
@@ -334,7 +320,7 @@ export default function LoanPage() {
       .update({
         status: 'returned',
         returned_at: now,
-        returned_by: activeStaff.id,
+        returned_by: staff.id,
         updated_at: now,
       })
       .eq('item_id', item.id)
@@ -357,7 +343,7 @@ export default function LoanPage() {
           stock_level: 1,
           reason: 'loan_returned',
           returned_at: now,
-          returned_by: activeStaff.name,
+          returned_by: staff.name,
         },
         status: 'pending',
       })
@@ -370,7 +356,7 @@ export default function LoanPage() {
 
     setSelectedItems((prev) => prev.filter((id) => id !== item.id))
     setBusy(false)
-    setMessage(`${item.sku} returned by ${activeStaff.name} and back in stock.`)
+    setMessage(`${item.sku} returned by ${staff.name} and back in stock.`)
     await fetchLoans()
     focusInput()
   }
@@ -403,9 +389,9 @@ export default function LoanPage() {
                 labels and put stock back live.
               </p>
 
-              {activeStaff ? (
+              {staff ? (
                 <p className="mt-2 text-sm font-bold text-green-300">
-                  Active staff: {activeStaff.name}
+                  Active staff: {staff.name}
                 </p>
               ) : (
                 <p className="mt-2 text-sm font-bold text-yellow-300">
@@ -428,10 +414,8 @@ export default function LoanPage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleScan()
             }}
-            placeholder={
-              activeStaff ? 'Scan item SKU' : 'Go to staff PIN screen first'
-            }
-            disabled={busy || !activeStaff}
+            placeholder={staff ? 'Scan item SKU' : 'Go to staff PIN screen first'}
+            disabled={busy || !staff}
             inputMode="none"
             autoComplete="off"
             autoCorrect="off"
@@ -442,7 +426,7 @@ export default function LoanPage() {
 
           <button
             onClick={handleScan}
-            disabled={busy || !scanValue.trim() || !activeStaff}
+            disabled={busy || !scanValue.trim() || !staff}
             className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
           >
             {busy ? 'PROCESSING...' : 'MARK ON LOAN'}
@@ -533,7 +517,7 @@ export default function LoanPage() {
                     <div className="grid grid-cols-1 gap-2 sm:flex">
                       <button
                         onClick={() => markReturned(item)}
-                        disabled={busy || !activeStaff}
+                        disabled={busy || !staff}
                         className="rounded-xl bg-green-600 px-4 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
                       >
                         RETURN / IN STOCK

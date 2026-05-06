@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import { useStaff } from '@/app/context/StaffContext'
 
 const reportingCategories = [
   'Accessories',
@@ -102,10 +103,7 @@ const sleevedTopMeasurements = [
   'pit_to_cuff_in',
 ]
 
-const sleevelessTopMeasurements = [
-  'pit_to_pit_in',
-  'collar_to_hem_in',
-]
+const sleevelessTopMeasurements = ['pit_to_pit_in', 'collar_to_hem_in']
 
 const bottomMeasurements = [
   'waist_in',
@@ -322,8 +320,9 @@ function PhotoPreview({ itemId }: { itemId: string }) {
   const selectedImageUrl =
     selectedImage.processed_url || selectedImage.original_url
 
-  const googleLensUrl =
-    `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(selectedImageUrl)}`
+  const googleLensUrl = `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(
+    selectedImageUrl
+  )}`
 
   return (
     <div className="space-y-3">
@@ -358,8 +357,7 @@ function PhotoPreview({ itemId }: { itemId: string }) {
 
       <div className="flex gap-2 overflow-x-auto">
         {images.map((image, index) => {
-          const imageUrl =
-            image.processed_url || image.original_url
+          const imageUrl = image.processed_url || image.original_url
 
           return (
             <button
@@ -386,6 +384,7 @@ function PhotoPreview({ itemId }: { itemId: string }) {
 export default function ItemPage() {
   const params = useParams()
   const id = params.id as string
+  const { staff } = useStaff()
 
   const [item, setItem] = useState<any>(null)
   const [message, setMessage] = useState('')
@@ -511,6 +510,11 @@ export default function ItemPage() {
   }
 
   async function saveItem() {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
     const blankToNull = (value: any) =>
       value === '' ||
       value === null ||
@@ -518,6 +522,12 @@ export default function ItemPage() {
       String(value).trim() === ''
         ? null
         : value
+
+    const priceChanged =
+      String(originalItemRef.current?.cost_price || '') !==
+        String(item.cost_price || '') ||
+      String(originalItemRef.current?.selling_price || '') !==
+        String(item.selling_price || '')
 
     const cleanedItem = {
       ...item,
@@ -535,6 +545,9 @@ export default function ItemPage() {
       pit_to_cuff_in: blankToNull(item.pit_to_cuff_in),
 
       weight_grams: blankToNull(item.weight_grams),
+
+      last_saved_by: staff.id,
+      ...(priceChanged ? { priced_by: staff.id } : {}),
     }
 
     const { error } = await supabase
@@ -548,11 +561,16 @@ export default function ItemPage() {
       originalItemRef.current = cleanedItem
       setItem(cleanedItem)
       setHasUnsavedChanges(false)
-      setMessage('Saved')
+      setMessage(`Saved by ${staff.name}`)
     }
   }
 
   async function sendToReview() {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
     const confirmed = window.confirm(
       'Send this SKU to review? It will move from Working into Review.'
     )
@@ -562,6 +580,7 @@ export default function ItemPage() {
     const updatedItem = {
       ...item,
       status: 'review',
+      last_saved_by: staff.id,
     }
 
     const { error } = await supabase
@@ -581,6 +600,11 @@ export default function ItemPage() {
   }
 
   async function finaliseItem() {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
     if (!item) return
 
     const imageCount = await getImageCount()
@@ -600,6 +624,7 @@ export default function ItemPage() {
     const updatedItem = {
       ...item,
       status: 'finalised',
+      last_saved_by: staff.id,
     }
 
     const { error } = await supabase
@@ -615,7 +640,7 @@ export default function ItemPage() {
     setItem(updatedItem)
     originalItemRef.current = updatedItem
     setHasUnsavedChanges(false)
-    setMessage('Finalised')
+    setMessage(`Finalised by ${staff.name}`)
   }
 
   function updateField(field: string, value: any) {
@@ -651,22 +676,29 @@ export default function ItemPage() {
     )
   }
 
-  const visibleMeasurements =
-    measurementMap[item.reporting_category] || []
+  const visibleMeasurements = measurementMap[item.reporting_category] || []
 
   return (
     <main className="min-h-screen bg-zinc-950 p-5 text-white">
       <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
         <div className="flex flex-wrap items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold">
-              SKU: {item.sku}
-            </h1>
+            <h1 className="text-2xl font-bold">SKU: {item.sku}</h1>
 
             <p className="text-sm text-zinc-400">
               Status: {item.status}
               {hasUnsavedChanges ? ' · Unsaved changes' : ''}
             </p>
+
+            {staff ? (
+              <p className="mt-1 text-sm font-bold text-green-300">
+                Active staff: {staff.name}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm font-bold text-yellow-300">
+                No active staff selected
+              </p>
+            )}
           </div>
 
           <AppNav current={undefined} onNavigate={confirmNavigation} />
@@ -681,21 +713,24 @@ export default function ItemPage() {
 
           <button
             onClick={saveItem}
-            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold"
+            disabled={!staff}
+            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
           >
             Save Item
           </button>
 
           <button
             onClick={sendToReview}
-            className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold"
+            disabled={!staff}
+            className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
           >
             Send to Review
           </button>
 
           <button
             onClick={finaliseItem}
-            className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold"
+            disabled={!staff}
+            className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
           >
             Finalise
           </button>

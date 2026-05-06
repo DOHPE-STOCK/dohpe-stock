@@ -2,14 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
+import { useStaff } from '@/app/context/StaffContext'
 import { supabase } from '@/lib/supabase'
 
 type ScanMode = 'bin' | 'items'
-
-type StaffUser = {
-  id: string
-  name: string
-}
 
 type WarehouseBin = {
   id: string
@@ -28,26 +24,16 @@ type PendingItem = {
 
 export default function AllocatePage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const { staff } = useStaff()
 
   const [scanValue, setScanValue] = useState('')
   const [mode, setMode] = useState<ScanMode>('bin')
   const [activeBin, setActiveBin] = useState<WarehouseBin | null>(null)
   const [pendingItems, setPendingItems] = useState<PendingItem[]>([])
-  const [activeStaff, setActiveStaff] = useState<StaffUser | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    const saved = window.localStorage.getItem('active_staff_user')
-
-    if (saved) {
-      try {
-        setActiveStaff(JSON.parse(saved))
-      } catch {
-        window.localStorage.removeItem('active_staff_user')
-      }
-    }
-
     focusInput()
   }, [])
 
@@ -68,7 +54,7 @@ export default function AllocatePage() {
 
     if (!value || busy) return
 
-    if (!activeStaff) {
+    if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
@@ -173,7 +159,7 @@ export default function AllocatePage() {
   }
 
   async function allocateItems() {
-    if (!activeStaff) {
+    if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
@@ -189,7 +175,7 @@ export default function AllocatePage() {
     }
 
     const confirmed = window.confirm(
-      `Allocate ${pendingItems.length} item(s) to ${activeBin.bin_code} by ${activeStaff.name}?\n\nThis will move already allocated items to this new bin.`
+      `Allocate ${pendingItems.length} item(s) to ${activeBin.bin_code} by ${staff.name}?\n\nThis will move already allocated items to this new bin.`
     )
 
     if (!confirmed) return
@@ -207,7 +193,7 @@ export default function AllocatePage() {
         current_bin: activeBin.bin_code,
         location_status: 'stored',
         allocated_at: now,
-        allocated_by: activeStaff.id,
+        allocated_by: staff.id,
         linnworks_location_sync_status: 'pending',
         updated_at: now,
       })
@@ -230,7 +216,7 @@ export default function AllocatePage() {
           to_location: 'WAREHOUSE',
           to_bin: activeBin.bin_code,
           movement_type: 'allocate',
-          moved_by: activeStaff.id,
+          moved_by: staff.id,
         }))
       )
 
@@ -253,7 +239,7 @@ export default function AllocatePage() {
             bin: activeBin.bin_code,
             movement_type: 'allocate',
             allocated_at: now,
-            allocated_by: activeStaff.name,
+            allocated_by: staff.name,
           },
           status: 'pending',
         }))
@@ -267,7 +253,7 @@ export default function AllocatePage() {
 
     setBusy(false)
     setMessage(
-      `Allocated ${pendingItems.length} item(s) to ${activeBin.bin_code} by ${activeStaff.name}`
+      `Allocated ${pendingItems.length} item(s) to ${activeBin.bin_code} by ${staff.name}`
     )
     setPendingItems([])
     focusInput()
@@ -287,9 +273,9 @@ export default function AllocatePage() {
                 Scan bin first, then scan item SKUs.
               </p>
 
-              {activeStaff ? (
+              {staff ? (
                 <p className="mt-2 text-sm font-bold text-green-300">
-                  Active staff: {activeStaff.name}
+                  Active staff: {staff.name}
                 </p>
               ) : (
                 <p className="mt-2 text-sm font-bold text-yellow-300">
@@ -339,13 +325,13 @@ export default function AllocatePage() {
               if (e.key === 'Enter') handleScan()
             }}
             placeholder={
-              !activeStaff
+              !staff
                 ? 'Go to staff PIN screen first'
                 : mode === 'bin'
                   ? 'Scan bin barcode'
                   : 'Scan item SKU'
             }
-            disabled={busy || !activeStaff}
+            disabled={busy || !staff}
             inputMode="none"
             autoComplete="off"
             autoCorrect="off"
@@ -356,7 +342,7 @@ export default function AllocatePage() {
 
           <button
             onClick={handleScan}
-            disabled={busy || !scanValue.trim() || !activeStaff}
+            disabled={busy || !scanValue.trim() || !staff}
             className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
           >
             {busy ? 'PROCESSING...' : mode === 'bin' ? 'SET BIN' : 'ADD ITEM'}
@@ -388,9 +374,7 @@ export default function AllocatePage() {
 
               <button
                 onClick={allocateItems}
-                disabled={
-                  busy || !activeStaff || !activeBin || pendingItems.length === 0
-                }
+                disabled={busy || !staff || !activeBin || pendingItems.length === 0}
                 className="rounded-xl bg-green-600 px-4 py-4 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
               >
                 ALLOCATE
