@@ -30,6 +30,9 @@ type ScannedItem = {
   location_status?: string | null
   current_location?: string | null
   current_bin?: string | null
+  loan_status?: string | null
+  loaned_by?: string | null
+  loaned_by_name?: string | null
   ebay_status?: string | null
   linnworks_status?: string | null
   shopify_status?: string | null
@@ -139,6 +142,12 @@ export default function SkuSearchPage() {
 
   const selectedCount = selectedItems.length
 
+  const selectedLoanItems = selectedItems.filter(
+    (item) => item.loan_status === 'on_loan'
+  )
+
+  const selectedLoanCount = selectedLoanItems.length
+
   const allSelected =
     scannedItems.length > 0 && scannedItems.every((item) => item.selected)
 
@@ -149,6 +158,18 @@ export default function SkuSearchPage() {
   const showTransferToWarehouse =
     selectedCount > 0 &&
     selectedItems.some((item) => item.current_location !== 'WAREHOUSE')
+
+  async function getStaffName(staffId?: string | null) {
+    if (!staffId) return null
+
+    const { data } = await supabase
+      .from('staff_users')
+      .select('name')
+      .eq('id', staffId)
+      .maybeSingle()
+
+    return data?.name || null
+  }
 
   async function createItemFromSku(sku: string) {
     if (!staff) {
@@ -167,6 +188,7 @@ export default function SkuSearchPage() {
         location_status: 'unknown',
         current_location: null,
         current_bin: null,
+        loan_status: 'not_on_loan',
         ebay_status: 'not_listed',
         linnworks_status: 'not_synced',
         shopify_status: 'not_listed',
@@ -218,56 +240,6 @@ export default function SkuSearchPage() {
     const existingScanned = scannedItems.find((item) => item.sku === rawSku)
 
     if (existingScanned) {
-      if (!existingScanned.exists) {
-        const confirmed = window.confirm(
-          `SKU ${rawSku} is not in the app yet. Create item now?`
-        )
-
-        if (!confirmed) {
-          setMessage(`Already scanned: ${rawSku}`)
-          setScanValue('')
-          return
-        }
-
-        setBusy(true)
-        const createdItem = await createItemFromSku(rawSku)
-        setBusy(false)
-
-        if (!createdItem) {
-          setScanValue('')
-          return
-        }
-
-        setScannedItems((prev) =>
-          prev.map((item) =>
-            item.sku === rawSku
-              ? {
-                  ...item,
-                  id: createdItem.id,
-                  exists: true,
-                  selected: true,
-                  stock_level: createdItem.stock_level ?? 1,
-                  location_status: createdItem.location_status,
-                  current_location: createdItem.current_location,
-                  current_bin: createdItem.current_bin,
-                  ebay_status: createdItem.ebay_status,
-                  linnworks_status: createdItem.linnworks_status,
-                  shopify_status: createdItem.shopify_status,
-                  square_status: createdItem.square_status,
-                  loyverse_status: createdItem.loyverse_status,
-                  vinted_status: createdItem.vinted_status,
-                  depop_status: createdItem.depop_status,
-                  tiktok_shop_status: createdItem.tiktok_shop_status,
-                }
-              : item
-          )
-        )
-
-        setMessage(`Created item ${rawSku} by ${staff.name}`)
-        setScanValue('')
-        return
-      }
-
       setMessage(`Already scanned: ${rawSku}`)
       setScanValue('')
       return
@@ -292,6 +264,8 @@ export default function SkuSearchPage() {
         location_status,
         current_location,
         current_bin,
+        loan_status,
+        loaned_by,
         ebay_status,
         linnworks_status,
         shopify_status,
@@ -338,6 +312,11 @@ export default function SkuSearchPage() {
       }
     }
 
+    const loanedByName =
+      itemData?.loan_status === 'on_loan'
+        ? await getStaffName(itemData?.loaned_by)
+        : null
+
     const images = (itemData?.item_images || []) as ItemImage[]
 
     const firstImageRecord =
@@ -366,6 +345,9 @@ export default function SkuSearchPage() {
       location_status: itemData?.location_status || 'unknown',
       current_location: itemData?.current_location || null,
       current_bin: itemData?.current_bin || null,
+      loan_status: itemData?.loan_status || 'not_on_loan',
+      loaned_by: itemData?.loaned_by || null,
+      loaned_by_name: loanedByName,
       ebay_status: itemData?.ebay_status || 'not_listed',
       linnworks_status: itemData?.linnworks_status || 'not_synced',
       shopify_status: itemData?.shopify_status || 'not_listed',
@@ -415,6 +397,20 @@ export default function SkuSearchPage() {
     }
 
     router.push(`/items/${selected.id}`)
+  }
+
+  function openLoanReturn() {
+    if (selectedLoanCount === 0) {
+      setMessage('Select an item that is currently on loan.')
+      return
+    }
+
+    window.localStorage.setItem(
+      'loan_return_skus',
+      JSON.stringify(selectedLoanItems.map((item) => item.sku))
+    )
+
+    router.push('/loan')
   }
 
   async function moveSelected(to: 'warehouse' | 'shop') {
@@ -758,6 +754,15 @@ export default function SkuSearchPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            {selectedLoanCount > 0 && (
+              <button
+                onClick={openLoanReturn}
+                className="rounded-xl bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-500"
+              >
+                Return Loan
+              </button>
+            )}
+
             {showTransferToWarehouse && (
               <button
                 onClick={() => moveSelected('warehouse')}
@@ -811,107 +816,126 @@ export default function SkuSearchPage() {
             </div>
           )}
 
-          {scannedItems.map((item) => (
-            <div
-              key={item.sku}
-              className={`w-full rounded-2xl border bg-neutral-950 p-3 ${
-                item.selected ? 'border-white' : 'border-neutral-800'
-              }`}
-            >
-              <div className="flex gap-3">
-                <div className="flex items-center">
-                  <input
-                    type="checkbox"
-                    checked={item.selected}
-                    onChange={() => toggleItemSelected(item.sku)}
-                    className="h-5 w-5 rounded border-zinc-600 bg-zinc-950"
-                  />
-                </div>
+          {scannedItems.map((item) => {
+            const isOnLoan = item.loan_status === 'on_loan'
 
-                <div className="h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-neutral-800">
-                  {item.image_url ? (
-                    <img
-                      src={item.image_url}
-                      alt=""
-                      className="h-full w-full object-cover"
+            return (
+              <div
+                key={item.sku}
+                className={`w-full rounded-2xl border bg-neutral-950 p-3 ${
+                  item.selected ? 'border-white' : 'border-neutral-800'
+                }`}
+              >
+                <div className="flex gap-3">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={item.selected}
+                      onChange={() => toggleItemSelected(item.sku)}
+                      className="h-5 w-5 rounded border-zinc-600 bg-zinc-950"
                     />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-xs text-neutral-500">
-                      No image
-                    </div>
-                  )}
-                </div>
+                  </div>
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-mono text-xs text-neutral-500">
-                        {item.sku}
-                      </p>
-
-                      <h3 className="truncate text-base font-semibold">
-                        {item.ai_title || item.basic_title || 'Untitled item'}
-                      </h3>
-
-                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-400">
-                        <span>{item.brand || 'No brand'}</span>
-                        <span>·</span>
-                        <span>{item.reporting_category || 'No category'}</span>
-                        <span>·</span>
-                        <span>{item.tagged_size || 'No size'}</span>
-                        <span>·</span>
-                        <span>{item.condition || 'No condition'}</span>
+                  <div className="h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-neutral-800">
+                    {item.image_url ? (
+                      <img
+                        src={item.image_url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-neutral-500">
+                        No image
                       </div>
+                    )}
+                  </div>
 
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                        <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
-                          {item.current_location || 'No location'}
-                        </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-mono text-xs text-neutral-500">
+                          {item.sku}
+                        </p>
 
-                        <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
-                          {item.current_bin || 'No bin/rack'}
-                        </span>
+                        <h3 className="truncate text-base font-semibold">
+                          {item.ai_title || item.basic_title || 'Untitled item'}
+                        </h3>
 
-                        {typeof item.selling_price === 'number' && (
-                          <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
-                            £{item.selling_price.toFixed(2)}
-                          </span>
-                        )}
-
-                        {!item.exists && (
-                          <span className="rounded-full bg-yellow-500/20 px-2 py-1 text-yellow-300">
-                            Not in app yet
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1 rounded-lg bg-neutral-900 p-1">
-                      {[0, 2, 4, 6].map((start) => (
-                        <div key={start} className="flex gap-1">
-                          {CHANNEL_ICONS.slice(start, start + 2).map((icon) => (
-                            <img
-                              key={icon.name}
-                              src={icon.src}
-                              title={`${icon.name}: ${String(
-                                item[icon.key as keyof ScannedItem] ||
-                                  'not_listed'
-                              )}`}
-                              className={`h-4 w-4 rounded-sm ${channelOpacity(
-                                item[
-                                  icon.key as keyof ScannedItem
-                                ] as string | null
-                              )}`}
-                            />
-                          ))}
+                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-400">
+                          <span>{item.brand || 'No brand'}</span>
+                          <span>·</span>
+                          <span>{item.reporting_category || 'No category'}</span>
+                          <span>·</span>
+                          <span>{item.tagged_size || 'No size'}</span>
+                          <span>·</span>
+                          <span>{item.condition || 'No condition'}</span>
                         </div>
-                      ))}
+
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                          {isOnLoan ? (
+                            <>
+                              <span className="rounded-full bg-orange-950 px-2 py-1 font-black text-orange-300">
+                                ON LOAN
+                              </span>
+
+                              <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
+                                Loaned by:{' '}
+                                {item.loaned_by_name || 'Unknown'}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
+                                {item.current_location || 'No location'}
+                              </span>
+
+                              <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
+                                {item.current_bin || 'No bin/rack'}
+                              </span>
+                            </>
+                          )}
+
+                          {typeof item.selling_price === 'number' && (
+                            <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
+                              £{item.selling_price.toFixed(2)}
+                            </span>
+                          )}
+
+                          {!item.exists && (
+                            <span className="rounded-full bg-yellow-500/20 px-2 py-1 text-yellow-300">
+                              Not in app yet
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-1 rounded-lg bg-neutral-900 p-1">
+                        {[0, 2, 4, 6].map((start) => (
+                          <div key={start} className="flex gap-1">
+                            {CHANNEL_ICONS.slice(start, start + 2).map((icon) => (
+                              <img
+                                key={icon.name}
+                                src={icon.src}
+                                title={`${icon.name}: ${String(
+                                  item[icon.key as keyof ScannedItem] ||
+                                    'not_listed'
+                                )}`}
+                                className={`h-4 w-4 rounded-sm ${channelOpacity(
+                                  item[
+                                    icon.key as keyof ScannedItem
+                                  ] as string | null
+                                )}`}
+                              />
+                            ))}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </section>
 
