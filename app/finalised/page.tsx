@@ -4,8 +4,11 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import { useStaff } from '@/app/context/StaffContext'
 
 export default function FinalisedPage() {
+  const { staff } = useStaff()
+
   const [items, setItems] = useState<any[]>([])
   const [imagesByItem, setImagesByItem] = useState<Record<string, string>>({})
   const [selectedItems, setSelectedItems] = useState<string[]>([])
@@ -76,12 +79,46 @@ export default function FinalisedPage() {
     }
   }
 
+  function saveExportSelection() {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
+    const selected = items.filter((item) => selectedItems.includes(item.id))
+
+    if (selected.length === 0) {
+      setMessage('Select at least one item.')
+      return
+    }
+
+    const exportDraft = {
+      created_at: new Date().toISOString(),
+      created_by: staff,
+      item_count: selected.length,
+      items: selected.map((item) => ({
+        id: item.id,
+        sku: item.sku,
+        brand: item.brand,
+        reporting_category: item.reporting_category,
+        ai_title: item.ai_title,
+        selling_price: item.selling_price,
+      })),
+    }
+
+    window.localStorage.setItem(
+      'finalised_export_selection',
+      JSON.stringify(exportDraft)
+    )
+
+    setMessage(`Saved export selection for ${selected.length} item(s) by ${staff.name}.`)
+  }
+
   const allSelected =
     items.length > 0 && selectedItems.length === items.length
 
   return (
     <main className="min-h-screen bg-zinc-950 p-5 text-white">
-      {/* HEADER */}
       <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
         <div className="flex flex-wrap items-center gap-4">
           <div>
@@ -90,17 +127,35 @@ export default function FinalisedPage() {
             <p className="text-sm text-zinc-400">
               {items.length} item(s) · {selectedItems.length} selected
             </p>
+
+            {staff ? (
+              <p className="mt-1 text-sm font-bold text-green-300">
+                Active staff: {staff.name}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm font-bold text-yellow-300">
+                No active staff selected
+              </p>
+            )}
           </div>
 
           <AppNav current="finalised" />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {message && (
             <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
               {message}
             </span>
           )}
+
+          <button
+            onClick={saveExportSelection}
+            disabled={!staff || selectedItems.length === 0}
+            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold hover:bg-green-500 disabled:opacity-50"
+          >
+            Save Export Selection
+          </button>
 
           <button
             onClick={fetchFinalisedItems}
@@ -112,7 +167,6 @@ export default function FinalisedPage() {
         </div>
       </div>
 
-      {/* SELECT ALL ROW */}
       {items.length > 0 && (
         <div className="mb-2 flex items-center gap-3 px-2">
           <input
@@ -122,13 +176,10 @@ export default function FinalisedPage() {
             className="h-5 w-5"
           />
 
-          <span className="text-sm text-zinc-400">
-            Select All
-          </span>
+          <span className="text-sm text-zinc-400">Select All</span>
         </div>
       )}
 
-      {/* CONTENT */}
       {items.length === 0 ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-8 text-center text-zinc-400">
           No finalised items.
@@ -149,7 +200,6 @@ export default function FinalisedPage() {
                 }`}
               >
                 <div className="grid grid-cols-[40px_80px_1fr_120px] items-center gap-4">
-                  {/* CHECKBOX */}
                   <div className="flex justify-center">
                     <input
                       type="checkbox"
@@ -159,7 +209,6 @@ export default function FinalisedPage() {
                     />
                   </div>
 
-                  {/* IMAGE */}
                   <div className="h-16 w-16 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950">
                     {thumbnailUrl ? (
                       <img
@@ -174,7 +223,6 @@ export default function FinalisedPage() {
                     )}
                   </div>
 
-                  {/* INFO */}
                   <div>
                     <h2 className="text-base font-bold">{item.sku}</h2>
 
@@ -188,7 +236,6 @@ export default function FinalisedPage() {
                     </p>
                   </div>
 
-                  {/* ACTION */}
                   <Link
                     href={`/items/${item.id}`}
                     className="rounded-lg bg-zinc-800 px-3 py-2 text-center text-xs font-bold hover:bg-zinc-700"
