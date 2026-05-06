@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import { useStaff } from '@/app/context/StaffContext'
 
 type TransferItem = {
   id: string
@@ -27,6 +28,8 @@ type Transfer = {
 type TimePeriod = '7days' | 'month' | 'year'
 
 export default function TransfersPage() {
+  const { staff } = useStaff()
+
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
@@ -99,9 +102,18 @@ export default function TransfersPage() {
   }
 
   function statusClass(status: string) {
-    if (status === 'received') return 'bg-green-950 text-green-300 border-green-800'
-    if (status === 'part_received') return 'bg-yellow-950 text-yellow-300 border-yellow-800'
-    if (status === 'cancelled') return 'bg-red-950 text-red-300 border-red-800'
+    if (status === 'received') {
+      return 'bg-green-950 text-green-300 border-green-800'
+    }
+
+    if (status === 'part_received') {
+      return 'bg-yellow-950 text-yellow-300 border-yellow-800'
+    }
+
+    if (status === 'cancelled') {
+      return 'bg-red-950 text-red-300 border-red-800'
+    }
+
     return 'bg-blue-950 text-blue-300 border-blue-800'
   }
 
@@ -118,6 +130,11 @@ export default function TransfersPage() {
   }
 
   async function markTransferReceived(transfer: Transfer) {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
     const items = transfer.stock_transfer_items || []
     const receivableItems = items.filter((item) => item.status === 'in_transfer')
 
@@ -127,7 +144,7 @@ export default function TransfersPage() {
     }
 
     const confirmed = window.confirm(
-      `Accept transfer #${transfer.transfer_number}?\n\nThis will mark ${receivableItems.length} item(s) as received into ${transfer.to_location}.`
+      `Accept transfer #${transfer.transfer_number} by ${staff.name}?\n\nThis will mark ${receivableItems.length} item(s) as received into ${transfer.to_location}.`
     )
 
     if (!confirmed) return
@@ -163,6 +180,7 @@ export default function TransfersPage() {
           location_status: 'received',
           current_location: transfer.to_location,
           current_bin: transfer.to_location,
+          last_saved_by: staff.id,
           updated_at: receivedAt,
         })
         .in('id', itemIds)
@@ -179,6 +197,7 @@ export default function TransfersPage() {
       .update({
         status: 'received',
         received_at: receivedAt,
+        received_by: staff.id,
       })
       .eq('id', transfer.id)
 
@@ -188,7 +207,7 @@ export default function TransfersPage() {
       return
     }
 
-    setMessage(`Transfer #${transfer.transfer_number} received.`)
+    setMessage(`Transfer #${transfer.transfer_number} received by ${staff.name}.`)
     await fetchTransfers()
     setLoading(false)
   }
@@ -203,6 +222,16 @@ export default function TransfersPage() {
             <p className="text-sm text-neutral-400">
               View and receive warehouse/shop stock transfers.
             </p>
+
+            {staff ? (
+              <p className="mt-1 text-sm font-bold text-green-300">
+                Active staff: {staff.name}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm font-bold text-yellow-300">
+                No active staff selected
+              </p>
+            )}
           </div>
 
           <AppNav current="transfers" />
@@ -326,7 +355,9 @@ export default function TransfersPage() {
 
                     <button
                       onClick={() => markTransferReceived(transfer)}
-                      disabled={loading || isReceived || counts.inTransfer === 0}
+                      disabled={
+                        loading || !staff || isReceived || counts.inTransfer === 0
+                      }
                       className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
                     >
                       Mark as Received
