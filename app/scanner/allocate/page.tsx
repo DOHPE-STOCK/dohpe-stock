@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
 import AppNav from '@/app/components/AppNav'
 import { useStaff } from '@/app/context/StaffContext'
 import { supabase } from '@/lib/supabase'
@@ -25,7 +24,6 @@ type PendingItem = {
 
 export default function AllocatePage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const searchParams = useSearchParams()
   const { staff } = useStaff()
 
   const [scanValue, setScanValue] = useState('')
@@ -36,14 +34,15 @@ export default function AllocatePage() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    const binFromUrl = searchParams.get('bin')
+    const params = new URLSearchParams(window.location.search)
+    const binFromUrl = params.get('bin')
 
     if (binFromUrl) {
       scanBin(cleanScan(binFromUrl))
     }
 
     focusInput()
-  }, [searchParams])
+  }, [])
 
   function focusInput() {
     setTimeout(() => inputRef.current?.focus(), 50)
