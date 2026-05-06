@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import { useStaff } from '@/app/context/StaffContext'
 
 type ItemImage = {
   processed_url: string | null
@@ -116,6 +117,7 @@ function openLabelPreview(items: PreviewLabelItem[]) {
 export default function SkuSearchPage() {
   const router = useRouter()
   const scanInputRef = useRef<HTMLInputElement | null>(null)
+  const { staff } = useStaff()
 
   const [scanValue, setScanValue] = useState('')
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([])
@@ -134,6 +136,13 @@ export default function SkuSearchPage() {
     scannedItems.length > 0 && scannedItems.every((item) => item.selected)
 
   async function createItemFromSku(sku: string) {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return null
+    }
+
+    const now = new Date().toISOString()
+
     const { data, error } = await supabase
       .from('items')
       .insert({
@@ -151,6 +160,8 @@ export default function SkuSearchPage() {
         vinted_status: 'not_listed',
         depop_status: 'not_listed',
         tiktok_shop_status: 'not_listed',
+        last_saved_by: staff.id,
+        updated_at: now,
       })
       .select('*')
       .single()
@@ -169,6 +180,11 @@ export default function SkuSearchPage() {
     if (!rawSku) return
 
     setMessage('')
+
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
 
     if (!isValidSku(rawSku)) {
       setMessage(`Invalid SKU/check digit: ${rawSku}`)
@@ -224,7 +240,7 @@ export default function SkuSearchPage() {
           )
         )
 
-        setMessage(`Created item ${rawSku}`)
+        setMessage(`Created item ${rawSku} by ${staff.name}`)
         setScanValue('')
         return
       }
@@ -295,7 +311,7 @@ export default function SkuSearchPage() {
         }
 
         itemData = createdItem
-        setMessage(`Created item ${rawSku}`)
+        setMessage(`Created item ${rawSku} by ${staff.name}`)
       }
     }
 
@@ -379,6 +395,11 @@ export default function SkuSearchPage() {
   }
 
   async function moveSelected(to: 'warehouse' | 'shop') {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
     if (selectedCount === 0) {
       setMessage('Select at least one item.')
       return
@@ -396,6 +417,8 @@ export default function SkuSearchPage() {
     const inTransitLocation =
       to === 'warehouse' ? 'IN-TRANSIT-TO-WAREHOUSE' : 'IN-TRANSIT-TO-SHOP'
 
+    const now = new Date().toISOString()
+
     setBusy(true)
     setMessage('Creating transfer...')
 
@@ -405,7 +428,8 @@ export default function SkuSearchPage() {
         from_location: fromLocation,
         to_location: toLocation,
         status: 'sent',
-        sent_at: new Date().toISOString(),
+        sent_at: now,
+        created_by: staff.id,
       })
       .select('id, transfer_number')
       .single()
@@ -439,7 +463,8 @@ export default function SkuSearchPage() {
         location_status: 'in_transfer',
         current_location: inTransitLocation,
         current_bin: inTransitLocation,
-        updated_at: new Date().toISOString(),
+        last_saved_by: staff.id,
+        updated_at: now,
       })
       .in(
         'id',
@@ -468,7 +493,7 @@ export default function SkuSearchPage() {
 
     setBusy(false)
     setMessage(
-      `Created transfer #${transfer.transfer_number} for ${existingItems.length} item(s).`
+      `Created transfer #${transfer.transfer_number} for ${existingItems.length} item(s) by ${staff.name}.`
     )
   }
 
@@ -623,6 +648,16 @@ export default function SkuSearchPage() {
             <p className="text-sm text-neutral-400">
               Scan SKUs, preview labels, move location, and open items for editing.
             </p>
+
+            {staff ? (
+              <p className="mt-1 text-sm font-bold text-green-300">
+                Active staff: {staff.name}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm font-bold text-yellow-300">
+                No active staff selected
+              </p>
+            )}
           </div>
 
           <AppNav current="sku" />
@@ -646,14 +681,15 @@ export default function SkuSearchPage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleScan()
             }}
-            placeholder="Scan or type SKU"
-            className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-lg outline-none focus:border-white"
+            placeholder={staff ? 'Scan or type SKU' : 'Go to staff PIN screen first'}
+            disabled={busy || !staff}
+            className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-lg outline-none focus:border-white disabled:opacity-50"
             autoFocus
           />
 
           <button
             onClick={handleScan}
-            disabled={busy}
+            disabled={busy || !staff}
             className="rounded-xl bg-white px-5 py-3 font-semibold text-black disabled:opacity-50"
           >
             Add Scan
@@ -684,7 +720,7 @@ export default function SkuSearchPage() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => moveSelected('warehouse')}
-              disabled={busy || selectedCount === 0}
+              disabled={busy || !staff || selectedCount === 0}
               className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
             >
               Transfer to Warehouse
@@ -692,7 +728,7 @@ export default function SkuSearchPage() {
 
             <button
               onClick={() => moveSelected('shop')}
-              disabled={busy || selectedCount === 0}
+              disabled={busy || !staff || selectedCount === 0}
               className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
             >
               Transfer to Shop
