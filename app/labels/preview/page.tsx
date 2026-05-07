@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Barcode from 'react-barcode'
 
-type PrintMode = 'zebra' | 'normal'
+type PrintMode = 'zebra' | 'html'
 
 type LabelItem = {
   sku: string
@@ -28,6 +28,15 @@ type ZebraTemplate = {
   sizeSize: number
   priceY: number
   priceSize: number
+}
+
+type EditorRow = {
+  label: string
+  x?: keyof ZebraTemplate
+  y?: keyof ZebraTemplate
+  size?: keyof ZebraTemplate
+  width?: keyof ZebraTemplate
+  height?: keyof ZebraTemplate
 }
 
 declare global {
@@ -55,6 +64,26 @@ const DEFAULT_ZEBRA_TEMPLATE: ZebraTemplate = {
   priceY: 182,
   priceSize: 54,
 }
+
+const EDITOR_ROWS: EditorRow[] = [
+  { label: 'DOHPE', y: 'brandY', size: 'brandSize' },
+  {
+    label: 'Barcode',
+    x: 'barcodeX',
+    y: 'barcodeY',
+    width: 'barcodeWidth',
+    height: 'barcodeHeight',
+  },
+  { label: 'SKU', y: 'skuY', size: 'skuSize' },
+  {
+    label: 'Underline',
+    x: 'underlineX',
+    y: 'underlineY',
+    width: 'underlineWidth',
+  },
+  { label: 'Size', x: 'sizeX', y: 'sizeY', size: 'sizeSize' },
+  { label: 'Price', y: 'priceY', size: 'priceSize' },
+]
 
 function cleanZplText(value: string) {
   return value.replace(/[\^~\\]/g, '').trim()
@@ -110,7 +139,7 @@ export default function LabelPreviewPage() {
     setAutoPrint(params.get('print') === '1')
 
     const storedMode = window.localStorage.getItem('label_print_mode')
-    if (storedMode === 'zebra' || storedMode === 'normal') {
+    if (storedMode === 'zebra' || storedMode === 'html') {
       setPrintMode(storedMode)
     }
 
@@ -155,13 +184,15 @@ export default function LabelPreviewPage() {
   }
 
   function updateTemplate(key: keyof ZebraTemplate, value: number) {
-    const updated = {
-      ...template,
+    setTemplate((prev) => ({
+      ...prev,
       [key]: value,
-    }
+    }))
+  }
 
-    setTemplate(updated)
-    window.localStorage.setItem('zebra_label_template', JSON.stringify(updated))
+  function saveTemplate() {
+    window.localStorage.setItem('zebra_label_template', JSON.stringify(template))
+    setMessage('Zebra settings saved.')
   }
 
   function resetTemplate() {
@@ -268,7 +299,7 @@ export default function LabelPreviewPage() {
 
             <p className="text-sm text-zinc-600">
               {labelCount} label(s) · 50x30mm ·{' '}
-              {isZebra ? 'Zebra Browser Print' : 'Normal Print'}
+              {isZebra ? 'Zebra' : 'HTML'}
             </p>
 
             {message && (
@@ -289,30 +320,30 @@ export default function LabelPreviewPage() {
             </button>
 
             <button
-              onClick={() => changePrintMode('normal')}
+              onClick={() => changePrintMode('html')}
               className={`rounded-lg px-4 py-2 text-sm font-bold ${
                 !isZebra ? 'bg-black text-white' : 'border bg-white text-black'
               }`}
             >
-              Normal
+              HTML
             </button>
 
-            {isZebra ? (
+            {isZebra && (
               <button
-                onClick={sendToZebra}
-                disabled={zebraBusy || items.length === 0}
-                className="rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+                onClick={saveTemplate}
+                className="rounded-lg border px-4 py-2 text-sm font-bold"
               >
-                {zebraBusy ? 'Sending...' : 'Zebra Browser Print'}
-              </button>
-            ) : (
-              <button
-                onClick={() => window.print()}
-                className="rounded-lg bg-black px-4 py-2 text-sm font-bold text-white"
-              >
-                Normal Print
+                Save Settings
               </button>
             )}
+
+            <button
+              onClick={isZebra ? sendToZebra : () => window.print()}
+              disabled={isZebra ? zebraBusy || items.length === 0 : false}
+              className="rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              {zebraBusy ? 'Sending...' : 'Print'}
+            </button>
 
             <button
               onClick={() => window.close()}
@@ -329,7 +360,7 @@ export default function LabelPreviewPage() {
           No labels found. Go back to SKU Search and preview labels again.
         </div>
       ) : isZebra ? (
-        <div className="no-print mx-auto grid max-w-6xl gap-4 p-4 lg:grid-cols-[1fr_360px]">
+        <div className="no-print mx-auto grid max-w-6xl gap-4 p-4 lg:grid-cols-[1fr_460px]">
           <div className="rounded-xl bg-white p-5 shadow">
             <h2 className="mb-4 text-lg font-bold">Zebra Preview</h2>
 
@@ -416,34 +447,80 @@ export default function LabelPreviewPage() {
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-bold">Zebra Element Editor</h2>
 
-              <button
-                onClick={resetTemplate}
-                className="rounded border px-3 py-1 text-xs font-bold"
-              >
-                Reset
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={saveTemplate}
+                  className="rounded bg-black px-3 py-1 text-xs font-bold text-white"
+                >
+                  Save
+                </button>
+
+                <button
+                  onClick={resetTemplate}
+                  className="rounded border px-3 py-1 text-xs font-bold"
+                >
+                  Reset
+                </button>
+              </div>
             </div>
 
-            <div className="grid gap-3">
-              {Object.entries(template).map(([key, value]) => (
-                <label key={key} className="grid gap-1">
-                  <span className="text-xs font-bold uppercase text-zinc-500">
-                    {key}
-                  </span>
+            <div className="space-y-3">
+              {EDITOR_ROWS.map((row) => (
+                <div
+                  key={row.label}
+                  className="rounded-lg border border-zinc-200 p-3"
+                >
+                  <p className="mb-2 text-xs font-black uppercase text-zinc-500">
+                    {row.label}
+                  </p>
 
-                  <input
-                    type="number"
-                    step={key === 'barcodeWidth' ? 0.1 : 1}
-                    value={value}
-                    onChange={(e) =>
-                      updateTemplate(
-                        key as keyof ZebraTemplate,
-                        Number(e.target.value)
-                      )
-                    }
-                    className="rounded-lg border px-3 py-2 text-sm"
-                  />
-                </label>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {row.x && (
+                      <EditorInput
+                        label="X"
+                        value={template[row.x]}
+                        step={1}
+                        onChange={(value) => updateTemplate(row.x!, value)}
+                      />
+                    )}
+
+                    {row.y && (
+                      <EditorInput
+                        label="Y"
+                        value={template[row.y]}
+                        step={1}
+                        onChange={(value) => updateTemplate(row.y!, value)}
+                      />
+                    )}
+
+                    {row.size && (
+                      <EditorInput
+                        label="Size"
+                        value={template[row.size]}
+                        step={1}
+                        onChange={(value) => updateTemplate(row.size!, value)}
+                      />
+                    )}
+
+                    {row.width && (
+                      <EditorInput
+                        label="Width"
+                        value={template[row.width]}
+                        step={row.width === 'barcodeWidth' ? 0.1 : 1}
+                        onChange={(value) => updateTemplate(row.width!, value)}
+                      />
+                    )}
+
+                    {row.height && (
+                      <EditorInput
+                        label="Height"
+                        value={template[row.height]}
+                        step={1}
+                        onChange={(value) => updateTemplate(row.height!, value)}
+                      />
+                    )}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -661,5 +738,31 @@ export default function LabelPreviewPage() {
         }
       `}</style>
     </main>
+  )
+}
+
+function EditorInput({
+  label,
+  value,
+  step,
+  onChange,
+}: {
+  label: string
+  value: number
+  step: number
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="flex items-center gap-1 text-xs">
+      <span className="w-10 font-bold text-zinc-500">{label}</span>
+      <span className="text-zinc-400">-</span>
+      <input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="min-w-0 flex-1 rounded border px-2 py-1 text-sm"
+      />
+    </label>
   )
 }
