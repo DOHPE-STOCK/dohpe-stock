@@ -38,9 +38,9 @@ function makeZplLabel(item: LabelItem) {
 ^LH0,0
 ^FO0,26^FB400,1,0,C,0^A0N,22,22^FDDOHPE^FS
 ^FO42,58^BY2,2,66^BCN,66,N,N,N^FD${sku}^FS
-^FO0,132^FB400,1,0,C,0^A0N,26,26^FD${sku}^FS
-^FO38,178^A0N,29,29^FD${size}^FS
-^FO0,158^FB400,1,0,C,0^A0N,72,72^FD${price}^FS
+^FO0,132^FB400,1,0,C,0^A0N,22,22^FD${sku}^FS
+^FO38,178^A0N,24,24^FD${size}^FS
+^FO0,164^FB400,1,0,C,0^A0N,58,58^FD${price}^FS
 ^XZ
 `.trim()
 }
@@ -341,9 +341,9 @@ export default function LabelPreviewPage() {
         }
 
         .sku {
-          font-size: 12px;
-          font-weight: 500;
-          letter-spacing: 1px;
+          font-size: 11px;
+          font-weight: 400;
+          letter-spacing: 0.8px;
           line-height: 1;
           margin-top: 0.3mm;
         }
@@ -366,17 +366,17 @@ export default function LabelPreviewPage() {
           position: absolute;
           left: 3mm;
           bottom: -0.6mm;
-          font-size: 12px;
-          font-weight: 500;
+          font-size: 11px;
+          font-weight: 400;
         }
 
         .price {
           position: absolute;
           left: 50%;
-          bottom: -1.2mm;
+          bottom: -0.9mm;
           transform: translateX(-50%);
-          font-size: 21px;
-          font-weight: 950;
+          font-size: 18px;
+          font-weight: 800;
         }
 
         @media screen {
