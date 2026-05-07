@@ -320,8 +320,6 @@ function PhotoPreview({ itemId }: { itemId: string }) {
   const selectedImageUrl =
     selectedImage.processed_url || selectedImage.original_url
 
-  
-
   return (
     <div className="space-y-3">
       <div className="overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950">
@@ -334,11 +332,11 @@ function PhotoPreview({ itemId }: { itemId: string }) {
 
       <div className="grid grid-cols-2 gap-2">
         <a
-  href={`/price-research/${itemId}`}
-  className="rounded-lg bg-white px-3 py-2 text-center text-xs font-bold text-black"
->
-  Price Analysis
-</a>
+          href={`/price-research/${itemId}`}
+          className="rounded-lg bg-white px-3 py-2 text-center text-xs font-bold text-black"
+        >
+          Price Analysis
+        </a>
 
         <a
           href={selectedImageUrl}
