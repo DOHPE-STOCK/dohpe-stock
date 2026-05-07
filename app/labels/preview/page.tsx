@@ -11,10 +11,50 @@ type LabelItem = {
   price?: number | null
 }
 
+declare global {
+  interface Window {
+    BrowserPrint?: any
+    Zebra?: any
+  }
+}
+
+function cleanZplText(value: string) {
+  return value.replace(/[\^~\\]/g, '').trim()
+}
+
+function makeZplLabel(item: LabelItem) {
+  const sku = cleanZplText(item.sku)
+  const size = cleanZplText(item.sizeText || '')
+  const price =
+    typeof item.price === 'number'
+      ? cleanZplText(`GBP ${item.price.toFixed(0)}`)
+      : ''
+
+  return `
+^XA
+^CI28
+^PW400
+^LL240
+^LH0,0
+^FO145,10^A0N,22,22^FDDOHPE^FS
+^FO24,42^BY2,2,72^BCN,72,N,N,N^FD${sku}^FS
+^FO82,123^A0N,30,30^FD${sku}^FS
+^FO22,170^A0N,34,34^FD${size}^FS
+^FO145,158^A0N,58,58^FD${price}^FS
+^XZ
+`.trim()
+}
+
+function makeZplBatch(items: LabelItem[]) {
+  return items.map(makeZplLabel).join('\n')
+}
+
 export default function LabelPreviewPage() {
   const [items, setItems] = useState<LabelItem[]>([])
   const [autoPrint, setAutoPrint] = useState(false)
   const [printMode, setPrintMode] = useState<PrintMode>('zebra')
+  const [message, setMessage] = useState('')
+  const [zebraBusy, setZebraBusy] = useState(false)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -42,15 +82,105 @@ export default function LabelPreviewPage() {
     if (!autoPrint || items.length === 0) return
 
     const timer = window.setTimeout(() => {
-      window.print()
+      if (printMode === 'zebra') {
+        sendToZebra()
+      } else {
+        window.print()
+      }
     }, 500)
 
     return () => window.clearTimeout(timer)
-  }, [autoPrint, items])
+  }, [autoPrint, items, printMode])
 
   function changePrintMode(mode: PrintMode) {
     setPrintMode(mode)
     window.localStorage.setItem('label_print_mode', mode)
+    setMessage('')
+  }
+
+  function loadScript(src: string) {
+    return new Promise<void>((resolve, reject) => {
+      const existingScript = document.querySelector(`script[src="${src}"]`)
+
+      if (existingScript) {
+        resolve()
+        return
+      }
+
+      const script = document.createElement('script')
+      script.src = src
+      script.async = true
+
+      script.onload = () => resolve()
+      script.onerror = () => reject(new Error(`Could not load ${src}`))
+
+      document.body.appendChild(script)
+    })
+  }
+
+  async function loadZebraScripts() {
+    if (window.BrowserPrint) return
+
+    await loadScript('/zebra/BrowserPrint-3.1.250.min.js')
+    await loadScript('/zebra/BrowserPrint-Zebra-1.1.250.min.js')
+  }
+
+  async function sendToZebra() {
+    if (items.length === 0) {
+      setMessage('No labels to print.')
+      return
+    }
+
+    setZebraBusy(true)
+    setMessage('Connecting to Zebra Browser Print...')
+
+    try {
+      await loadZebraScripts()
+
+      if (!window.BrowserPrint) {
+        throw new Error('BrowserPrint is not available.')
+      }
+
+      window.BrowserPrint.getDefaultDevice(
+        'printer',
+        (device: any) => {
+          if (!device) {
+            setZebraBusy(false)
+            setMessage('No default Zebra printer found. Check Browser Print is running.')
+            return
+          }
+
+          const zpl = makeZplBatch(items)
+
+          device.send(
+            zpl,
+            () => {
+              setZebraBusy(false)
+              setMessage(`Sent ${items.length} label(s) to Zebra.`)
+            },
+            (error: any) => {
+              setZebraBusy(false)
+              setMessage(
+                typeof error === 'string'
+                  ? error
+                  : 'Zebra print failed. Check Browser Print is running.'
+              )
+            }
+          )
+        },
+        (error: any) => {
+          setZebraBusy(false)
+          setMessage(
+            typeof error === 'string'
+              ? error
+              : 'Could not find Zebra printer. Check Browser Print is running.'
+          )
+        }
+      )
+    } catch (error: any) {
+      setZebraBusy(false)
+      setMessage(error.message || 'Zebra print failed.')
+    }
   }
 
   const labelCount = useMemo(() => items.length, [items])
@@ -65,8 +195,14 @@ export default function LabelPreviewPage() {
 
             <p className="text-sm text-zinc-600">
               {labelCount} label(s) · 50x30mm ·{' '}
-              {isZebra ? 'Zebra mode' : 'Brother mode'}
+              {isZebra ? 'Zebra Browser Print' : 'Brother browser print'}
             </p>
+
+            {message && (
+              <p className="mt-1 text-sm font-bold text-orange-700">
+                {message}
+              </p>
+            )}
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -88,12 +224,22 @@ export default function LabelPreviewPage() {
               Brother
             </button>
 
-            <button
-              onClick={() => window.print()}
-              className="rounded-lg bg-black px-4 py-2 text-sm font-bold text-white"
-            >
-              Print
-            </button>
+            {isZebra ? (
+              <button
+                onClick={sendToZebra}
+                disabled={zebraBusy || items.length === 0}
+                className="rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+              >
+                {zebraBusy ? 'Sending...' : 'Send to Zebra'}
+              </button>
+            ) : (
+              <button
+                onClick={() => window.print()}
+                className="rounded-lg bg-black px-4 py-2 text-sm font-bold text-white"
+              >
+                Print Brother
+              </button>
+            )}
 
             <button
               onClick={() => window.close()}
