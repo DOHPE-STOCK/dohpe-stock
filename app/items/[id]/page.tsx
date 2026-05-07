@@ -320,9 +320,7 @@ function PhotoPreview({ itemId }: { itemId: string }) {
   const selectedImageUrl =
     selectedImage.processed_url || selectedImage.original_url
 
-  const googleLensUrl = `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(
-    selectedImageUrl
-  )}`
+  
 
   return (
     <div className="space-y-3">
@@ -336,13 +334,11 @@ function PhotoPreview({ itemId }: { itemId: string }) {
 
       <div className="grid grid-cols-2 gap-2">
         <a
-          href={googleLensUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="rounded-lg bg-white px-3 py-2 text-center text-xs font-bold text-black"
-        >
-          Open in Google Lens
-        </a>
+  href={`/price-research/${itemId}`}
+  className="rounded-lg bg-white px-3 py-2 text-center text-xs font-bold text-black"
+>
+  Price Analysis
+</a>
 
         <a
           href={selectedImageUrl}
