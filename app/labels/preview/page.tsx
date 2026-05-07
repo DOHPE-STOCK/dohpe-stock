@@ -328,14 +328,7 @@ export default function LabelPreviewPage() {
               HTML
             </button>
 
-            {isZebra && (
-              <button
-                onClick={saveTemplate}
-                className="rounded-lg border px-4 py-2 text-sm font-bold"
-              >
-                Save Settings
-              </button>
-            )}
+            
 
             <button
               onClick={isZebra ? sendToZebra : () => window.print()}
