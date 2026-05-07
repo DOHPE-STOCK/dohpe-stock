@@ -27,7 +27,7 @@ function makeZplLabel(item: LabelItem) {
   const size = cleanZplText(item.sizeText || '')
   const price =
     typeof item.price === 'number'
-      ? cleanZplText(`GBP ${item.price.toFixed(0)}`)
+      ? cleanZplText(`£${item.price.toFixed(2)}`)
       : ''
 
   return `
@@ -36,11 +36,11 @@ function makeZplLabel(item: LabelItem) {
 ^PW400
 ^LL240
 ^LH0,0
-^FO145,10^A0N,22,22^FDDOHPE^FS
-^FO24,42^BY2,2,72^BCN,72,N,N,N^FD${sku}^FS
-^FO82,123^A0N,30,30^FD${sku}^FS
-^FO22,170^A0N,34,34^FD${size}^FS
-^FO145,158^A0N,58,58^FD${price}^FS
+^FO145,24^A0N,22,22^FDDOHPE^FS
+^FO42,56^BY2,2,68^BCN,68,N,N,N^FD${sku}^FS
+^FO102,132^A0N,26,26^FD${sku}^FS
+^FO34,176^A0N,30,30^FD${size}^FS
+^FO126,160^A0N,70,70^FD${price}^FS
 ^XZ
 `.trim()
 }
@@ -146,7 +146,9 @@ export default function LabelPreviewPage() {
         (device: any) => {
           if (!device) {
             setZebraBusy(false)
-            setMessage('No default Zebra printer found. Check Browser Print is running.')
+            setMessage(
+              'No default Zebra printer found. Check Browser Print is running.'
+            )
             return
           }
 
@@ -281,7 +283,7 @@ export default function LabelPreviewPage() {
 
                 <div className="price">
                   {typeof item.price === 'number'
-                    ? `£${item.price.toFixed(0)}`
+                    ? `£${item.price.toFixed(2)}`
                     : ''}
                 </div>
               </div>
@@ -340,7 +342,7 @@ export default function LabelPreviewPage() {
 
         .sku {
           font-size: 12px;
-          font-weight: 700;
+          font-weight: 500;
           letter-spacing: 1px;
           line-height: 1;
           margin-top: 0.3mm;
@@ -362,19 +364,19 @@ export default function LabelPreviewPage() {
 
         .size {
           position: absolute;
-          left: 1mm;
+          left: 3mm;
           bottom: -0.6mm;
           font-size: 12px;
-          font-weight: 700;
+          font-weight: 500;
         }
 
         .price {
           position: absolute;
           left: 50%;
-          bottom: -1.4mm;
+          bottom: -1.2mm;
           transform: translateX(-50%);
-          font-size: 20px;
-          font-weight: 900;
+          font-size: 21px;
+          font-weight: 950;
         }
 
         @media screen {
