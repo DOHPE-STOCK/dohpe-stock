@@ -356,9 +356,10 @@ export default function LabelPreviewPage() {
 
         .sku-underline {
           width: 44mm;
-          height: 0.2mm;
+          height: 0.25mm;
           background: black;
-          margin-top: 0.1mm;
+          margin-top: 0.4mm;
+          opacity: 0.9;
         }
 
         .bottom-row {
