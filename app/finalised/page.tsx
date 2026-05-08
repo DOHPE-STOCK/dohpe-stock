@@ -18,33 +18,104 @@ const CHANNEL_ICONS = [
 ] as const
 
 function channelOpacity(status?: string | null) {
-  if (!status || status === 'not_listed' || status === 'not_synced') {
-    return 'opacity-25 grayscale'
-  }
-
-  if (status === 'listed' || status === 'synced' || status === 'active') {
-    return 'opacity-100'
-  }
-
-  if (status === 'error' || status === 'failed') {
-    return 'opacity-80 grayscale ring-1 ring-red-500'
-  }
-
-  if (status === 'queued' || status === 'pending' || status === 'syncing') {
-    return 'animate-pulse opacity-60 grayscale'
-  }
-
+  if (!status || status === 'not_listed' || status === 'not_synced') return 'opacity-25 grayscale'
+  if (status === 'listed' || status === 'synced' || status === 'active') return 'opacity-100'
+  if (status === 'error' || status === 'failed') return 'opacity-80 grayscale ring-1 ring-red-500'
+  if (status === 'queued' || status === 'pending' || status === 'syncing') return 'animate-pulse opacity-60 grayscale'
   return 'opacity-40 grayscale'
 }
 
 function getExportTitle(item: any) {
-  return (
-    item.final_title ||
-    item.ai_title ||
-    item.basic_title ||
-    item.website_title ||
-    item.sku
-  )
+  return item.final_title || item.ai_title || item.basic_title || item.website_title || item.sku
+}
+
+function getExportDescription(item: any) {
+  return item.final_description || item.ai_description || item.basic_description || ''
+}
+
+const MEASUREMENT_FIELDS = [
+  'pit_to_pit',
+  'pit_to_cuff',
+  'pit_to_hem',
+  'collar_to_hem',
+  'shoulder_to_hem',
+  'shoulder_to_shoulder',
+  'sleeve_length',
+  'waist',
+  'inside_leg',
+  'inseam',
+  'leg_opening',
+  'rise',
+  'front_rise',
+  'back_rise',
+  'length',
+  'chest',
+  'hem',
+  'width',
+  'height',
+  'depth',
+]
+
+function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
+  const payload: any = {
+    id: item.id,
+    sku: item.sku,
+    linnworks_item_id: item.linnworks_item_id,
+
+    title: getExportTitle(item),
+    final_title: item.final_title,
+    ai_title: item.ai_title,
+    basic_title: item.basic_title,
+    website_title: item.website_title,
+
+    final_description: item.final_description,
+    ai_description: item.ai_description,
+    basic_description: item.basic_description,
+    description: getExportDescription(item),
+
+    brand: item.brand,
+    reporting_category: item.reporting_category,
+    tagged_size: item.tagged_size,
+    size_label: item.size_label,
+    condition: item.condition,
+
+    material: item.material,
+    colour: item.colour,
+    color: item.color,
+    colour_primary: item.colour_primary,
+    primary_colour: item.primary_colour,
+    style: item.style,
+    sub_type: item.sub_type,
+    subtype: item.subtype,
+    item_sub_type: item.item_sub_type,
+    era: item.era,
+    gender: item.gender,
+    flaws: item.flaws,
+
+    selling_price: item.selling_price,
+    cost_price: item.cost_price,
+    stock_level: item.stock_level ?? 1,
+    weight_grams: item.weight_grams,
+
+    current_location: item.current_location,
+    default_location: item.default_location,
+    current_bin: item.current_bin,
+    default_binrack: item.default_binrack,
+
+    processed_image_urls: processedImageUrls,
+  }
+
+  for (const field of MEASUREMENT_FIELDS) {
+    if (item[field] !== null && item[field] !== undefined && String(item[field]).trim() !== '') {
+      payload[field] = item[field]
+    }
+  }
+
+  if (item.measurements) {
+    payload.measurements = item.measurements
+  }
+
+  return payload
 }
 
 export default function FinalisedPage() {
@@ -52,6 +123,7 @@ export default function FinalisedPage() {
 
   const [items, setItems] = useState<any[]>([])
   const [imagesByItem, setImagesByItem] = useState<Record<string, string>>({})
+  const [processedImagesByItem, setProcessedImagesByItem] = useState<Record<string, string[]>>({})
   const [selectedItems, setSelectedItems] = useState<string[]>([])
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
@@ -79,14 +151,14 @@ export default function FinalisedPage() {
     }
 
     const finalisedItems = data || []
-
     setItems(finalisedItems)
     setSelectedItems([])
-    fetchThumbnails(finalisedItems)
+    fetchImages(finalisedItems)
   }
 
-  async function fetchThumbnails(finalisedItems: any[]) {
-    const imageMap: Record<string, string> = {}
+  async function fetchImages(finalisedItems: any[]) {
+    const thumbnailMap: Record<string, string> = {}
+    const processedMap: Record<string, string[]> = {}
 
     for (const item of finalisedItems) {
       const { data } = await supabase
@@ -94,31 +166,21 @@ export default function FinalisedPage() {
         .select('*')
         .eq('item_id', item.id)
         .order('image_order', { ascending: true })
-        .limit(1)
-        .maybeSingle()
 
-      if (data) {
-        imageMap[item.id] = data.processed_url || data.original_url
+      const rows = data || []
+
+      const firstImage = rows[0]
+      if (firstImage) {
+        thumbnailMap[item.id] = firstImage.processed_url || firstImage.original_url
       }
+
+      processedMap[item.id] = rows
+        .map((row) => row.processed_url)
+        .filter((url) => url && String(url).trim() !== '')
     }
 
-    setImagesByItem(imageMap)
-  }
-
-  async function getProcessedImagesForItem(itemId: string) {
-    const { data, error } = await supabase
-      .from('item_images')
-      .select('processed_url')
-      .eq('item_id', itemId)
-      .order('image_order', { ascending: true })
-
-    if (error) {
-      return []
-    }
-
-    return (data || [])
-      .map((image) => image.processed_url)
-      .filter(Boolean)
+    setImagesByItem(thumbnailMap)
+    setProcessedImagesByItem(processedMap)
   }
 
   function toggleItem(itemId: string) {
@@ -164,11 +226,7 @@ export default function FinalisedPage() {
       })),
     }
 
-    window.localStorage.setItem(
-      'finalised_export_selection',
-      JSON.stringify(exportDraft)
-    )
-
+    window.localStorage.setItem('finalised_export_selection', JSON.stringify(exportDraft))
     setMessage(`Saved export selection for ${selected.length} item(s) by ${staff.name}.`)
   }
 
@@ -186,7 +244,7 @@ export default function FinalisedPage() {
     }
 
     const confirmed = window.confirm(
-      `Export ${selected.length} item(s) to Linnworks inventory?\n\nThis will create/link the item, then sync stock, bin rack, price, description and processed images.`
+      `Export ${selected.length} item(s) to Linnworks inventory?`
     )
 
     if (!confirmed) return
@@ -214,44 +272,12 @@ export default function FinalisedPage() {
         .eq('id', item.id)
 
       try {
-        const processedImageUrls = await getProcessedImagesForItem(item.id)
+        const processedImageUrls = processedImagesByItem[item.id] || []
 
         const response = await fetch('/api/integrations/linnworks/export-item', {
           method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            id: item.id,
-            sku: item.sku,
-            linnworks_item_id: item.linnworks_item_id,
-
-            title: getExportTitle(item),
-            final_title: item.final_title,
-            ai_title: item.ai_title,
-            basic_title: item.basic_title,
-
-            final_description: item.final_description,
-            ai_description: item.ai_description,
-            basic_description: item.basic_description,
-
-            brand: item.brand,
-            reporting_category: item.reporting_category,
-            tagged_size: item.tagged_size,
-            condition: item.condition,
-
-            selling_price: item.selling_price,
-            cost_price: item.cost_price,
-            stock_level: item.stock_level,
-
-            current_location: item.current_location || 'Default',
-            current_bin: item.current_bin || 'Default',
-            default_location: 'Default',
-            default_binrack: 'Default',
-
-            weight_grams: item.weight_grams,
-            processed_image_urls: processedImageUrls,
-          }),
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(buildLinnworksPayload(item, processedImageUrls)),
         })
 
         const data = await response.json()
@@ -319,9 +345,7 @@ export default function FinalisedPage() {
     setExporting(false)
 
     if (failCount > 0) {
-      setMessage(
-        `Linnworks export finished: ${successCount} succeeded, ${failCount} failed.`
-      )
+      setMessage(`Linnworks export finished: ${successCount} succeeded, ${failCount} failed.`)
       alert(`Linnworks export finished: ${successCount} succeeded, ${failCount} failed.`)
       return
     }
@@ -330,8 +354,7 @@ export default function FinalisedPage() {
     alert(`Linnworks inventory export complete for ${successCount} item(s).`)
   }
 
-  const allSelected =
-    items.length > 0 && selectedItems.length === items.length
+  const allSelected = items.length > 0 && selectedItems.length === items.length
 
   return (
     <main className="min-h-screen bg-zinc-950 p-5 text-white">
@@ -413,6 +436,7 @@ export default function FinalisedPage() {
           {items.map((item) => {
             const thumbnailUrl = imagesByItem[item.id]
             const selected = selectedItems.includes(item.id)
+            const processedCount = processedImagesByItem[item.id]?.length || 0
 
             return (
               <section
@@ -435,11 +459,7 @@ export default function FinalisedPage() {
 
                   <div className="h-14 w-14 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950">
                     {thumbnailUrl ? (
-                      <img
-                        src={thumbnailUrl}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
+                      <img src={thumbnailUrl} alt="" className="h-full w-full object-cover" />
                     ) : (
                       <div className="flex h-full items-center justify-center text-[10px] text-zinc-500">
                         No image
@@ -452,7 +472,7 @@ export default function FinalisedPage() {
 
                     <p className="truncate text-xs text-zinc-400">
                       {item.brand || 'No brand'} · {item.reporting_category || 'No category'} · £
-                      {item.selling_price ?? '-'}
+                      {item.selling_price ?? '-'} · {processedCount} processed image(s)
                     </p>
 
                     <p className="mt-1 truncate text-xs text-zinc-500">
@@ -473,12 +493,8 @@ export default function FinalisedPage() {
                           <img
                             key={icon.name}
                             src={icon.src}
-                            title={`${icon.name}: ${String(
-                              item[icon.key as keyof typeof item] || 'not_synced'
-                            )}`}
-                            className={`h-4 w-4 rounded-sm ${channelOpacity(
-                              item[icon.key as keyof typeof item] as string | null
-                            )}`}
+                            title={`${icon.name}: ${String(item[icon.key] || 'not_synced')}`}
+                            className={`h-4 w-4 rounded-sm ${channelOpacity(item[icon.key])}`}
                             alt=""
                           />
                         ))}
