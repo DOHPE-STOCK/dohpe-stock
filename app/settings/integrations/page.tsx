@@ -175,7 +175,7 @@ export default function IntegrationsSettingsPage() {
     if (error) {
       setMessage(error.message)
       setSavingId(null)
-      return
+      return false
     }
 
     setIntegrations((current) =>
@@ -185,22 +185,79 @@ export default function IntegrationsSettingsPage() {
     )
 
     setSavingId(null)
-    setMessage('Integration setting saved')
+    return true
   }
 
   async function testConnection(integration: IntegrationSetting) {
+    if (integration.channel !== 'linnworks') {
+      const result = 'API connection test is not built for this channel yet.'
+      setMessage(result)
+      alert(result)
+      return
+    }
+
+    setSavingId(integration.id)
+    setMessage('Testing Linnworks connection...')
+
     await updateIntegration(integration.id, {
       connection_status: 'testing',
       last_error: null,
     })
 
-    window.setTimeout(async () => {
+    try {
+      const response = await fetch('/api/integrations/linnworks/test')
+      const data = await response.json()
+
+      if (!response.ok || !data.ok) {
+        const reason =
+          data?.message ||
+          data?.details?.Message ||
+          data?.details ||
+          'Linnworks connection failed.'
+
+        await updateIntegration(integration.id, {
+          connection_status: 'error',
+          last_error:
+            typeof reason === 'string' ? reason : JSON.stringify(reason),
+        })
+
+        const result = `Linnworks API connection failed: ${
+          typeof reason === 'string' ? reason : JSON.stringify(reason)
+        }`
+
+        setMessage(result)
+        alert(result)
+        setSavingId(null)
+        return
+      }
+
       await updateIntegration(integration.id, {
-        connection_status: integration.enabled ? 'connected' : 'not_connected',
-        last_synced_at: integration.enabled ? new Date().toISOString() : null,
-        last_error: integration.enabled ? null : 'Integration is disabled.',
+        connection_status: 'connected',
+        last_synced_at: new Date().toISOString(),
+        last_error: null,
       })
-    }, 700)
+
+      const result = `Linnworks API connection successful. Server: ${
+        data.server || 'Unknown'
+      }`
+
+      setMessage(result)
+      alert(result)
+    } catch (error: any) {
+      const reason = error?.message || 'Unknown error.'
+
+      await updateIntegration(integration.id, {
+        connection_status: 'error',
+        last_error: reason,
+      })
+
+      const result = `Linnworks API connection failed: ${reason}`
+
+      setMessage(result)
+      alert(result)
+    }
+
+    setSavingId(null)
   }
 
   return (
@@ -357,7 +414,7 @@ export default function IntegrationsSettingsPage() {
                     disabled={savingId === integration.id}
                     className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-40"
                   >
-                    {savingId === integration.id ? 'Saving...' : 'Test'}
+                    {savingId === integration.id ? 'Testing...' : 'Test'}
                   </button>
 
                   <Link
