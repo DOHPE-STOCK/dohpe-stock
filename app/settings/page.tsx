@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 
@@ -171,8 +172,6 @@ export default function SettingsPage() {
   return (
     <main className="min-h-screen bg-zinc-950 p-5 text-white">
       <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        
-        {/* LEFT SIDE (title + nav) */}
         <div className="flex flex-wrap items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold">Settings</h1>
@@ -185,7 +184,6 @@ export default function SettingsPage() {
           <AppNav current="settings" />
         </div>
 
-        {/* RIGHT SIDE (actions) */}
         <div className="flex items-center gap-3">
           {message && (
             <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
@@ -200,6 +198,30 @@ export default function SettingsPage() {
             Save Settings
           </button>
         </div>
+      </div>
+
+      <div className="mb-4 grid gap-4 xl:grid-cols-2">
+        <Link
+          href="/settings/integrations"
+          className="rounded-xl border border-blue-800 bg-blue-950 p-5 transition hover:border-blue-500 hover:bg-blue-900"
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-black text-blue-100">
+                Channel Integrations
+              </h2>
+
+              <p className="mt-1 text-sm text-blue-200">
+                Manage Linnworks, eBay, Shopify, Vinted, Square, Loyverse,
+                Depop and TikTok Shop sync settings.
+              </p>
+            </div>
+
+            <span className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-black text-white">
+              Open
+            </span>
+          </div>
+        </Link>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -220,9 +242,7 @@ export default function SettingsPage() {
 
             <textarea
               value={settings.photo_ai_rules || ''}
-              onChange={(e) =>
-                updateField('photo_ai_rules', e.target.value)
-              }
+              onChange={(e) => updateField('photo_ai_rules', e.target.value)}
               className="h-40 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm"
             />
 
@@ -254,9 +274,7 @@ export default function SettingsPage() {
             <input
               type="number"
               value={settings.image_export_size || 1600}
-              onChange={(e) =>
-                updateField('image_export_size', e.target.value)
-              }
+              onChange={(e) => updateField('image_export_size', e.target.value)}
               className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm"
             />
 
