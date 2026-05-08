@@ -147,6 +147,10 @@ function getInventoryItemObject(data: any) {
   return data
 }
 
+function getStockItemIntId(item: any) {
+  return item?.StockItemIntId || item?.stockItemIntId || item?.ItemNumberId || 0
+}
+
 function findLocationId(locations: any[], locationName: string) {
   const wanted = locationName.toLowerCase().trim()
 
@@ -202,6 +206,51 @@ function findChannelRow(data: any[]) {
       )
     }) || null
   )
+}
+
+function getCategoryId(category: any) {
+  return (
+    category?.CategoryId ||
+    category?.categoryId ||
+    category?.Id ||
+    category?.id ||
+    category?.pkCategoryId ||
+    category?.PkCategoryId ||
+    null
+  )
+}
+
+function getCategoryName(category: any) {
+  return normaliseText(
+    category?.CategoryName ||
+      category?.categoryName ||
+      category?.Name ||
+      category?.name ||
+      category?.Category ||
+      category?.category
+  )
+}
+
+async function findCategoryId(server: string, token: string, categoryName: string) {
+  if (!categoryName) return null
+
+  try {
+    const categories = await linnworksGet(server, token, '/api/Inventory/GetCategories')
+
+    if (!Array.isArray(categories)) {
+      return null
+    }
+
+    const wanted = categoryName.toLowerCase()
+
+    const match =
+      categories.find((category) => getCategoryName(category).toLowerCase() === wanted) ||
+      categories.find((category) => getCategoryName(category).toLowerCase().replaceAll('-', ' ') === wanted.replaceAll('-', ' '))
+
+    return match ? getCategoryId(match) : null
+  } catch {
+    return null
+  }
 }
 
 async function tryUpdateStockField(
@@ -273,6 +322,8 @@ async function tryUpdateGeneralItem(
       return { ok: false, skipped: false, reason: 'Could not read existing Linnworks item' }
     }
 
+    const categoryId = await findCategoryId(server, token, params.category)
+
     const inventoryItem: any = {
       ...existingItem,
       StockItemId: params.stockItemId,
@@ -292,6 +343,10 @@ async function tryUpdateGeneralItem(
     if (params.category) {
       inventoryItem.CategoryName = params.category
       inventoryItem.Category = params.category
+
+      if (categoryId) {
+        inventoryItem.CategoryId = categoryId
+      }
     }
 
     if (params.weightGrams !== null) {
@@ -307,7 +362,14 @@ async function tryUpdateGeneralItem(
       payload
     )
 
-    return { ok: true, skipped: false, data, payload }
+    return {
+      ok: true,
+      skipped: false,
+      data,
+      payload,
+      category_id_found: Boolean(categoryId),
+      category_id_used: categoryId,
+    }
   } catch (error: any) {
     return {
       ok: false,
@@ -495,10 +557,11 @@ async function tryUpsertChannelTitle(
   }
 }
 
-async function tryCreateExtendedProperty(
+async function tryUpsertExtendedProperty(
   server: string,
   token: string,
   stockItemId: string,
+  stockItemIntId: number,
   propertyName: string,
   propertyValue: string
 ) {
@@ -506,31 +569,54 @@ async function tryCreateExtendedProperty(
     return { ok: false, skipped: true, reason: 'empty value' }
   }
 
-  try {
-    const payload = {
-      inventoryItemExtendedProperties: [
-        {
-          StockItemId: stockItemId,
-          PropertyName: propertyName,
-          PropertyValue: propertyValue,
-          PropertyType: 'Attribute',
-        },
-      ],
-    }
+  const baseProperty: any = {
+    StockItemId: stockItemId,
+    StockItemIntId: stockItemIntId,
+    PropertyName: propertyName,
+    PropertyValue: propertyValue,
+    PropertyType: 'Attribute',
+  }
 
-    const data = await linnworksPost(
+  try {
+    const existing = await linnworksGet(
       server,
       token,
-      '/api/Inventory/CreateInventoryItemExtendedProperties',
-      payload
+      `/api/Inventory/GetInventoryItemExtendedProperties?inventoryItemId=${encodeURIComponent(stockItemId)}`
     )
 
-    return { ok: true, skipped: false, data, payload }
+    const existingProperties = Array.isArray(existing) ? existing : []
+    const existingRow =
+      existingProperties.find((row) => normaliseText(row.PropertyName || row.propertyName).toLowerCase() === propertyName.toLowerCase()) ||
+      null
+
+    const existingId = getRowId(existingRow)
+    const newPropertyId = crypto.randomUUID()
+
+    const propertyRow = existingId
+      ? { ...baseProperty, pkRowId: existingId, PkRowId: existingId }
+      : { ...baseProperty, pkRowId: newPropertyId, PkRowId: newPropertyId }
+
+    const endpoint = existingId
+      ? '/api/Inventory/UpdateInventoryItemExtendedProperties'
+      : '/api/Inventory/CreateInventoryItemExtendedProperties'
+
+    const payload = { inventoryItemExtendedProperties: [propertyRow] }
+    const data = await linnworksPost(server, token, endpoint, payload)
+
+    return {
+      ok: true,
+      skipped: false,
+      endpoint,
+      existing_property_found: Boolean(existingId),
+      data,
+      payload,
+    }
   } catch (error: any) {
     return {
       ok: false,
       skipped: false,
       reason: error.message || 'Unknown extended property error',
+      payload: { inventoryItemExtendedProperties: [baseProperty] },
     }
   }
 }
@@ -619,6 +705,10 @@ export async function POST(request: Request) {
       })
     }
 
+    const existingRaw = await getLinnworksItem(server, token, stockItemId, sku)
+    const existingItem = getInventoryItemObject(existingRaw)
+    const stockItemIntId = getStockItemIntId(existingItem)
+
     const locationName =
       normaliseText(body.current_location) ||
       normaliseText(body.default_location) ||
@@ -694,38 +784,43 @@ export async function POST(request: Request) {
     }
 
     const extended_properties = {
-      dohpe_app_managed: await tryCreateExtendedProperty(
+      dohpe_app_managed: await tryUpsertExtendedProperty(
         server,
         token,
         stockItemId,
+        stockItemIntId,
         'dohpe_app_managed',
         'true'
       ),
-      brand: await tryCreateExtendedProperty(
+      brand: await tryUpsertExtendedProperty(
         server,
         token,
         stockItemId,
+        stockItemIntId,
         'brand',
         normaliseText(body.brand)
       ),
-      reporting_category: await tryCreateExtendedProperty(
+      reporting_category: await tryUpsertExtendedProperty(
         server,
         token,
         stockItemId,
+        stockItemIntId,
         'reporting_category',
         normaliseText(body.reporting_category)
       ),
-      tagged_size: await tryCreateExtendedProperty(
+      tagged_size: await tryUpsertExtendedProperty(
         server,
         token,
         stockItemId,
+        stockItemIntId,
         'tagged_size',
         normaliseText(body.tagged_size)
       ),
-      condition: await tryCreateExtendedProperty(
+      condition: await tryUpsertExtendedProperty(
         server,
         token,
         stockItemId,
+        stockItemIntId,
         'condition',
         normaliseText(body.condition)
       ),
@@ -761,6 +856,7 @@ export async function POST(request: Request) {
       JSON.stringify({
         sku,
         stockItemId,
+        stockItemIntId,
         sellingPrice,
         costPrice,
         descriptionLength: description.length,
