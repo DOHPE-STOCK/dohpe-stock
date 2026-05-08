@@ -105,6 +105,22 @@ export default function FinalisedPage() {
     setImagesByItem(imageMap)
   }
 
+  async function getProcessedImagesForItem(itemId: string) {
+    const { data, error } = await supabase
+      .from('item_images')
+      .select('processed_url')
+      .eq('item_id', itemId)
+      .order('image_order', { ascending: true })
+
+    if (error) {
+      return []
+    }
+
+    return (data || [])
+      .map((image) => image.processed_url)
+      .filter(Boolean)
+  }
+
   function toggleItem(itemId: string) {
     setSelectedItems((prev) =>
       prev.includes(itemId)
@@ -170,7 +186,7 @@ export default function FinalisedPage() {
     }
 
     const confirmed = window.confirm(
-      `Export ${selected.length} item(s) to Linnworks inventory?\n\nThis will create basic stock items first so you can check them in Linnworks.`
+      `Export ${selected.length} item(s) to Linnworks inventory?\n\nThis will create/link the item, then sync stock, bin rack, price, description and processed images.`
     )
 
     if (!confirmed) return
@@ -198,6 +214,8 @@ export default function FinalisedPage() {
         .eq('id', item.id)
 
       try {
+        const processedImageUrls = await getProcessedImagesForItem(item.id)
+
         const response = await fetch('/api/integrations/linnworks/export-item', {
           method: 'POST',
           headers: {
@@ -206,7 +224,33 @@ export default function FinalisedPage() {
           body: JSON.stringify({
             id: item.id,
             sku: item.sku,
+            linnworks_item_id: item.linnworks_item_id,
+
             title: getExportTitle(item),
+            final_title: item.final_title,
+            ai_title: item.ai_title,
+            basic_title: item.basic_title,
+
+            final_description: item.final_description,
+            ai_description: item.ai_description,
+            basic_description: item.basic_description,
+
+            brand: item.brand,
+            reporting_category: item.reporting_category,
+            tagged_size: item.tagged_size,
+            condition: item.condition,
+
+            selling_price: item.selling_price,
+            cost_price: item.cost_price,
+            stock_level: item.stock_level,
+
+            current_location: item.current_location || 'Default',
+            current_bin: item.current_bin || 'Default',
+            default_location: 'Default',
+            default_binrack: 'Default',
+
+            weight_grams: item.weight_grams,
+            processed_image_urls: processedImageUrls,
           }),
         })
 
