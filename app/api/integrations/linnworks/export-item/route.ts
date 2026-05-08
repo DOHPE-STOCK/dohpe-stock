@@ -237,15 +237,17 @@ async function findCategoryId(server: string, token: string, categoryName: strin
   try {
     const categories = await linnworksGet(server, token, '/api/Inventory/GetCategories')
 
-    if (!Array.isArray(categories)) {
-      return null
-    }
+    if (!Array.isArray(categories)) return null
 
     const wanted = categoryName.toLowerCase()
 
     const match =
       categories.find((category) => getCategoryName(category).toLowerCase() === wanted) ||
-      categories.find((category) => getCategoryName(category).toLowerCase().replaceAll('-', ' ') === wanted.replaceAll('-', ' '))
+      categories.find(
+        (category) =>
+          getCategoryName(category).toLowerCase().replaceAll('-', ' ') ===
+          wanted.replaceAll('-', ' ')
+      )
 
     return match ? getCategoryId(match) : null
   } catch {
@@ -332,26 +334,16 @@ async function tryUpdateGeneralItem(
       BarcodeNumber: params.sku,
     }
 
-    if (params.sellingPrice !== null) {
-      inventoryItem.RetailPrice = params.sellingPrice
-    }
-
-    if (params.costPrice !== null) {
-      inventoryItem.PurchasePrice = params.costPrice
-    }
+    if (params.sellingPrice !== null) inventoryItem.RetailPrice = params.sellingPrice
+    if (params.costPrice !== null) inventoryItem.PurchasePrice = params.costPrice
 
     if (params.category) {
       inventoryItem.CategoryName = params.category
       inventoryItem.Category = params.category
-
-      if (categoryId) {
-        inventoryItem.CategoryId = categoryId
-      }
+      if (categoryId) inventoryItem.CategoryId = categoryId
     }
 
-    if (params.weightGrams !== null) {
-      inventoryItem.Weight = params.weightGrams
-    }
+    if (params.weightGrams !== null) inventoryItem.Weight = params.weightGrams
 
     const payload = { inventoryItem }
 
@@ -409,11 +401,7 @@ async function tryUpsertChannelPrice(
 
     const priceRow = existingId
       ? { ...basePrice, pkRowId: existingId, PkRowId: existingId }
-      : {
-          ...basePrice,
-          pkRowId: newPriceId,
-          PkRowId: newPriceId,
-        }
+      : { ...basePrice, pkRowId: newPriceId, PkRowId: newPriceId }
 
     const endpoint = existingId
       ? '/api/Inventory/UpdateInventoryItemPrices'
@@ -578,16 +566,24 @@ async function tryUpsertExtendedProperty(
   }
 
   try {
-    const existing = await linnworksGet(
+    const existing = await linnworksPost(
       server,
       token,
-      `/api/Inventory/GetInventoryItemExtendedProperties?inventoryItemId=${encodeURIComponent(stockItemId)}`
+      '/api/Inventory/GetInventoryItemExtendedProperties',
+      {
+        inventoryItemId: stockItemId,
+        itemNumber: '',
+        propertyParams: {},
+      }
     )
 
     const existingProperties = Array.isArray(existing) ? existing : []
     const existingRow =
-      existingProperties.find((row) => normaliseText(row.PropertyName || row.propertyName).toLowerCase() === propertyName.toLowerCase()) ||
-      null
+      existingProperties.find(
+        (row) =>
+          normaliseText(row.PropertyName || row.propertyName).toLowerCase() ===
+          propertyName.toLowerCase()
+      ) || null
 
     const existingId = getRowId(existingRow)
     const newPropertyId = crypto.randomUUID()
@@ -635,10 +631,12 @@ async function tryAddImage(
 
   try {
     const payload = {
-      stockItemId,
-      imageUrl,
-      isMain,
-      sortOrder,
+      request: {
+        stockItemId,
+        imageUrl,
+        isMain,
+        sortOrder,
+      },
     }
 
     const data = await linnworksPost(
