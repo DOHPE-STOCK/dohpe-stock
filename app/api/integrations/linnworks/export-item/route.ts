@@ -91,6 +91,17 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+function normalisePropertyName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replaceAll(' ', '_')
+    .replaceAll('-', '_')
+    .replaceAll('/', '_')
+    .replaceAll('(', '')
+    .replaceAll(')', '')
+}
+
 function findStockItemIdFromData(data: any) {
   if (!data) return null
 
@@ -644,6 +655,50 @@ async function tryAddImage(
   }
 }
 
+function addFilledMeasurementProperties(body: any, target: Record<string, any>) {
+  const directMeasurementFields = [
+    'pit_to_pit',
+    'pit_to_cuff',
+    'pit_to_hem',
+    'collar_to_hem',
+    'shoulder_to_hem',
+    'shoulder_to_shoulder',
+    'sleeve_length',
+    'waist',
+    'inside_leg',
+    'inseam',
+    'leg_opening',
+    'rise',
+    'front_rise',
+    'back_rise',
+    'length',
+    'chest',
+    'hem',
+    'width',
+    'height',
+    'depth',
+  ]
+
+  for (const field of directMeasurementFields) {
+    const value = normaliseText(body[field])
+
+    if (value) {
+      target[`measurement_${field}`] = value
+    }
+  }
+
+  if (body.measurements && typeof body.measurements === 'object' && !Array.isArray(body.measurements)) {
+    for (const [rawKey, rawValue] of Object.entries(body.measurements)) {
+      const key = normalisePropertyName(String(rawKey))
+      const value = normaliseText(rawValue)
+
+      if (key && value) {
+        target[`measurement_${key}`] = value
+      }
+    }
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json()
@@ -778,91 +833,35 @@ export async function POST(request: Request) {
         : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
     }
 
-    const extended_properties = {
-      dohpe_app_managed: await tryUpsertExtendedProperty(
+    const extendedPropertyValues: Record<string, string> = {
+      dohpe_app_managed: 'true',
+      brand: normaliseText(body.brand),
+      reporting_category: normaliseText(body.reporting_category),
+      tagged_size: normaliseText(body.tagged_size || body.size_label),
+      condition: normaliseText(body.condition),
+      material: normaliseText(body.material),
+      colour_primary: normaliseText(
+        body.colour_primary || body.primary_colour || body.colour || body.color
+      ),
+      style: normaliseText(body.style),
+      sub_type: normaliseText(body.sub_type || body.subtype || body.item_sub_type),
+      era: normaliseText(body.era),
+      gender: normaliseText(body.gender),
+      flaws: normaliseText(body.flaws),
+    }
+
+    addFilledMeasurementProperties(body, extendedPropertyValues)
+
+    const extended_properties: Record<string, any> = {}
+
+    for (const [propertyName, propertyValue] of Object.entries(extendedPropertyValues)) {
+      extended_properties[propertyName] = await tryUpsertExtendedProperty(
         server,
         token,
         stockItemId,
-        'dohpe_app_managed',
-        'true'
-      ),
-      brand: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'brand',
-        normaliseText(body.brand)
-      ),
-      reporting_category: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'reporting_category',
-        normaliseText(body.reporting_category)
-      ),
-      tagged_size: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'tagged_size',
-        normaliseText(body.tagged_size || body.size_label)
-      ),
-      condition: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'condition',
-        normaliseText(body.condition)
-      ),
-      material: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'material',
-        normaliseText(body.material)
-      ),
-      colour_primary: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'colour_primary',
-        normaliseText(body.colour_primary || body.primary_colour || body.colour || body.color)
-      ),
-      style: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'style',
-        normaliseText(body.style)
-      ),
-      sub_type: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'sub_type',
-        normaliseText(body.sub_type || body.subtype || body.item_sub_type)
-      ),
-      era: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'era',
-        normaliseText(body.era)
-      ),
-      gender: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'gender',
-        normaliseText(body.gender)
-      ),
-      flaws: await tryUpsertExtendedProperty(
-        server,
-        token,
-        stockItemId,
-        'flaws',
-        normaliseText(body.flaws)
-      ),
+        propertyName,
+        propertyValue
+      )
     }
 
     const images = []
