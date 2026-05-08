@@ -9,10 +9,12 @@ type LinnworksSettings = {
   mode: string
   sync_direction: string
   channel_strategy: string
-  warehouse_location: string
-  shop_locations: string[]
-  bin_options: string[]
-  default_bin: string | null
+  default_location: string
+  default_binrack: string
+  app_managed_identifier_enabled: boolean
+  managed_identifier_name: string
+  managed_identifier_value: string
+  use_app_bins_for_binrack: boolean
   unknown_bin: string
   in_transit_bin: string
   use_app_for_transfers: boolean
@@ -28,8 +30,6 @@ type LinnworksSettings = {
   sync_description_app_to_linnworks: boolean
   sync_category_app_to_linnworks: boolean
   sync_images_app_to_linnworks: boolean
-  managed_identifier_name: string
-  managed_identifier_value: string
   field_mapping: Record<string, string>
 }
 
@@ -48,10 +48,12 @@ const defaultSettings: LinnworksSettings = {
   mode: 'manual_export_then_auto_sync',
   sync_direction: 'controlled_two_way',
   channel_strategy: 'linnworks_inventory_first_ebay_via_linnworks',
-  warehouse_location: 'Default',
-  shop_locations: ['SHOP-1', 'SHOP-2', 'SHOP-3'],
-  bin_options: ['Unknown', 'Stock Room', 'Shop Floor', 'In Transit'],
-  default_bin: null,
+  default_location: 'Default',
+  default_binrack: 'Default',
+  app_managed_identifier_enabled: true,
+  managed_identifier_name: 'dohpe_app_managed',
+  managed_identifier_value: 'true',
+  use_app_bins_for_binrack: true,
   unknown_bin: 'Unknown',
   in_transit_bin: 'In Transit',
   use_app_for_transfers: true,
@@ -67,8 +69,6 @@ const defaultSettings: LinnworksSettings = {
   sync_description_app_to_linnworks: true,
   sync_category_app_to_linnworks: true,
   sync_images_app_to_linnworks: true,
-  managed_identifier_name: 'dohpe_app_managed',
-  managed_identifier_value: 'true',
   field_mapping: {
     sku: 'SKU',
     final_title: 'Title',
@@ -88,6 +88,14 @@ function mergeSettings(settings: any): LinnworksSettings {
   return {
     ...defaultSettings,
     ...(settings || {}),
+    default_location:
+      settings?.default_location ||
+      settings?.warehouse_location ||
+      defaultSettings.default_location,
+    default_binrack:
+      settings?.default_binrack ||
+      settings?.default_bin ||
+      defaultSettings.default_binrack,
     field_mapping: {
       ...defaultSettings.field_mapping,
       ...(settings?.field_mapping || {}),
@@ -321,18 +329,129 @@ export default function LinnworksIntegrationPage() {
                 <option value="linnworks_inventory_first_ebay_via_linnworks">
                   Sync app to Linnworks inventory; eBay handled by Linnworks/eBay configurators
                 </option>
-                <option value="inventory_only">
-                  Inventory only for now
-                </option>
+                <option value="inventory_only">Inventory only for now</option>
               </select>
             </label>
           </div>
         </section>
 
         <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+          <h2 className="mb-4 text-lg font-semibold">
+            Default Location + BinRack
+          </h2>
+
+          <p className="mb-4 text-sm text-neutral-400">
+            New exported items stay at these defaults until allocated or moved in the app.
+            Any app-created bin can later be pushed to Linnworks BinRack.
+          </p>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <label>
+              <span className="mb-1 block text-sm font-bold text-neutral-300">
+                Default Linnworks location
+              </span>
+              <input
+                value={settings.default_location}
+                onChange={(e) => updateSetting('default_location', e.target.value)}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+            </label>
+
+            <label>
+              <span className="mb-1 block text-sm font-bold text-neutral-300">
+                Default Linnworks BinRack
+              </span>
+              <input
+                value={settings.default_binrack}
+                onChange={(e) => updateSetting('default_binrack', e.target.value)}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 space-y-2 text-sm">
+            <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
+              <span>Use app-created bins for Linnworks BinRack</span>
+              <input
+                type="checkbox"
+                checked={settings.use_app_bins_for_binrack}
+                onChange={(e) =>
+                  updateSetting('use_app_bins_for_binrack', e.target.checked)
+                }
+                className="h-4 w-4"
+              />
+            </label>
+
+            <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
+              <span>Use app-managed identifier to ignore old Linnworks stock</span>
+              <input
+                type="checkbox"
+                checked={settings.app_managed_identifier_enabled}
+                onChange={(e) =>
+                  updateSetting('app_managed_identifier_enabled', e.target.checked)
+                }
+                className="h-4 w-4"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label>
+              <span className="mb-1 block text-sm font-bold text-neutral-300">
+                Unknown BinRack value
+              </span>
+              <input
+                value={settings.unknown_bin}
+                onChange={(e) => updateSetting('unknown_bin', e.target.value)}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+            </label>
+
+            <label>
+              <span className="mb-1 block text-sm font-bold text-neutral-300">
+                In transit BinRack value
+              </span>
+              <input
+                value={settings.in_transit_bin}
+                onChange={(e) => updateSetting('in_transit_bin', e.target.value)}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label>
+              <span className="mb-1 block text-sm font-bold text-neutral-300">
+                Managed identifier name
+              </span>
+              <input
+                value={settings.managed_identifier_name}
+                onChange={(e) =>
+                  updateSetting('managed_identifier_name', e.target.value)
+                }
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+            </label>
+
+            <label>
+              <span className="mb-1 block text-sm font-bold text-neutral-300">
+                Managed identifier value
+              </span>
+              <input
+                value={settings.managed_identifier_value}
+                onChange={(e) =>
+                  updateSetting('managed_identifier_value', e.target.value)
+                }
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+            </label>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
           <h2 className="mb-4 text-lg font-semibold">Safety Rules</h2>
 
-          <div className="space-y-2 text-sm">
+          <div className="grid gap-2 text-sm md:grid-cols-2">
             {[
               ['require_manual_export_first', 'Require manual export before sync'],
               ['only_sync_app_managed_items', 'Only sync app-managed items'],
@@ -362,7 +481,9 @@ export default function LinnworksIntegrationPage() {
         </section>
 
         <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
-          <h2 className="mb-4 text-lg font-semibold">Auto Sync After Manual Export</h2>
+          <h2 className="mb-4 text-lg font-semibold">
+            Auto Sync After Manual Export
+          </h2>
 
           <p className="mb-4 text-sm text-neutral-400">
             These only apply after an item has been exported from the app and marked as app-managed.
@@ -373,7 +494,7 @@ export default function LinnworksIntegrationPage() {
               ['sync_stock_levels_two_way', 'Stock level two-way sync'],
               ['sync_price_app_to_linnworks', 'Price app → Linnworks'],
               ['sync_location_app_to_linnworks', 'Location app → Linnworks'],
-              ['sync_binrack_app_to_linnworks', 'Bin rack app → Linnworks'],
+              ['sync_binrack_app_to_linnworks', 'BinRack app → Linnworks'],
               ['sync_title_app_to_linnworks', 'Title app → Linnworks'],
               ['sync_description_app_to_linnworks', 'Description app → Linnworks'],
               ['sync_category_app_to_linnworks', 'Category app → Linnworks'],
@@ -400,167 +521,42 @@ export default function LinnworksIntegrationPage() {
           </div>
         </section>
 
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
-          <h2 className="mb-4 text-lg font-semibold">Managed Item Identifier</h2>
-
-          <p className="mb-4 text-sm text-neutral-400">
-            Existing Linnworks stock will be ignored unless it has this identifier or is manually linked later.
-          </p>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Identifier name
-              </span>
-              <input
-                value={settings.managed_identifier_name}
-                onChange={(e) =>
-                  updateSetting('managed_identifier_name', e.target.value)
-                }
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Identifier value
-              </span>
-              <input
-                value={settings.managed_identifier_value}
-                onChange={(e) =>
-                  updateSetting('managed_identifier_value', e.target.value)
-                }
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
-          <h2 className="mb-4 text-lg font-semibold">Location Mapping</h2>
-
-          <div className="space-y-4">
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Warehouse Linnworks location
-              </span>
-              <input
-                value={settings.warehouse_location}
-                onChange={(e) =>
-                  updateSetting('warehouse_location', e.target.value)
-                }
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Shop Linnworks locations, one per line
-              </span>
-              <textarea
-                value={settings.shop_locations.join('\n')}
-                onChange={(e) =>
-                  updateSetting(
-                    'shop_locations',
-                    e.target.value
-                      .split('\n')
-                      .map((line) => line.trim())
-                      .filter(Boolean)
-                  )
-                }
-                className="h-28 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
-          <h2 className="mb-4 text-lg font-semibold">Bin Rack Rules</h2>
-
-          <p className="mb-4 text-sm text-neutral-400">
-            Blank/null means unallocated/default. Use simple states for shop stock.
-          </p>
-
-          <div className="space-y-4">
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Bin options, one per line
-              </span>
-              <textarea
-                value={settings.bin_options.join('\n')}
-                onChange={(e) =>
-                  updateSetting(
-                    'bin_options',
-                    e.target.value
-                      .split('\n')
-                      .map((line) => line.trim())
-                      .filter(Boolean)
-                  )
-                }
-                className="h-28 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <label>
-                <span className="mb-1 block text-sm font-bold text-neutral-300">
-                  Unknown bin
-                </span>
-                <input
-                  value={settings.unknown_bin}
-                  onChange={(e) => updateSetting('unknown_bin', e.target.value)}
-                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-                />
-              </label>
-
-              <label>
-                <span className="mb-1 block text-sm font-bold text-neutral-300">
-                  In transit bin
-                </span>
-                <input
-                  value={settings.in_transit_bin}
-                  onChange={(e) =>
-                    updateSetting('in_transit_bin', e.target.value)
-                  }
-                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-                />
-              </label>
-            </div>
-          </div>
-        </section>
-
         <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
           <h2 className="mb-4 text-lg font-semibold">Field Mapping</h2>
 
           <div className="grid gap-3 md:grid-cols-2">
-            {Object.entries(settings.field_mapping).map(([appField, linnworksField]) => (
-              <div
-                key={appField}
-                className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950 p-3 md:grid-cols-2"
-              >
-                <label>
-                  <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
-                    App field
-                  </span>
-                  <input
-                    value={appField}
-                    disabled
-                    className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-neutral-400"
-                  />
-                </label>
+            {Object.entries(settings.field_mapping).map(
+              ([appField, linnworksField]) => (
+                <div
+                  key={appField}
+                  className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950 p-3 md:grid-cols-2"
+                >
+                  <label>
+                    <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
+                      App field
+                    </span>
+                    <input
+                      value={appField}
+                      disabled
+                      className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-neutral-400"
+                    />
+                  </label>
 
-                <label>
-                  <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
-                    Linnworks field
-                  </span>
-                  <input
-                    value={linnworksField}
-                    onChange={(e) => updateFieldMapping(appField, e.target.value)}
-                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2"
-                  />
-                </label>
-              </div>
-            ))}
+                  <label>
+                    <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
+                      Linnworks field
+                    </span>
+                    <input
+                      value={linnworksField}
+                      onChange={(e) =>
+                        updateFieldMapping(appField, e.target.value)
+                      }
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2"
+                    />
+                  </label>
+                </div>
+              )
+            )}
           </div>
         </section>
       </div>
