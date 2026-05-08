@@ -1,67 +1,39 @@
-import { NextResponse } from 'next/server'
+'use client'
 
-export async function GET() {
-  const applicationId = process.env.LINNWORKS_APP_ID
-  const applicationSecret = process.env.LINNWORKS_APP_SECRET
-  const token = process.env.LINNWORKS_APP_TOKEN
+import Link from 'next/link'
+import AppNav from '@/app/components/AppNav'
 
-  if (!applicationId || !applicationSecret || !token) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: 'Missing Linnworks environment variables.',
-        missing: {
-          LINNWORKS_APP_ID: !applicationId,
-          LINNWORKS_APP_SECRET: !applicationSecret,
-          LINNWORKS_APP_TOKEN: !token,
-        },
-      },
-      { status: 500 }
-    )
-  }
+export default function LinnworksIntegrationPage() {
+  return (
+    <main className="min-h-screen bg-neutral-950 p-5 text-white">
+      <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Linnworks Configuration</h1>
 
-  const response = await fetch(
-    'https://api.linnworks.net/api/Auth/AuthorizeByApplication',
-    {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        ApplicationId: applicationId,
-        ApplicationSecret: applicationSecret,
-        Token: token,
-      }),
-    }
+            <p className="text-sm text-neutral-400">
+              Placeholder settings page. We will build this integration properly next.
+            </p>
+          </div>
+
+          <AppNav current="settings" />
+        </div>
+
+        <Link
+          href="/settings/integrations"
+          className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-semibold hover:bg-neutral-800"
+        >
+          Back to Integrations
+        </Link>
+      </div>
+
+      <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+        <h2 className="mb-2 text-lg font-semibold">Not configured yet</h2>
+
+        <p className="text-sm text-neutral-400">
+          The route exists so the Configure button works while we build the Linnworks setup.
+        </p>
+      </section>
+    </main>
   )
-
-  const text = await response.text()
-
-  let data: any = null
-
-  try {
-    data = JSON.parse(text)
-  } catch {
-    data = text
-  }
-
-  if (!response.ok) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: 'Linnworks auth failed.',
-        status: response.status,
-        details: data,
-      },
-      { status: response.status }
-    )
-  }
-
-  return NextResponse.json({
-    ok: true,
-    message: 'Linnworks connection successful.',
-    server: data?.Server || null,
-    token_received: Boolean(data?.Token),
-  })
 }
