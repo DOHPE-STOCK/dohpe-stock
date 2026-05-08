@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server'
 
+const CHANNEL_SOURCE = 'EBAY'
+const CHANNEL_SUBSOURCE = 'dohpe_vintage'
+const CHANNEL_TAG = 'UK'
+
 async function authoriseLinnworks() {
   const applicationId = process.env.LINNWORKS_APP_ID
   const applicationSecret = process.env.LINNWORKS_APP_SECRET
@@ -121,6 +125,29 @@ async function findLinnworksItemBySku(server: string, token: string, sku: string
   }
 }
 
+async function getLinnworksItem(server: string, token: string, stockItemId: string, sku: string) {
+  try {
+    return await linnworksGet(
+      server,
+      token,
+      `/api/Inventory/GetInventoryItem?inventoryItemId=${encodeURIComponent(stockItemId)}`
+    )
+  } catch {
+    return await linnworksGet(
+      server,
+      token,
+      `/api/Inventory/GetInventoryItem?sKU=${encodeURIComponent(sku)}`
+    )
+  }
+}
+
+function getInventoryItemObject(data: any) {
+  if (!data) return null
+  if (data.Item) return data.Item
+  if (data.item) return data.item
+  return data
+}
+
 function findLocationId(locations: any[], locationName: string) {
   const wanted = locationName.toLowerCase().trim()
 
@@ -151,22 +178,33 @@ function findLocationId(locations: any[], locationName: string) {
   )
 }
 
-function getFirstId(data: any) {
-  if (!data) return null
+function getRowId(row: any) {
+  return (
+    row?.pkRowId ||
+    row?.PkRowId ||
+    row?.RowId ||
+    row?.Id ||
+    row?.id ||
+    null
+  )
+}
 
-  if (Array.isArray(data)) {
-    const first = data[0]
-    return (
-      first?.pkRowId ||
-      first?.PkRowId ||
-      first?.RowId ||
-      first?.Id ||
-      first?.id ||
-      null
-    )
-  }
+function findChannelRow(data: any[]) {
+  if (!Array.isArray(data)) return null
 
-  return data?.pkRowId || data?.PkRowId || data?.RowId || data?.Id || data?.id || null
+  return (
+    data.find((row) => {
+      const source = normaliseText(row.Source || row.source)
+      const subSource = normaliseText(row.SubSource || row.subSource)
+      const tag = normaliseText(row.Tag || row.tag || row.SubSourceSuffix || row.subSourceSuffix)
+
+      return (
+        source.toLowerCase() === CHANNEL_SOURCE.toLowerCase() &&
+        subSource.toLowerCase() === CHANNEL_SUBSOURCE.toLowerCase() &&
+        (!tag || tag.toLowerCase() === CHANNEL_TAG.toLowerCase())
+      )
+    }) || null
+  )
 }
 
 async function tryUpdateStockField(
@@ -217,7 +255,67 @@ async function tryUpdateStockField(
   }
 }
 
-async function tryUpsertPrice(
+async function tryUpdateGeneralItem(
+  server: string,
+  token: string,
+  params: {
+    stockItemId: string
+    sku: string
+    title: string
+    sellingPrice: number | null
+    costPrice: number | null
+    category: string
+  }
+) {
+  try {
+    const existingRaw = await getLinnworksItem(server, token, params.stockItemId, params.sku)
+    const existingItem = getInventoryItemObject(existingRaw)
+
+    if (!existingItem) {
+      return { ok: false, skipped: false, reason: 'Could not read existing Linnworks item' }
+    }
+
+    const inventoryItem: any = {
+      ...existingItem,
+      StockItemId: params.stockItemId,
+      ItemNumber: params.sku,
+      ItemTitle: params.title,
+      BarcodeNumber: params.sku,
+    }
+
+    if (params.sellingPrice !== null) {
+      inventoryItem.RetailPrice = params.sellingPrice
+    }
+
+    if (params.costPrice !== null) {
+      inventoryItem.PurchasePrice = params.costPrice
+    }
+
+    if (params.category) {
+      inventoryItem.CategoryName = params.category
+      inventoryItem.Category = params.category
+    }
+
+    const payload = { inventoryItem }
+
+    const data = await linnworksPost(
+      server,
+      token,
+      '/api/Inventory/UpdateInventoryItem',
+      payload
+    )
+
+    return { ok: true, skipped: false, data, payload }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown general item update error',
+    }
+  }
+}
+
+async function tryUpsertChannelPrice(
   server: string,
   token: string,
   stockItemId: string,
@@ -227,10 +325,12 @@ async function tryUpsertPrice(
     return { ok: false, skipped: true, reason: 'empty selling price' }
   }
 
-  const basePrice = {
+  const basePrice: any = {
     StockItemId: stockItemId,
-    Source: 'Default',
-    SubSource: '',
+    Source: CHANNEL_SOURCE,
+    SubSource: CHANNEL_SUBSOURCE,
+    Tag: CHANNEL_TAG,
+    SubSourceSuffix: CHANNEL_TAG,
     Price: sellingPrice,
   }
 
@@ -241,7 +341,8 @@ async function tryUpsertPrice(
       `/api/Inventory/GetInventoryItemPrices?inventoryItemId=${encodeURIComponent(stockItemId)}`
     )
 
-    const existingId = getFirstId(existing)
+    const existingRow = findChannelRow(existing)
+    const existingId = getRowId(existingRow)
 
     const priceRow = existingId
       ? { ...basePrice, pkRowId: existingId, PkRowId: existingId }
@@ -260,20 +361,20 @@ async function tryUpsertPrice(
       endpoint,
       data,
       existing,
-      existing_price_row_found: Boolean(existingId),
+      existing_channel_row_found: Boolean(existingId),
       payload,
     }
   } catch (error: any) {
     return {
       ok: false,
       skipped: false,
-      reason: error.message || 'Unknown price update error',
+      reason: error.message || 'Unknown channel price update error',
       payload: { inventoryItemPrices: [basePrice] },
     }
   }
 }
 
-async function tryUpsertDescription(
+async function tryUpsertChannelDescription(
   server: string,
   token: string,
   stockItemId: string,
@@ -284,10 +385,12 @@ async function tryUpsertDescription(
     return { ok: false, skipped: true, reason: 'empty description' }
   }
 
-  const baseDescription = {
+  const baseDescription: any = {
     StockItemId: stockItemId,
-    Source: 'Default',
-    SubSource: '',
+    Source: CHANNEL_SOURCE,
+    SubSource: CHANNEL_SUBSOURCE,
+    Tag: CHANNEL_TAG,
+    SubSourceSuffix: CHANNEL_TAG,
     Title: title,
     Description: description,
   }
@@ -299,7 +402,8 @@ async function tryUpsertDescription(
       `/api/Inventory/GetInventoryItemDescriptions?inventoryItemId=${encodeURIComponent(stockItemId)}`
     )
 
-    const existingId = getFirstId(existing)
+    const existingRow = findChannelRow(existing)
+    const existingId = getRowId(existingRow)
 
     const descriptionRow = existingId
       ? { ...baseDescription, pkRowId: existingId, PkRowId: existingId }
@@ -318,15 +422,74 @@ async function tryUpsertDescription(
       endpoint,
       data,
       existing,
-      existing_description_row_found: Boolean(existingId),
+      existing_channel_row_found: Boolean(existingId),
       payload,
     }
   } catch (error: any) {
     return {
       ok: false,
       skipped: false,
-      reason: error.message || 'Unknown description update error',
+      reason: error.message || 'Unknown channel description update error',
       payload: { inventoryItemDescriptions: [baseDescription] },
+    }
+  }
+}
+
+async function tryUpsertChannelTitle(
+  server: string,
+  token: string,
+  stockItemId: string,
+  title: string
+) {
+  if (!title) {
+    return { ok: false, skipped: true, reason: 'empty title' }
+  }
+
+  const baseTitle: any = {
+    StockItemId: stockItemId,
+    Source: CHANNEL_SOURCE,
+    SubSource: CHANNEL_SUBSOURCE,
+    Tag: CHANNEL_TAG,
+    SubSourceSuffix: CHANNEL_TAG,
+    Title: title,
+  }
+
+  try {
+    const existing = await linnworksGet(
+      server,
+      token,
+      `/api/Inventory/GetInventoryItemTitles?inventoryItemId=${encodeURIComponent(stockItemId)}`
+    )
+
+    const existingRow = findChannelRow(existing)
+    const existingId = getRowId(existingRow)
+
+    const titleRow = existingId
+      ? { ...baseTitle, pkRowId: existingId, PkRowId: existingId }
+      : baseTitle
+
+    const endpoint = existingId
+      ? '/api/Inventory/UpdateInventoryItemTitles'
+      : '/api/Inventory/CreateInventoryItemTitles'
+
+    const payload = { inventoryItemTitles: [titleRow] }
+    const data = await linnworksPost(server, token, endpoint, payload)
+
+    return {
+      ok: true,
+      skipped: false,
+      endpoint,
+      data,
+      existing,
+      existing_channel_row_found: Boolean(existingId),
+      payload,
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown channel title update error',
+      payload: { inventoryItemTitles: [baseTitle] },
     }
   }
 }
@@ -483,27 +646,31 @@ export async function POST(request: Request) {
       : []
 
     const updates = {
-      title: await tryUpdateStockField(server, token, {
+      general_item: await tryUpdateGeneralItem(server, token, {
         stockItemId,
-        fieldName: 'Title',
-        fieldValue: title,
+        sku,
+        title,
+        sellingPrice,
+        costPrice,
+        category,
       }),
 
-      description: await tryUpsertDescription(server, token, stockItemId, title, description),
+      channel_title: await tryUpsertChannelTitle(server, token, stockItemId, title),
 
-      category: await tryUpdateStockField(server, token, {
+      channel_description: await tryUpsertChannelDescription(
+        server,
+        token,
         stockItemId,
-        fieldName: 'Category',
-        fieldValue: category,
-      }),
+        title,
+        description
+      ),
 
-      retail_price: await tryUpsertPrice(server, token, stockItemId, sellingPrice),
-
-      purchase_price: await tryUpdateStockField(server, token, {
+      channel_price: await tryUpsertChannelPrice(
+        server,
+        token,
         stockItemId,
-        fieldName: 'PurchasePrice',
-        fieldValue: costPrice,
-      }),
+        sellingPrice
+      ),
 
       weight: await tryUpdateStockField(server, token, {
         stockItemId,
@@ -606,6 +773,11 @@ export async function POST(request: Request) {
         locationId,
         binRack,
         processedImageCount: processedImages.length,
+        channel: {
+          source: CHANNEL_SOURCE,
+          subSource: CHANNEL_SUBSOURCE,
+          tag: CHANNEL_TAG,
+        },
         updates,
         extended_properties,
         images,
