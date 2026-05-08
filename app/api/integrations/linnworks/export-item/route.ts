@@ -544,7 +544,7 @@ async function tryUpsertChannelTitle(
 async function tryUpsertExtendedProperty(
   server: string,
   token: string,
-  stockItemId: string,
+  itemNumber: string,
   propertyName: string,
   propertyValue: string
 ) {
@@ -553,7 +553,7 @@ async function tryUpsertExtendedProperty(
   }
 
   const baseProperty: any = {
-    InventoryItemId: stockItemId,
+    ItemNumber: itemNumber,
     PropertyName: propertyName,
     PropertyValue: propertyValue,
     PropertyType: 'Attribute',
@@ -565,8 +565,8 @@ async function tryUpsertExtendedProperty(
       token,
       '/api/Inventory/GetInventoryItemExtendedProperties',
       {
-        inventoryItemId: stockItemId,
-        itemNumber: '',
+        inventoryItemId: '00000000-0000-0000-0000-000000000000',
+        itemNumber,
         propertyParams: {},
       }
     )
@@ -786,35 +786,35 @@ export async function POST(request: Request) {
       dohpe_app_managed: await tryUpsertExtendedProperty(
         server,
         token,
-        stockItemId,
+        sku,
         'dohpe_app_managed',
         'true'
       ),
       brand: await tryUpsertExtendedProperty(
         server,
         token,
-        stockItemId,
+        sku,
         'brand',
         normaliseText(body.brand)
       ),
       reporting_category: await tryUpsertExtendedProperty(
         server,
         token,
-        stockItemId,
+        sku,
         'reporting_category',
         normaliseText(body.reporting_category)
       ),
       tagged_size: await tryUpsertExtendedProperty(
         server,
         token,
-        stockItemId,
+        sku,
         'tagged_size',
         normaliseText(body.tagged_size)
       ),
       condition: await tryUpsertExtendedProperty(
         server,
         token,
-        stockItemId,
+        sku,
         'condition',
         normaliseText(body.condition)
       ),
