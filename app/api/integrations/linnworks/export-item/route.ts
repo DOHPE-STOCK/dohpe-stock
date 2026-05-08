@@ -172,8 +172,6 @@ async function tryUpdateStockField(
     changeSource: 'Dohpe Stock App',
   }
 
-  // Important: only include locationId when we actually have one.
-  // Sending locationId: null makes Linnworks reject the request.
   if (params.locationId) {
     payload.locationId = params.locationId
   }
@@ -197,6 +195,81 @@ async function tryUpdateStockField(
   }
 }
 
+async function tryCreateExtendedProperty(
+  server: string,
+  token: string,
+  stockItemId: string,
+  propertyName: string,
+  propertyValue: string
+) {
+  if (!propertyValue) {
+    return { ok: false, skipped: true, reason: 'empty value' }
+  }
+
+  try {
+    const data = await linnworksPost(
+      server,
+      token,
+      '/api/Inventory/CreateInventoryItemExtendedProperties',
+      {
+        inventoryItemExtendedProperties: [
+          {
+            StockItemId: stockItemId,
+            ProperyName: propertyName,
+            PropertyName: propertyName,
+            PropertyValue: propertyValue,
+            PropertyType: 'Attribute',
+          },
+        ],
+      }
+    )
+
+    return { ok: true, skipped: false, data }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown extended property error',
+    }
+  }
+}
+
+async function tryAddImage(
+  server: string,
+  token: string,
+  stockItemId: string,
+  imageUrl: string,
+  isMain: boolean,
+  sortOrder: number
+) {
+  if (!imageUrl) {
+    return { ok: false, skipped: true, reason: 'empty image url' }
+  }
+
+  try {
+    const data = await linnworksPost(
+      server,
+      token,
+      '/api/Inventory/AddImageToInventoryItem',
+      {
+        stockItemId,
+        imageUrl,
+        isMain,
+        sortOrder,
+      }
+    )
+
+    return { ok: true, skipped: false, data }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown image sync error',
+      imageUrl,
+    }
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json()
@@ -204,6 +277,9 @@ export async function POST(request: Request) {
     const sku = normaliseText(body.sku)
     const title = normaliseText(
       body.title || body.final_title || body.ai_title || body.basic_title || sku
+    )
+    const description = normaliseText(
+      body.final_description || body.ai_description || body.basic_description
     )
 
     if (!sku) {
@@ -264,11 +340,23 @@ export async function POST(request: Request) {
     const weightGrams = normaliseNumber(body.weight_grams)
     const category = normaliseText(body.reporting_category)
 
+    const processedImages = Array.isArray(body.processed_image_urls)
+      ? body.processed_image_urls
+          .map((url: any) => normaliseText(url))
+          .filter(Boolean)
+      : []
+
     const updates = {
       title: await tryUpdateStockField(server, token, {
         stockItemId,
         fieldName: 'Title',
         fieldValue: title,
+      }),
+
+      description: await tryUpdateStockField(server, token, {
+        stockItemId,
+        fieldName: 'Description',
+        fieldValue: description,
       }),
 
       category: await tryUpdateStockField(server, token, {
@@ -314,20 +402,79 @@ export async function POST(request: Request) {
         : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
     }
 
+    const extended_properties = {
+      dohpe_app_managed: await tryCreateExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'dohpe_app_managed',
+        'true'
+      ),
+      brand: await tryCreateExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'brand',
+        normaliseText(body.brand)
+      ),
+      reporting_category: await tryCreateExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'reporting_category',
+        normaliseText(body.reporting_category)
+      ),
+      tagged_size: await tryCreateExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'tagged_size',
+        normaliseText(body.tagged_size)
+      ),
+      condition: await tryCreateExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'condition',
+        normaliseText(body.condition)
+      ),
+    }
+
+    const images = []
+
+    for (let i = 0; i < processedImages.length; i++) {
+      images.push(
+        await tryAddImage(
+          server,
+          token,
+          stockItemId,
+          processedImages[i],
+          i === 0,
+          i + 1
+        )
+      )
+    }
+
     const failedUpdates = Object.entries(updates).filter(
       ([, result]: any) => !result.ok && !result.skipped
     )
 
+    const failedExtended = Object.entries(extended_properties).filter(
+      ([, result]: any) => !result.ok && !result.skipped
+    )
+
+    const failedImages = images.filter((result: any) => !result.ok && !result.skipped)
+
     return NextResponse.json({
       ok: true,
       message:
-        failedUpdates.length > 0
-          ? `Linnworks item linked/created, but ${failedUpdates.length} field update(s) failed.`
+        failedUpdates.length > 0 || failedExtended.length > 0 || failedImages.length > 0
+          ? `Linnworks item linked/created, but ${failedUpdates.length} field update(s), ${failedExtended.length} extended property update(s), and ${failedImages.length} image(s) failed.`
           : createdNew
-            ? 'Linnworks inventory item created and synced.'
+            ? 'Linnworks inventory item created and fully synced.'
             : linkedExisting
-              ? 'Existing Linnworks inventory item linked and synced.'
-              : 'Linnworks inventory item synced.',
+              ? 'Existing Linnworks inventory item linked and fully synced.'
+              : 'Linnworks inventory item fully synced.',
       created_new: createdNew,
       linked_existing: linkedExisting,
       linnworks_item_id: stockItemId,
@@ -335,7 +482,10 @@ export async function POST(request: Request) {
       location_used: locationName,
       location_id_found: Boolean(locationId),
       binrack_used: binRack,
+      processed_image_count: processedImages.length,
       updates,
+      extended_properties,
+      images,
     })
   } catch (error: any) {
     return NextResponse.json(
