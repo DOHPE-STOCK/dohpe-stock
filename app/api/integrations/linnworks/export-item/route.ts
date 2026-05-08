@@ -265,6 +265,7 @@ async function tryUpdateGeneralItem(
     sellingPrice: number | null
     costPrice: number | null
     category: string
+    weightGrams: number | null
   }
 ) {
   try {
@@ -294,6 +295,10 @@ async function tryUpdateGeneralItem(
     if (params.category) {
       inventoryItem.CategoryName = params.category
       inventoryItem.Category = params.category
+    }
+
+    if (params.weightGrams !== null) {
+      inventoryItem.Weight = params.weightGrams
     }
 
     const payload = { inventoryItem }
@@ -343,10 +348,15 @@ async function tryUpsertChannelPrice(
 
     const existingRow = findChannelRow(existing)
     const existingId = getRowId(existingRow)
+    const newPriceId = crypto.randomUUID()
 
     const priceRow = existingId
       ? { ...basePrice, pkRowId: existingId, PkRowId: existingId }
-      : basePrice
+      : {
+          ...basePrice,
+          pkRowId: newPriceId,
+          PkRowId: newPriceId,
+        }
 
     const endpoint = existingId
       ? '/api/Inventory/UpdateInventoryItemPrices'
@@ -653,6 +663,7 @@ export async function POST(request: Request) {
         sellingPrice,
         costPrice,
         category,
+        weightGrams,
       }),
 
       channel_title: await tryUpsertChannelTitle(server, token, stockItemId, title),
@@ -671,12 +682,6 @@ export async function POST(request: Request) {
         stockItemId,
         sellingPrice
       ),
-
-      weight: await tryUpdateStockField(server, token, {
-        stockItemId,
-        fieldName: 'Weight',
-        fieldValue: weightGrams,
-      }),
 
       stock_level: locationId
         ? await tryUpdateStockField(server, token, {
