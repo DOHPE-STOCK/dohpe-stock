@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 
 const CHANNEL_SOURCE = 'EBAY'
-const CHANNEL_SUBSOURCE = 'dohpe_vintage'
-const CHANNEL_TAG = 'UK'
+const CHANNEL_SUBSOURCE = 'dohpe_vintage_UK'
 
 async function authoriseLinnworks() {
   const applicationId = process.env.LINNWORKS_APP_ID
@@ -196,12 +195,10 @@ function findChannelRow(data: any[]) {
     data.find((row) => {
       const source = normaliseText(row.Source || row.source)
       const subSource = normaliseText(row.SubSource || row.subSource)
-      const tag = normaliseText(row.Tag || row.tag || row.SubSourceSuffix || row.subSourceSuffix)
 
       return (
         source.toLowerCase() === CHANNEL_SOURCE.toLowerCase() &&
-        subSource.toLowerCase() === CHANNEL_SUBSOURCE.toLowerCase() &&
-        (!tag || tag.toLowerCase() === CHANNEL_TAG.toLowerCase())
+        subSource.toLowerCase() === CHANNEL_SUBSOURCE.toLowerCase()
       )
     }) || null
   )
@@ -334,8 +331,6 @@ async function tryUpsertChannelPrice(
     StockItemId: stockItemId,
     Source: CHANNEL_SOURCE,
     SubSource: CHANNEL_SUBSOURCE,
-    Tag: CHANNEL_TAG,
-    SubSourceSuffix: CHANNEL_TAG,
     Price: sellingPrice,
   }
 
@@ -399,8 +394,6 @@ async function tryUpsertChannelDescription(
     StockItemId: stockItemId,
     Source: CHANNEL_SOURCE,
     SubSource: CHANNEL_SUBSOURCE,
-    Tag: CHANNEL_TAG,
-    SubSourceSuffix: CHANNEL_TAG,
     Title: title,
     Description: description,
   }
@@ -459,8 +452,6 @@ async function tryUpsertChannelTitle(
     StockItemId: stockItemId,
     Source: CHANNEL_SOURCE,
     SubSource: CHANNEL_SUBSOURCE,
-    Tag: CHANNEL_TAG,
-    SubSourceSuffix: CHANNEL_TAG,
     Title: title,
   }
 
@@ -781,7 +772,6 @@ export async function POST(request: Request) {
         channel: {
           source: CHANNEL_SOURCE,
           subSource: CHANNEL_SUBSOURCE,
-          tag: CHANNEL_TAG,
         },
         updates,
         extended_properties,
