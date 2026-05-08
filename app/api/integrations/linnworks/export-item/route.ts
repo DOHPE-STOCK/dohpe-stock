@@ -147,10 +147,6 @@ function getInventoryItemObject(data: any) {
   return data
 }
 
-function getStockItemIntId(item: any) {
-  return item?.StockItemIntId || item?.stockItemIntId || item?.ItemNumberId || 0
-}
-
 function findLocationId(locations: any[], locationName: string) {
   const wanted = locationName.toLowerCase().trim()
 
@@ -549,7 +545,6 @@ async function tryUpsertExtendedProperty(
   server: string,
   token: string,
   stockItemId: string,
-  stockItemIntId: number,
   propertyName: string,
   propertyValue: string
 ) {
@@ -558,8 +553,7 @@ async function tryUpsertExtendedProperty(
   }
 
   const baseProperty: any = {
-    StockItemId: stockItemId,
-    StockItemIntId: stockItemIntId,
+    InventoryItemId: stockItemId,
     PropertyName: propertyName,
     PropertyValue: propertyValue,
     PropertyType: 'Attribute',
@@ -703,10 +697,6 @@ export async function POST(request: Request) {
       })
     }
 
-    const existingRaw = await getLinnworksItem(server, token, stockItemId, sku)
-    const existingItem = getInventoryItemObject(existingRaw)
-    const stockItemIntId = getStockItemIntId(existingItem)
-
     const locationName =
       normaliseText(body.current_location) ||
       normaliseText(body.default_location) ||
@@ -725,6 +715,8 @@ export async function POST(request: Request) {
     const sellingPrice = normaliseNumber(body.selling_price)
     const costPrice = normaliseNumber(body.cost_price)
     const stockLevel = normaliseNumber(body.stock_level) ?? 1
+    const stockValue =
+      costPrice !== null && stockLevel !== null ? Number((stockLevel * costPrice).toFixed(2)) : null
     const weightGrams = normaliseNumber(body.weight_grams)
     const category = normaliseText(body.reporting_category)
 
@@ -771,6 +763,15 @@ export async function POST(request: Request) {
           })
         : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
 
+      stock_value: locationId && stockValue !== null
+        ? await tryUpdateStockField(server, token, {
+            stockItemId,
+            fieldName: 'StockValue',
+            fieldValue: stockValue,
+            locationId,
+          })
+        : { ok: false, skipped: true, reason: 'Missing location or cost price' },
+
       binrack: locationId
         ? await tryUpdateStockField(server, token, {
             stockItemId,
@@ -786,7 +787,6 @@ export async function POST(request: Request) {
         server,
         token,
         stockItemId,
-        stockItemIntId,
         'dohpe_app_managed',
         'true'
       ),
@@ -794,7 +794,6 @@ export async function POST(request: Request) {
         server,
         token,
         stockItemId,
-        stockItemIntId,
         'brand',
         normaliseText(body.brand)
       ),
@@ -802,7 +801,6 @@ export async function POST(request: Request) {
         server,
         token,
         stockItemId,
-        stockItemIntId,
         'reporting_category',
         normaliseText(body.reporting_category)
       ),
@@ -810,7 +808,6 @@ export async function POST(request: Request) {
         server,
         token,
         stockItemId,
-        stockItemIntId,
         'tagged_size',
         normaliseText(body.tagged_size)
       ),
@@ -818,7 +815,6 @@ export async function POST(request: Request) {
         server,
         token,
         stockItemId,
-        stockItemIntId,
         'condition',
         normaliseText(body.condition)
       ),
@@ -854,9 +850,10 @@ export async function POST(request: Request) {
       JSON.stringify({
         sku,
         stockItemId,
-        stockItemIntId,
         sellingPrice,
         costPrice,
+        stockLevel,
+        stockValue,
         descriptionLength: description.length,
         title,
         locationName,
