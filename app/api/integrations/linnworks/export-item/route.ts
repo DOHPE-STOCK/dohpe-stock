@@ -9,21 +9,15 @@ async function authoriseLinnworks() {
     throw new Error('Missing Linnworks environment variables.')
   }
 
-  const response = await fetch(
-    'https://api.linnworks.net/api/Auth/AuthorizeByApplication',
-    {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        ApplicationId: applicationId,
-        ApplicationSecret: applicationSecret,
-        Token: token,
-      }),
-    }
-  )
+  const response = await fetch('https://api.linnworks.net/api/Auth/AuthorizeByApplication', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ApplicationId: applicationId,
+      ApplicationSecret: applicationSecret,
+      Token: token,
+    }),
+  })
 
   const data = await response.json()
 
@@ -31,30 +25,17 @@ async function authoriseLinnworks() {
     throw new Error('Linnworks authorisation failed.')
   }
 
-  return {
-    server: data.Server,
-    token: data.Token,
-  }
+  return { server: data.Server, token: data.Token }
 }
 
-async function linnworksPost(
-  server: string,
-  token: string,
-  path: string,
-  body: any
-) {
+async function linnworksPost(server: string, token: string, path: string, body: any) {
   const response = await fetch(`${server}${path}`, {
     method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      Authorization: token,
-    },
+    headers: { accept: 'application/json', 'content-type': 'application/json', Authorization: token },
     body: JSON.stringify(body),
   })
 
   const text = await response.text()
-
   let data: any = null
 
   try {
@@ -64,11 +45,7 @@ async function linnworksPost(
   }
 
   if (!response.ok) {
-    throw new Error(
-      `${path} failed: ${
-        typeof data === 'string' ? data : JSON.stringify(data)
-      }`
-    )
+    throw new Error(`${path} failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`)
   }
 
   return data
@@ -77,14 +54,10 @@ async function linnworksPost(
 async function linnworksGet(server: string, token: string, path: string) {
   const response = await fetch(`${server}${path}`, {
     method: 'GET',
-    headers: {
-      accept: 'application/json',
-      Authorization: token,
-    },
+    headers: { accept: 'application/json', Authorization: token },
   })
 
   const text = await response.text()
-
   let data: any = null
 
   try {
@@ -94,11 +67,7 @@ async function linnworksGet(server: string, token: string, path: string) {
   }
 
   if (!response.ok) {
-    throw new Error(
-      `${path} failed: ${
-        typeof data === 'string' ? data : JSON.stringify(data)
-      }`
-    )
+    throw new Error(`${path} failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`)
   }
 
   return data
@@ -134,18 +103,12 @@ function findStockItemIdFromData(data: any) {
   )
 }
 
-async function findLinnworksItemBySku(
-  server: string,
-  token: string,
-  sku: string
-) {
+async function findLinnworksItemBySku(server: string, token: string, sku: string) {
   try {
-    const encodedSku = encodeURIComponent(sku)
-
     const data = await linnworksGet(
       server,
       token,
-      `/api/Inventory/GetInventoryItem?sKU=${encodedSku}`
+      `/api/Inventory/GetInventoryItem?sKU=${encodeURIComponent(sku)}`
     )
 
     return findStockItemIdFromData(data)
@@ -184,7 +147,7 @@ function findLocationId(locations: any[], locationName: string) {
   )
 }
 
-async function updateStockField(
+async function tryUpdateStockField(
   server: string,
   token: string,
   params: {
@@ -199,18 +162,39 @@ async function updateStockField(
     params.fieldValue === undefined ||
     params.fieldValue === ''
   ) {
-    return false
+    return { ok: false, skipped: true, reason: 'empty value' }
   }
 
-  await linnworksPost(server, token, '/api/Inventory/UpdateInventoryItemStockField', {
+  const payload: any = {
     inventoryItemId: params.stockItemId,
     fieldName: params.fieldName,
     fieldValue: String(params.fieldValue),
-    locationId: params.locationId || null,
     changeSource: 'Dohpe Stock App',
-  })
+  }
 
-  return true
+  // Important: only include locationId when we actually have one.
+  // Sending locationId: null makes Linnworks reject the request.
+  if (params.locationId) {
+    payload.locationId = params.locationId
+  }
+
+  try {
+    const data = await linnworksPost(
+      server,
+      token,
+      '/api/Inventory/UpdateInventoryItemStockField',
+      payload
+    )
+
+    return { ok: true, skipped: false, data }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown update error',
+      payload,
+    }
+  }
 }
 
 export async function POST(request: Request) {
@@ -241,9 +225,7 @@ export async function POST(request: Request) {
     if (!stockItemId) {
       stockItemId = await findLinnworksItemBySku(server, token, sku)
 
-      if (stockItemId) {
-        linkedExisting = true
-      }
+      if (stockItemId) linkedExisting = true
     }
 
     if (!stockItemId) {
@@ -283,62 +265,69 @@ export async function POST(request: Request) {
     const category = normaliseText(body.reporting_category)
 
     const updates = {
-      title: await updateStockField(server, token, {
+      title: await tryUpdateStockField(server, token, {
         stockItemId,
         fieldName: 'Title',
         fieldValue: title,
       }),
 
-      category: await updateStockField(server, token, {
+      category: await tryUpdateStockField(server, token, {
         stockItemId,
         fieldName: 'Category',
         fieldValue: category,
       }),
 
-      retail_price: await updateStockField(server, token, {
+      retail_price: await tryUpdateStockField(server, token, {
         stockItemId,
         fieldName: 'RetailPrice',
         fieldValue: sellingPrice,
       }),
 
-      purchase_price: await updateStockField(server, token, {
+      purchase_price: await tryUpdateStockField(server, token, {
         stockItemId,
         fieldName: 'PurchasePrice',
         fieldValue: costPrice,
       }),
 
-      weight: await updateStockField(server, token, {
+      weight: await tryUpdateStockField(server, token, {
         stockItemId,
         fieldName: 'Weight',
         fieldValue: weightGrams,
       }),
 
       stock_level: locationId
-        ? await updateStockField(server, token, {
+        ? await tryUpdateStockField(server, token, {
             stockItemId,
             fieldName: 'StockLevel',
             fieldValue: stockLevel,
             locationId,
           })
-        : false,
+        : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
 
       binrack: locationId
-        ? await updateStockField(server, token, {
+        ? await tryUpdateStockField(server, token, {
             stockItemId,
             fieldName: 'BinRack',
             fieldValue: binRack,
             locationId,
           })
-        : false,
+        : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
     }
+
+    const failedUpdates = Object.entries(updates).filter(
+      ([, result]: any) => !result.ok && !result.skipped
+    )
 
     return NextResponse.json({
       ok: true,
-      message: createdNew
-        ? 'Linnworks inventory item created and synced.'
-        : linkedExisting
-          ? 'Existing Linnworks inventory item linked and synced.'
-          : 'Linnworks inventory item synced.',
+      message:
+        failedUpdates.length > 0
+          ? `Linnworks item linked/created, but ${failedUpdates.length} field update(s) failed.`
+          : createdNew
+            ? 'Linnworks inventory item created and synced.'
+            : linkedExisting
+              ? 'Existing Linnworks inventory item linked and synced.'
+              : 'Linnworks inventory item synced.',
       created_new: createdNew,
       linked_existing: linkedExisting,
       linnworks_item_id: stockItemId,
