@@ -383,6 +383,7 @@ export default function ItemPage() {
   const [item, setItem] = useState<any>(null)
   const [message, setMessage] = useState('')
   const [generatingAi, setGeneratingAi] = useState(false)
+  const [processingImages, setProcessingImages] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
 
   const originalItemRef = useRef<any>(null)
@@ -440,6 +441,106 @@ export default function ItemPage() {
     return data
       .map((image) => image.processed_url || image.original_url)
       .filter(Boolean)
+  }
+
+  function blankToNull(value: any) {
+    return value === '' ||
+      value === null ||
+      value === undefined ||
+      String(value).trim() === ''
+      ? null
+      : value
+  }
+
+  async function createProcessedBlob(imageUrl: string) {
+    const response = await fetch(imageUrl)
+    const blob = await response.blob()
+
+    const bitmap = await createImageBitmap(blob)
+
+    const maxSize = 1600
+    const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height))
+    const width = Math.round(bitmap.width * scale)
+    const height = Math.round(bitmap.height * scale)
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+
+    const ctx = canvas.getContext('2d')
+
+    if (!ctx) {
+      throw new Error('Could not process image.')
+    }
+
+    ctx.drawImage(bitmap, 0, 0, width, height)
+
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (processedBlob) => {
+          if (!processedBlob) {
+            reject(new Error('Could not create processed image.'))
+            return
+          }
+
+          resolve(processedBlob)
+        },
+        'image/jpeg',
+        0.85
+      )
+    })
+  }
+
+  async function ensureProcessedImages() {
+    const { data, error } = await supabase
+      .from('item_images')
+      .select('*')
+      .eq('item_id', id)
+      .order('image_order', { ascending: true })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    const images = data || []
+
+    for (const image of images) {
+      const sourceUrl = image.original_url || image.processed_url
+
+      if (!sourceUrl) continue
+
+      const processedBlob = await createProcessedBlob(sourceUrl)
+      const path = `processed/${id}/${image.id}.jpg`
+
+      const { error: uploadError } = await supabase.storage
+        .from('item-images')
+        .upload(path, processedBlob, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        })
+
+      if (uploadError) {
+        throw new Error(uploadError.message)
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from('item-images')
+        .getPublicUrl(path)
+
+      const processedUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`
+
+      const { error: updateError } = await supabase
+        .from('item_images')
+        .update({
+          processed_url: processedUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', image.id)
+
+      if (updateError) {
+        throw new Error(updateError.message)
+      }
+    }
   }
 
   function missingFinaliseFields(itemToCheck: any, imageCount: number) {
@@ -506,16 +607,8 @@ export default function ItemPage() {
   async function saveItem() {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
-      return
+      return null
     }
-
-    const blankToNull = (value: any) =>
-      value === '' ||
-      value === null ||
-      value === undefined ||
-      String(value).trim() === ''
-        ? null
-        : value
 
     const priceChanged =
       String(originalItemRef.current?.cost_price || '') !==
@@ -528,6 +621,7 @@ export default function ItemPage() {
 
       cost_price: blankToNull(item.cost_price),
       selling_price: blankToNull(item.selling_price),
+      stock_level: blankToNull(item.stock_level),
 
       waist_in: blankToNull(item.waist_in),
       inside_leg_in: blankToNull(item.inside_leg_in),
@@ -551,12 +645,15 @@ export default function ItemPage() {
 
     if (error) {
       setMessage(error.message)
-    } else {
-      originalItemRef.current = cleanedItem
-      setItem(cleanedItem)
-      setHasUnsavedChanges(false)
-      setMessage(`Saved by ${staff.name}`)
+      return null
     }
+
+    originalItemRef.current = cleanedItem
+    setItem(cleanedItem)
+    setHasUnsavedChanges(false)
+    setMessage(`Saved by ${staff.name}`)
+
+    return cleanedItem
   }
 
   async function sendToReview() {
@@ -590,7 +687,7 @@ export default function ItemPage() {
     setItem(updatedItem)
     originalItemRef.current = updatedItem
     setHasUnsavedChanges(false)
-    window.location.href = '/'
+    window.location.href = '/review'
   }
 
   async function finaliseItem() {
@@ -611,30 +708,48 @@ export default function ItemPage() {
       return
     }
 
-    const confirmed = window.confirm(`Finalise SKU ${item.sku}?`)
+    const confirmed = window.confirm(
+      `Finalise SKU ${item.sku}?\n\nThis will save the item, create/overwrite processed image URLs, and move it to Review.`
+    )
 
     if (!confirmed) return
 
-    const updatedItem = {
-      ...item,
-      status: 'finalised',
-      last_saved_by: staff.id,
+    setProcessingImages(true)
+    setMessage('Saving and processing images...')
+
+    try {
+      const savedItem = await saveItem()
+
+      if (!savedItem) return
+
+      await ensureProcessedImages()
+
+      const updatedItem = {
+        ...savedItem,
+        status: 'finalised',
+        last_saved_by: staff.id,
+        updated_at: new Date().toISOString(),
+      }
+
+      const { error } = await supabase
+        .from('items')
+        .update(updatedItem)
+        .eq('id', id)
+
+      if (error) {
+        setMessage(error.message)
+        return
+      }
+
+      setItem(updatedItem)
+      originalItemRef.current = updatedItem
+      setHasUnsavedChanges(false)
+      window.location.href = '/review'
+    } catch (error: any) {
+      setMessage(error.message || 'Finalise failed.')
+    } finally {
+      setProcessingImages(false)
     }
-
-    const { error } = await supabase
-      .from('items')
-      .update(updatedItem)
-      .eq('id', id)
-
-    if (error) {
-      setMessage(error.message)
-      return
-    }
-
-    setItem(updatedItem)
-    originalItemRef.current = updatedItem
-    setHasUnsavedChanges(false)
-    setMessage(`Finalised by ${staff.name}`)
   }
 
   function updateField(field: string, value: any) {
@@ -707,7 +822,7 @@ export default function ItemPage() {
 
           <button
             onClick={saveItem}
-            disabled={!staff}
+            disabled={!staff || processingImages}
             className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
           >
             Save Item
@@ -715,7 +830,7 @@ export default function ItemPage() {
 
           <button
             onClick={sendToReview}
-            disabled={!staff}
+            disabled={!staff || processingImages}
             className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
           >
             Send to Review
@@ -723,10 +838,10 @@ export default function ItemPage() {
 
           <button
             onClick={finaliseItem}
-            disabled={!staff}
+            disabled={!staff || processingImages}
             className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
           >
-            Finalise
+            {processingImages ? 'Finalising...' : 'Finalise'}
           </button>
         </div>
       </div>
@@ -841,6 +956,12 @@ export default function ItemPage() {
                   label="Weight (g)"
                   value={item.weight_grams}
                   onChange={(v: string) => updateField('weight_grams', v)}
+                />
+
+                <Field
+                  label="Stock Level"
+                  value={item.stock_level}
+                  onChange={(v: string) => updateField('stock_level', v)}
                 />
               </div>
             </section>
