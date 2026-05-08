@@ -805,7 +805,7 @@ export async function POST(request: Request) {
         token,
         stockItemId,
         'tagged_size',
-        normaliseText(body.tagged_size)
+        normaliseText(body.tagged_size || body.size_label)
       ),
       condition: await tryUpsertExtendedProperty(
         server,
@@ -813,6 +813,55 @@ export async function POST(request: Request) {
         stockItemId,
         'condition',
         normaliseText(body.condition)
+      ),
+      material: await tryUpsertExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'material',
+        normaliseText(body.material)
+      ),
+      colour_primary: await tryUpsertExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'colour_primary',
+        normaliseText(body.colour_primary || body.primary_colour || body.colour || body.color)
+      ),
+      style: await tryUpsertExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'style',
+        normaliseText(body.style)
+      ),
+      sub_type: await tryUpsertExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'sub_type',
+        normaliseText(body.sub_type || body.subtype || body.item_sub_type)
+      ),
+      era: await tryUpsertExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'era',
+        normaliseText(body.era)
+      ),
+      gender: await tryUpsertExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'gender',
+        normaliseText(body.gender)
+      ),
+      flaws: await tryUpsertExtendedProperty(
+        server,
+        token,
+        stockItemId,
+        'flaws',
+        normaliseText(body.flaws)
       ),
     }
 
