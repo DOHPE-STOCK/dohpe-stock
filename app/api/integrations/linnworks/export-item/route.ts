@@ -100,6 +100,14 @@ function normaliseText(value: any) {
   return String(value).trim()
 }
 
+function normaliseNumber(value: any) {
+  if (value === null || value === undefined || value === '') return null
+
+  const num = Number(value)
+
+  return Number.isFinite(num) ? num : null
+}
+
 function findStockItemIdFromData(data: any) {
   if (!data) return null
 
@@ -133,6 +141,82 @@ async function findLinnworksItemBySku(server: string, token: string, sku: string
   } catch {
     return null
   }
+}
+
+function findLocationId(locations: any[], locationName: string) {
+  const wanted = locationName.toLowerCase().trim()
+
+  const match = locations.find((location) => {
+    const possibleNames = [
+      location.LocationName,
+      location.locationName,
+      location.Name,
+      location.name,
+      location.StockLocationName,
+      location.stockLocationName,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase().trim())
+
+    return possibleNames.includes(wanted)
+  })
+
+  return (
+    match?.StockLocationId ||
+    match?.stockLocationId ||
+    match?.pkStockLocationId ||
+    match?.LocationId ||
+    match?.locationId ||
+    match?.Id ||
+    match?.id ||
+    null
+  )
+}
+
+async function updatePrices(
+  server: string,
+  token: string,
+  stockItemId: string,
+  sellingPrice: number | null,
+  costPrice: number | null
+) {
+  if (sellingPrice === null && costPrice === null) return false
+
+  await linnworksPost(server, token, '/api/Inventory/UpdateInventoryItemPrices', {
+    inventoryItemPrices: [
+      {
+        StockItemId: stockItemId,
+        Source: 'Default',
+        SubSource: '',
+        Price: sellingPrice ?? 0,
+        Cost: costPrice ?? 0,
+      },
+    ],
+  })
+
+  return true
+}
+
+async function updateLocationAndBinRack(
+  server: string,
+  token: string,
+  stockItemId: string,
+  locationId: string,
+  stockLevel: number,
+  binRack: string
+) {
+  await linnworksPost(server, token, '/api/Inventory/UpdateItemLocations', {
+    inventoryItemLocations: [
+      {
+        StockItemId: stockItemId,
+        LocationId: locationId,
+        StockLevel: stockLevel,
+        BinRack: binRack,
+      },
+    ],
+  })
+
+  return true
 }
 
 export async function POST(request: Request) {
@@ -182,17 +266,66 @@ export async function POST(request: Request) {
       })
     }
 
+    const sellingPrice = normaliseNumber(body.selling_price)
+    const costPrice = normaliseNumber(body.cost_price)
+    const stockLevel = normaliseNumber(body.stock_level) ?? 1
+
+    const locationName =
+      normaliseText(body.current_location) ||
+      normaliseText(body.default_location) ||
+      'Default'
+
+    const binRack =
+      normaliseText(body.current_bin) ||
+      normaliseText(body.default_binrack) ||
+      'Default'
+
+    let prices_updated = false
+    let location_updated = false
+    let location_id_found = false
+
+    prices_updated = await updatePrices(
+      server,
+      token,
+      stockItemId,
+      sellingPrice,
+      costPrice
+    )
+
+    const locations = await linnworksGet(server, token, '/api/Inventory/GetStockLocations')
+    const locationId = Array.isArray(locations)
+      ? findLocationId(locations, locationName)
+      : null
+
+    if (locationId) {
+      location_id_found = true
+
+      location_updated = await updateLocationAndBinRack(
+        server,
+        token,
+        stockItemId,
+        locationId,
+        stockLevel,
+        binRack
+      )
+    }
+
     return NextResponse.json({
       ok: true,
       message: createdNew
-        ? 'Linnworks inventory item created.'
+        ? 'Linnworks inventory item created, then price/location sync attempted.'
         : linkedExisting
-          ? 'Existing Linnworks inventory item linked.'
-          : 'Linnworks inventory item already linked.',
+          ? 'Existing Linnworks item linked, then price/location sync attempted.'
+          : 'Linnworks inventory item updated.',
       created_new: createdNew,
       linked_existing: linkedExisting,
       linnworks_item_id: stockItemId,
       linnworks_item_number: sku,
+      prices_updated,
+      location_updated,
+      location_used: locationName,
+      location_id_found,
+      binrack_used: binRack,
     })
   } catch (error: any) {
     return NextResponse.json(
