@@ -37,7 +37,12 @@ async function authoriseLinnworks() {
   }
 }
 
-async function linnworksPost(server: string, token: string, path: string, body: any) {
+async function linnworksPost(
+  server: string,
+  token: string,
+  path: string,
+  body: any
+) {
   const response = await fetch(`${server}${path}`, {
     method: 'POST',
     headers: {
@@ -60,7 +65,9 @@ async function linnworksPost(server: string, token: string, path: string, body: 
 
   if (!response.ok) {
     throw new Error(
-      `${path} failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`
+      `${path} failed: ${
+        typeof data === 'string' ? data : JSON.stringify(data)
+      }`
     )
   }
 
@@ -88,7 +95,9 @@ async function linnworksGet(server: string, token: string, path: string) {
 
   if (!response.ok) {
     throw new Error(
-      `${path} failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`
+      `${path} failed: ${
+        typeof data === 'string' ? data : JSON.stringify(data)
+      }`
     )
   }
 
@@ -102,9 +111,7 @@ function normaliseText(value: any) {
 
 function normaliseNumber(value: any) {
   if (value === null || value === undefined || value === '') return null
-
   const num = Number(value)
-
   return Number.isFinite(num) ? num : null
 }
 
@@ -127,7 +134,11 @@ function findStockItemIdFromData(data: any) {
   )
 }
 
-async function findLinnworksItemBySku(server: string, token: string, sku: string) {
+async function findLinnworksItemBySku(
+  server: string,
+  token: string,
+  sku: string
+) {
   try {
     const encodedSku = encodeURIComponent(sku)
 
@@ -173,47 +184,30 @@ function findLocationId(locations: any[], locationName: string) {
   )
 }
 
-async function updatePrices(
+async function updateStockField(
   server: string,
   token: string,
-  stockItemId: string,
-  sellingPrice: number | null,
-  costPrice: number | null
+  params: {
+    stockItemId: string
+    fieldName: string
+    fieldValue: string | number | null
+    locationId?: string | null
+  }
 ) {
-  if (sellingPrice === null && costPrice === null) return false
+  if (
+    params.fieldValue === null ||
+    params.fieldValue === undefined ||
+    params.fieldValue === ''
+  ) {
+    return false
+  }
 
-  await linnworksPost(server, token, '/api/Inventory/UpdateInventoryItemPrices', {
-    inventoryItemPrices: [
-      {
-        StockItemId: stockItemId,
-        Source: 'Default',
-        SubSource: '',
-        Price: sellingPrice ?? 0,
-        Cost: costPrice ?? 0,
-      },
-    ],
-  })
-
-  return true
-}
-
-async function updateLocationAndBinRack(
-  server: string,
-  token: string,
-  stockItemId: string,
-  locationId: string,
-  stockLevel: number,
-  binRack: string
-) {
-  await linnworksPost(server, token, '/api/Inventory/UpdateItemLocations', {
-    inventoryItemLocations: [
-      {
-        StockItemId: stockItemId,
-        LocationId: locationId,
-        StockLevel: stockLevel,
-        BinRack: binRack,
-      },
-    ],
+  await linnworksPost(server, token, '/api/Inventory/UpdateInventoryItemStockField', {
+    inventoryItemId: params.stockItemId,
+    fieldName: params.fieldName,
+    fieldValue: String(params.fieldValue),
+    locationId: params.locationId || null,
+    changeSource: 'Dohpe Stock App',
   })
 
   return true
@@ -266,10 +260,6 @@ export async function POST(request: Request) {
       })
     }
 
-    const sellingPrice = normaliseNumber(body.selling_price)
-    const costPrice = normaliseNumber(body.cost_price)
-    const stockLevel = normaliseNumber(body.stock_level) ?? 1
-
     const locationName =
       normaliseText(body.current_location) ||
       normaliseText(body.default_location) ||
@@ -280,52 +270,83 @@ export async function POST(request: Request) {
       normaliseText(body.default_binrack) ||
       'Default'
 
-    let prices_updated = false
-    let location_updated = false
-    let location_id_found = false
-
-    prices_updated = await updatePrices(
-      server,
-      token,
-      stockItemId,
-      sellingPrice,
-      costPrice
-    )
-
     const locations = await linnworksGet(server, token, '/api/Inventory/GetStockLocations')
+
     const locationId = Array.isArray(locations)
       ? findLocationId(locations, locationName)
       : null
 
-    if (locationId) {
-      location_id_found = true
+    const sellingPrice = normaliseNumber(body.selling_price)
+    const costPrice = normaliseNumber(body.cost_price)
+    const stockLevel = normaliseNumber(body.stock_level) ?? 1
+    const weightGrams = normaliseNumber(body.weight_grams)
+    const category = normaliseText(body.reporting_category)
 
-      location_updated = await updateLocationAndBinRack(
-        server,
-        token,
+    const updates = {
+      title: await updateStockField(server, token, {
         stockItemId,
-        locationId,
-        stockLevel,
-        binRack
-      )
+        fieldName: 'Title',
+        fieldValue: title,
+      }),
+
+      category: await updateStockField(server, token, {
+        stockItemId,
+        fieldName: 'Category',
+        fieldValue: category,
+      }),
+
+      retail_price: await updateStockField(server, token, {
+        stockItemId,
+        fieldName: 'RetailPrice',
+        fieldValue: sellingPrice,
+      }),
+
+      purchase_price: await updateStockField(server, token, {
+        stockItemId,
+        fieldName: 'PurchasePrice',
+        fieldValue: costPrice,
+      }),
+
+      weight: await updateStockField(server, token, {
+        stockItemId,
+        fieldName: 'Weight',
+        fieldValue: weightGrams,
+      }),
+
+      stock_level: locationId
+        ? await updateStockField(server, token, {
+            stockItemId,
+            fieldName: 'StockLevel',
+            fieldValue: stockLevel,
+            locationId,
+          })
+        : false,
+
+      binrack: locationId
+        ? await updateStockField(server, token, {
+            stockItemId,
+            fieldName: 'BinRack',
+            fieldValue: binRack,
+            locationId,
+          })
+        : false,
     }
 
     return NextResponse.json({
       ok: true,
       message: createdNew
-        ? 'Linnworks inventory item created, then price/location sync attempted.'
+        ? 'Linnworks inventory item created and synced.'
         : linkedExisting
-          ? 'Existing Linnworks item linked, then price/location sync attempted.'
-          : 'Linnworks inventory item updated.',
+          ? 'Existing Linnworks inventory item linked and synced.'
+          : 'Linnworks inventory item synced.',
       created_new: createdNew,
       linked_existing: linkedExisting,
       linnworks_item_id: stockItemId,
       linnworks_item_number: sku,
-      prices_updated,
-      location_updated,
       location_used: locationName,
-      location_id_found,
+      location_id_found: Boolean(locationId),
       binrack_used: binRack,
+      updates,
     })
   } catch (error: any) {
     return NextResponse.json(
