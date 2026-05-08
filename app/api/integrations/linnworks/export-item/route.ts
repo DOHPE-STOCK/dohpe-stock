@@ -153,6 +153,7 @@ function findLocationId(locations: any[], locationName: string) {
 
 function getFirstId(data: any) {
   if (!data) return null
+
   if (Array.isArray(data)) {
     const first = data[0]
     return (
@@ -205,7 +206,7 @@ async function tryUpdateStockField(
       payload
     )
 
-    return { ok: true, skipped: false, data }
+    return { ok: true, skipped: false, data, payload }
   } catch (error: any) {
     return {
       ok: false,
@@ -250,17 +251,17 @@ async function tryUpsertPrice(
       ? '/api/Inventory/UpdateInventoryItemPrices'
       : '/api/Inventory/CreateInventoryItemPrices'
 
-    const data = await linnworksPost(server, token, endpoint, {
-      inventoryItemPrices: [priceRow],
-    })
+    const payload = { inventoryItemPrices: [priceRow] }
+    const data = await linnworksPost(server, token, endpoint, payload)
 
     return {
       ok: true,
       skipped: false,
       endpoint,
       data,
+      existing,
       existing_price_row_found: Boolean(existingId),
-      payload: { inventoryItemPrices: [priceRow] },
+      payload,
     }
   } catch (error: any) {
     return {
@@ -308,17 +309,17 @@ async function tryUpsertDescription(
       ? '/api/Inventory/UpdateInventoryItemDescriptions'
       : '/api/Inventory/CreateInventoryItemDescriptions'
 
-    const data = await linnworksPost(server, token, endpoint, {
-      inventoryItemDescriptions: [descriptionRow],
-    })
+    const payload = { inventoryItemDescriptions: [descriptionRow] }
+    const data = await linnworksPost(server, token, endpoint, payload)
 
     return {
       ok: true,
       skipped: false,
       endpoint,
       data,
+      existing,
       existing_description_row_found: Boolean(existingId),
-      payload: { inventoryItemDescriptions: [descriptionRow] },
+      payload,
     }
   } catch (error: any) {
     return {
@@ -342,23 +343,25 @@ async function tryCreateExtendedProperty(
   }
 
   try {
+    const payload = {
+      inventoryItemExtendedProperties: [
+        {
+          StockItemId: stockItemId,
+          PropertyName: propertyName,
+          PropertyValue: propertyValue,
+          PropertyType: 'Attribute',
+        },
+      ],
+    }
+
     const data = await linnworksPost(
       server,
       token,
       '/api/Inventory/CreateInventoryItemExtendedProperties',
-      {
-        inventoryItemExtendedProperties: [
-          {
-            StockItemId: stockItemId,
-            PropertyName: propertyName,
-            PropertyValue: propertyValue,
-            PropertyType: 'Attribute',
-          },
-        ],
-      }
+      payload
     )
 
-    return { ok: true, skipped: false, data }
+    return { ok: true, skipped: false, data, payload }
   } catch (error: any) {
     return {
       ok: false,
@@ -381,19 +384,21 @@ async function tryAddImage(
   }
 
   try {
+    const payload = {
+      stockItemId,
+      imageUrl,
+      isMain,
+      sortOrder,
+    }
+
     const data = await linnworksPost(
       server,
       token,
       '/api/Inventory/AddImageToInventoryItem',
-      {
-        stockItemId,
-        imageUrl,
-        isMain,
-        sortOrder,
-      }
+      payload
     )
 
-    return { ok: true, skipped: false, data }
+    return { ok: true, skipped: false, data, payload }
   } catch (error: any) {
     return {
       ok: false,
@@ -425,7 +430,6 @@ export async function POST(request: Request) {
     }
 
     const { server, token } = await authoriseLinnworks()
-
     const existingLinnworksItemId = normaliseText(body.linnworks_item_id)
 
     let stockItemId = existingLinnworksItemId
@@ -434,7 +438,6 @@ export async function POST(request: Request) {
 
     if (!stockItemId) {
       stockItemId = await findLinnworksItemBySku(server, token, sku)
-
       if (stockItemId) linkedExisting = true
     }
 
@@ -463,7 +466,6 @@ export async function POST(request: Request) {
       'Default'
 
     const locations = await linnworksGet(server, token, '/api/Inventory/GetStockLocations')
-
     const locationId = Array.isArray(locations)
       ? findLocationId(locations, locationName)
       : null
@@ -591,6 +593,25 @@ export async function POST(request: Request) {
 
     const failedImages = images.filter((result: any) => !result.ok && !result.skipped)
 
+    console.log(
+      'LINNWORKS_EXPORT_DEBUG',
+      JSON.stringify({
+        sku,
+        stockItemId,
+        sellingPrice,
+        costPrice,
+        descriptionLength: description.length,
+        title,
+        locationName,
+        locationId,
+        binRack,
+        processedImageCount: processedImages.length,
+        updates,
+        extended_properties,
+        images,
+      })
+    )
+
     return NextResponse.json({
       ok: true,
       message:
@@ -614,6 +635,8 @@ export async function POST(request: Request) {
       images,
     })
   } catch (error: any) {
+    console.error('LINNWORKS_EXPORT_ERROR', error)
+
     return NextResponse.json(
       {
         ok: false,
