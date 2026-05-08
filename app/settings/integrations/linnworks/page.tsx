@@ -8,6 +8,7 @@ import AppNav from '@/app/components/AppNav'
 type LinnworksSettings = {
   mode: string
   sync_direction: string
+  channel_strategy: string
   warehouse_location: string
   shop_locations: string[]
   bin_options: string[]
@@ -15,13 +16,18 @@ type LinnworksSettings = {
   unknown_bin: string
   in_transit_bin: string
   use_app_for_transfers: boolean
+  require_manual_export_first: boolean
+  only_sync_app_managed_items: boolean
   create_missing_stock_items: boolean
   update_existing_stock_items: boolean
   sync_stock_levels_two_way: boolean
   sync_price_app_to_linnworks: boolean
   sync_location_app_to_linnworks: boolean
+  sync_binrack_app_to_linnworks: boolean
   sync_title_app_to_linnworks: boolean
   sync_description_app_to_linnworks: boolean
+  sync_category_app_to_linnworks: boolean
+  sync_images_app_to_linnworks: boolean
   managed_identifier_name: string
   managed_identifier_value: string
   field_mapping: Record<string, string>
@@ -39,8 +45,9 @@ type IntegrationSetting = {
 }
 
 const defaultSettings: LinnworksSettings = {
-  mode: 'manual_export',
+  mode: 'manual_export_then_auto_sync',
   sync_direction: 'controlled_two_way',
+  channel_strategy: 'linnworks_inventory_first_ebay_via_linnworks',
   warehouse_location: 'Default',
   shop_locations: ['SHOP-1', 'SHOP-2', 'SHOP-3'],
   bin_options: ['Unknown', 'Stock Room', 'Shop Floor', 'In Transit'],
@@ -48,13 +55,18 @@ const defaultSettings: LinnworksSettings = {
   unknown_bin: 'Unknown',
   in_transit_bin: 'In Transit',
   use_app_for_transfers: true,
+  require_manual_export_first: true,
+  only_sync_app_managed_items: true,
   create_missing_stock_items: true,
   update_existing_stock_items: true,
   sync_stock_levels_two_way: true,
   sync_price_app_to_linnworks: true,
   sync_location_app_to_linnworks: true,
+  sync_binrack_app_to_linnworks: true,
   sync_title_app_to_linnworks: true,
   sync_description_app_to_linnworks: true,
+  sync_category_app_to_linnworks: true,
+  sync_images_app_to_linnworks: true,
   managed_identifier_name: 'dohpe_app_managed',
   managed_identifier_value: 'true',
   field_mapping: {
@@ -68,6 +80,7 @@ const defaultSettings: LinnworksSettings = {
     current_bin: 'BinRack',
     weight_grams: 'Weight',
     reporting_category: 'Category',
+    item_images: 'Images',
   },
 }
 
@@ -217,7 +230,7 @@ export default function LinnworksIntegrationPage() {
             <h1 className="text-2xl font-bold">Linnworks Configuration</h1>
 
             <p className="text-sm text-neutral-400">
-              Configure controlled Linnworks export, stock sync, location sync and field mapping.
+              Manual export first, then automatic sync for app-managed Linnworks inventory.
             </p>
           </div>
 
@@ -270,8 +283,10 @@ export default function LinnworksIntegrationPage() {
                 onChange={(e) => updateSetting('mode', e.target.value)}
                 className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
               >
-                <option value="manual_export">Manual export only</option>
-                <option value="manual_export_then_sync">Manual export, then sync managed items</option>
+                <option value="manual_export_then_auto_sync">
+                  Manual export, then automatic sync
+                </option>
+                <option value="manual_export_only">Manual export only</option>
               </select>
             </label>
 
@@ -284,42 +299,104 @@ export default function LinnworksIntegrationPage() {
                 onChange={(e) => updateSetting('sync_direction', e.target.value)}
                 className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
               >
-                <option value="controlled_two_way">Controlled two-way</option>
+                <option value="controlled_two_way">
+                  Controlled two-way: stock level two-way, product data app → Linnworks
+                </option>
                 <option value="app_to_linnworks_only">App to Linnworks only</option>
-                <option value="linnworks_to_app_stock_only">Linnworks to app stock only</option>
+                <option value="linnworks_to_app_stock_only">
+                  Linnworks to app stock only
+                </option>
               </select>
             </label>
 
-            <div className="space-y-2 text-sm">
-              {[
-                ['sync_stock_levels_two_way', 'Stock level two-way sync'],
-                ['sync_price_app_to_linnworks', 'Price app → Linnworks'],
-                ['sync_location_app_to_linnworks', 'Location/bin app → Linnworks'],
-                ['sync_title_app_to_linnworks', 'Title app → Linnworks'],
-                ['sync_description_app_to_linnworks', 'Description app → Linnworks'],
-                ['use_app_for_transfers', 'Use app for transfers'],
-                ['create_missing_stock_items', 'Create missing Linnworks items'],
-                ['update_existing_stock_items', 'Update existing managed items'],
-              ].map(([key, label]) => (
-                <label
-                  key={key}
-                  className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
-                >
-                  <span>{label}</span>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(settings[key as keyof LinnworksSettings])}
-                    onChange={(e) =>
-                      updateSetting(
-                        key as keyof LinnworksSettings,
-                        e.target.checked as any
-                      )
-                    }
-                    className="h-4 w-4"
-                  />
-                </label>
-              ))}
-            </div>
+            <label className="block">
+              <span className="mb-1 block text-sm font-bold text-neutral-300">
+                Channel strategy
+              </span>
+              <select
+                value={settings.channel_strategy}
+                onChange={(e) => updateSetting('channel_strategy', e.target.value)}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              >
+                <option value="linnworks_inventory_first_ebay_via_linnworks">
+                  Sync app to Linnworks inventory; eBay handled by Linnworks/eBay configurators
+                </option>
+                <option value="inventory_only">
+                  Inventory only for now
+                </option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+          <h2 className="mb-4 text-lg font-semibold">Safety Rules</h2>
+
+          <div className="space-y-2 text-sm">
+            {[
+              ['require_manual_export_first', 'Require manual export before sync'],
+              ['only_sync_app_managed_items', 'Only sync app-managed items'],
+              ['use_app_for_transfers', 'Use app for transfers'],
+              ['create_missing_stock_items', 'Create missing Linnworks items on manual export'],
+              ['update_existing_stock_items', 'Update existing managed items'],
+            ].map(([key, label]) => (
+              <label
+                key={key}
+                className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
+              >
+                <span>{label}</span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings[key as keyof LinnworksSettings])}
+                  onChange={(e) =>
+                    updateSetting(
+                      key as keyof LinnworksSettings,
+                      e.target.checked as any
+                    )
+                  }
+                  className="h-4 w-4"
+                />
+              </label>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
+          <h2 className="mb-4 text-lg font-semibold">Auto Sync After Manual Export</h2>
+
+          <p className="mb-4 text-sm text-neutral-400">
+            These only apply after an item has been exported from the app and marked as app-managed.
+          </p>
+
+          <div className="grid gap-2 text-sm md:grid-cols-2">
+            {[
+              ['sync_stock_levels_two_way', 'Stock level two-way sync'],
+              ['sync_price_app_to_linnworks', 'Price app → Linnworks'],
+              ['sync_location_app_to_linnworks', 'Location app → Linnworks'],
+              ['sync_binrack_app_to_linnworks', 'Bin rack app → Linnworks'],
+              ['sync_title_app_to_linnworks', 'Title app → Linnworks'],
+              ['sync_description_app_to_linnworks', 'Description app → Linnworks'],
+              ['sync_category_app_to_linnworks', 'Category app → Linnworks'],
+              ['sync_images_app_to_linnworks', 'Images app → Linnworks'],
+            ].map(([key, label]) => (
+              <label
+                key={key}
+                className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
+              >
+                <span>{label}</span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings[key as keyof LinnworksSettings])}
+                  onChange={(e) =>
+                    updateSetting(
+                      key as keyof LinnworksSettings,
+                      e.target.checked as any
+                    )
+                  }
+                  className="h-4 w-4"
+                />
+              </label>
+            ))}
           </div>
         </section>
 
@@ -327,7 +404,7 @@ export default function LinnworksIntegrationPage() {
           <h2 className="mb-4 text-lg font-semibold">Managed Item Identifier</h2>
 
           <p className="mb-4 text-sm text-neutral-400">
-            Only items created/exported by this app should sync. Existing Linnworks stock is ignored unless linked later.
+            Existing Linnworks stock will be ignored unless it has this identifier or is manually linked later.
           </p>
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -401,7 +478,7 @@ export default function LinnworksIntegrationPage() {
           <h2 className="mb-4 text-lg font-semibold">Bin Rack Rules</h2>
 
           <p className="mb-4 text-sm text-neutral-400">
-            Blank/null means unallocated/default. Bin/rack options should later be pulled from your app bin tables.
+            Blank/null means unallocated/default. Use simple states for shop stock.
           </p>
 
           <div className="space-y-4">
