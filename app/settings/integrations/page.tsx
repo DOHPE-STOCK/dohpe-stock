@@ -20,49 +20,49 @@ const CHANNELS = [
   {
     key: 'linnworks',
     name: 'Linnworks',
-    src: 'https://www.linnworks.com/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=linnworks.com&sz=64',
     description: 'Main stock/inventory sync, location sync and future order control.',
   },
   {
     key: 'ebay',
     name: 'eBay',
-    src: 'https://www.ebay.co.uk/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=ebay.co.uk&sz=64',
     description: 'Marketplace listing/export status.',
   },
   {
     key: 'shopify',
     name: 'Shopify',
-    src: 'https://www.shopify.com/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=shopify.com&sz=64',
     description: 'Website product export and stock sync.',
   },
   {
     key: 'vinted',
     name: 'Vinted',
-    src: 'https://www.vinted.co.uk/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=vinted.co.uk&sz=64',
     description: 'Vinted listing/export workflow.',
   },
   {
     key: 'square',
     name: 'Square',
-    src: 'https://squareup.com/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=squareup.com&sz=64',
     description: 'POS/payment reporting integration.',
   },
   {
     key: 'loyverse',
     name: 'Loyverse',
-    src: 'https://loyverse.com/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=loyverse.com&sz=64',
     description: 'Optional/legacy POS channel.',
   },
   {
     key: 'depop',
     name: 'Depop',
-    src: 'https://www.depop.com/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=depop.com&sz=64',
     description: 'Depop listing/export workflow.',
   },
   {
     key: 'tiktok_shop',
     name: 'TikTok Shop',
-    src: 'https://shop.tiktok.com/favicon.ico',
+    src: 'https://www.google.com/s2/favicons?domain=tiktok.com&sz=64',
     description: 'TikTok Shop listing/export workflow.',
   },
 ] as const
@@ -180,9 +180,7 @@ export default function IntegrationsSettingsPage() {
 
     setIntegrations((current) =>
       current.map((integration) =>
-        integration.id === id
-          ? { ...integration, ...updates }
-          : integration
+        integration.id === id ? { ...integration, ...updates } : integration
       )
     )
 
@@ -240,8 +238,8 @@ export default function IntegrationsSettingsPage() {
         <h2 className="text-lg font-semibold">Export Status Rules</h2>
 
         <p className="mt-1 text-sm text-neutral-400">
-          Grey icons mean disabled/not exported. Original logo colours mean
-          exported or synced. Red means failed. Pulsing grey means syncing.
+          Grey icons mean disabled/not exported. Original logo colours mean exported or synced.
+          Red means failed. Pulsing grey means syncing.
         </p>
       </section>
 
@@ -266,9 +264,7 @@ export default function IntegrationsSettingsPage() {
                         <img
                           src={channel.src}
                           alt=""
-                          className={`h-7 w-7 rounded-sm ${iconOpacity(
-                            integration
-                          )}`}
+                          className={`h-7 w-7 rounded-sm ${iconOpacity(integration)}`}
                         />
                       ) : (
                         <span className="text-lg font-black">
@@ -363,6 +359,13 @@ export default function IntegrationsSettingsPage() {
                   >
                     {savingId === integration.id ? 'Saving...' : 'Test'}
                   </button>
+
+                  <Link
+                    href={`/settings/integrations/${integration.channel}`}
+                    className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-semibold hover:bg-neutral-800"
+                  >
+                    Configure
+                  </Link>
                 </div>
               </div>
             )
