@@ -31,7 +31,11 @@ async function authoriseLinnworks() {
 async function linnworksPost(server: string, token: string, path: string, body: any) {
   const response = await fetch(`${server}${path}`, {
     method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json', Authorization: token },
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      Authorization: token,
+    },
     body: JSON.stringify(body),
   })
 
@@ -147,6 +151,23 @@ function findLocationId(locations: any[], locationName: string) {
   )
 }
 
+function getFirstId(data: any) {
+  if (!data) return null
+  if (Array.isArray(data)) {
+    const first = data[0]
+    return (
+      first?.pkRowId ||
+      first?.PkRowId ||
+      first?.RowId ||
+      first?.Id ||
+      first?.id ||
+      null
+    )
+  }
+
+  return data?.pkRowId || data?.PkRowId || data?.RowId || data?.Id || data?.id || null
+}
+
 async function tryUpdateStockField(
   server: string,
   token: string,
@@ -195,6 +216,120 @@ async function tryUpdateStockField(
   }
 }
 
+async function tryUpsertPrice(
+  server: string,
+  token: string,
+  stockItemId: string,
+  sellingPrice: number | null
+) {
+  if (sellingPrice === null) {
+    return { ok: false, skipped: true, reason: 'empty selling price' }
+  }
+
+  const basePrice = {
+    StockItemId: stockItemId,
+    Source: 'Default',
+    SubSource: '',
+    Price: sellingPrice,
+  }
+
+  try {
+    const existing = await linnworksGet(
+      server,
+      token,
+      `/api/Inventory/GetInventoryItemPrices?inventoryItemId=${encodeURIComponent(stockItemId)}`
+    )
+
+    const existingId = getFirstId(existing)
+
+    const priceRow = existingId
+      ? { ...basePrice, pkRowId: existingId, PkRowId: existingId }
+      : basePrice
+
+    const endpoint = existingId
+      ? '/api/Inventory/UpdateInventoryItemPrices'
+      : '/api/Inventory/CreateInventoryItemPrices'
+
+    const data = await linnworksPost(server, token, endpoint, {
+      inventoryItemPrices: [priceRow],
+    })
+
+    return {
+      ok: true,
+      skipped: false,
+      endpoint,
+      data,
+      existing_price_row_found: Boolean(existingId),
+      payload: { inventoryItemPrices: [priceRow] },
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown price update error',
+      payload: { inventoryItemPrices: [basePrice] },
+    }
+  }
+}
+
+async function tryUpsertDescription(
+  server: string,
+  token: string,
+  stockItemId: string,
+  title: string,
+  description: string
+) {
+  if (!description) {
+    return { ok: false, skipped: true, reason: 'empty description' }
+  }
+
+  const baseDescription = {
+    StockItemId: stockItemId,
+    Source: 'Default',
+    SubSource: '',
+    Title: title,
+    Description: description,
+  }
+
+  try {
+    const existing = await linnworksGet(
+      server,
+      token,
+      `/api/Inventory/GetInventoryItemDescriptions?inventoryItemId=${encodeURIComponent(stockItemId)}`
+    )
+
+    const existingId = getFirstId(existing)
+
+    const descriptionRow = existingId
+      ? { ...baseDescription, pkRowId: existingId, PkRowId: existingId }
+      : baseDescription
+
+    const endpoint = existingId
+      ? '/api/Inventory/UpdateInventoryItemDescriptions'
+      : '/api/Inventory/CreateInventoryItemDescriptions'
+
+    const data = await linnworksPost(server, token, endpoint, {
+      inventoryItemDescriptions: [descriptionRow],
+    })
+
+    return {
+      ok: true,
+      skipped: false,
+      endpoint,
+      data,
+      existing_description_row_found: Boolean(existingId),
+      payload: { inventoryItemDescriptions: [descriptionRow] },
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown description update error',
+      payload: { inventoryItemDescriptions: [baseDescription] },
+    }
+  }
+}
+
 async function tryCreateExtendedProperty(
   server: string,
   token: string,
@@ -215,7 +350,6 @@ async function tryCreateExtendedProperty(
         inventoryItemExtendedProperties: [
           {
             StockItemId: stockItemId,
-            ProperyName: propertyName,
             PropertyName: propertyName,
             PropertyValue: propertyValue,
             PropertyType: 'Attribute',
@@ -353,11 +487,7 @@ export async function POST(request: Request) {
         fieldValue: title,
       }),
 
-      description: await tryUpdateStockField(server, token, {
-        stockItemId,
-        fieldName: 'Description',
-        fieldValue: description,
-      }),
+      description: await tryUpsertDescription(server, token, stockItemId, title, description),
 
       category: await tryUpdateStockField(server, token, {
         stockItemId,
@@ -365,11 +495,7 @@ export async function POST(request: Request) {
         fieldValue: category,
       }),
 
-      retail_price: await tryUpdateStockField(server, token, {
-        stockItemId,
-        fieldName: 'RetailPrice',
-        fieldValue: sellingPrice,
-      }),
+      retail_price: await tryUpsertPrice(server, token, stockItemId, sellingPrice),
 
       purchase_price: await tryUpdateStockField(server, token, {
         stockItemId,
