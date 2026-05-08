@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import AppNav from '@/app/components/AppNav'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import AppNav from '@/app/components/AppNav'
 
 type IntegrationSetting = {
   id: string
@@ -15,56 +16,129 @@ type IntegrationSetting = {
   last_error: string | null
 }
 
-const channelLabels: Record<string, string> = {
-  linnworks: 'Linnworks',
-  ebay: 'eBay',
-  shopify: 'Shopify',
-  vinted: 'Vinted',
-  square: 'Square',
-  loyverse: 'Loyverse',
-  depop: 'Depop',
-  tiktok_shop: 'TikTok Shop',
+const CHANNELS = [
+  {
+    key: 'linnworks',
+    name: 'Linnworks',
+    src: 'https://www.linnworks.com/favicon.ico',
+    description: 'Main stock/inventory sync, location sync and future order control.',
+  },
+  {
+    key: 'ebay',
+    name: 'eBay',
+    src: 'https://www.ebay.co.uk/favicon.ico',
+    description: 'Marketplace listing/export status.',
+  },
+  {
+    key: 'shopify',
+    name: 'Shopify',
+    src: 'https://www.shopify.com/favicon.ico',
+    description: 'Website product export and stock sync.',
+  },
+  {
+    key: 'vinted',
+    name: 'Vinted',
+    src: 'https://www.vinted.co.uk/favicon.ico',
+    description: 'Vinted listing/export workflow.',
+  },
+  {
+    key: 'square',
+    name: 'Square',
+    src: 'https://squareup.com/favicon.ico',
+    description: 'POS/payment reporting integration.',
+  },
+  {
+    key: 'loyverse',
+    name: 'Loyverse',
+    src: 'https://loyverse.com/favicon.ico',
+    description: 'Optional/legacy POS channel.',
+  },
+  {
+    key: 'depop',
+    name: 'Depop',
+    src: 'https://www.depop.com/favicon.ico',
+    description: 'Depop listing/export workflow.',
+  },
+  {
+    key: 'tiktok_shop',
+    name: 'TikTok Shop',
+    src: 'https://shop.tiktok.com/favicon.ico',
+    description: 'TikTok Shop listing/export workflow.',
+  },
+] as const
+
+function getChannelMeta(channel: string) {
+  return (
+    CHANNELS.find((item) => item.key === channel) || {
+      key: channel,
+      name: channel,
+      src: '',
+      description: 'Channel integration settings.',
+    }
+  )
 }
 
-const channelDescriptions: Record<string, string> = {
-  linnworks: 'Main stock/inventory sync and location updates.',
-  ebay: 'Marketplace listing/export status.',
-  shopify: 'Website product export and stock sync.',
-  vinted: 'Vinted listing/export workflow.',
-  square: 'POS/payment reporting integration.',
-  loyverse: 'Legacy/optional POS channel.',
-  depop: 'Depop listing/export workflow.',
-  tiktok_shop: 'TikTok Shop listing/export workflow.',
+function statusText(status: string) {
+  return status.replaceAll('_', ' ')
 }
 
-function formatChannelName(channel: string) {
-  return channelLabels[channel] || channel
-}
-
-function getStatusBadge(status: string) {
+function statusClass(status: string) {
   if (status === 'connected') {
-    return 'bg-green-100 text-green-800 border-green-300'
+    return 'border-green-700 bg-green-950 text-green-300'
   }
 
   if (status === 'error' || status === 'failed') {
-    return 'bg-red-100 text-red-800 border-red-300'
+    return 'border-red-700 bg-red-950 text-red-300'
   }
 
   if (status === 'syncing' || status === 'testing') {
-    return 'bg-blue-100 text-blue-800 border-blue-300'
+    return 'border-blue-700 bg-blue-950 text-blue-300'
   }
 
-  return 'bg-gray-100 text-gray-700 border-gray-300'
+  return 'border-neutral-700 bg-neutral-900 text-neutral-400'
+}
+
+function iconOpacity(integration: IntegrationSetting) {
+  if (!integration.enabled) return 'opacity-25 grayscale'
+
+  if (integration.connection_status === 'connected') return 'opacity-100'
+
+  if (
+    integration.connection_status === 'syncing' ||
+    integration.connection_status === 'testing'
+  ) {
+    return 'animate-pulse opacity-60 grayscale'
+  }
+
+  if (
+    integration.connection_status === 'error' ||
+    integration.connection_status === 'failed'
+  ) {
+    return 'opacity-80 grayscale ring-1 ring-red-500'
+  }
+
+  return 'opacity-40 grayscale'
 }
 
 export default function IntegrationsSettingsPage() {
   const [integrations, setIntegrations] = useState<IntegrationSetting[]>([])
   const [loading, setLoading] = useState(true)
+  const [message, setMessage] = useState('')
   const [savingId, setSavingId] = useState<string | null>(null)
 
   useEffect(() => {
     fetchIntegrations()
   }, [])
+
+  useEffect(() => {
+    if (!message) return
+
+    const timer = window.setTimeout(() => {
+      setMessage('')
+    }, 5000)
+
+    return () => window.clearTimeout(timer)
+  }, [message])
 
   async function fetchIntegrations() {
     setLoading(true)
@@ -75,7 +149,7 @@ export default function IntegrationsSettingsPage() {
       .order('channel', { ascending: true })
 
     if (error) {
-      console.error('Error loading integrations:', error)
+      setMessage(error.message)
       setLoading(false)
       return
     }
@@ -99,8 +173,7 @@ export default function IntegrationsSettingsPage() {
       .eq('id', id)
 
     if (error) {
-      console.error('Error updating integration:', error)
-      alert('Could not save integration setting.')
+      setMessage(error.message)
       setSavingId(null)
       return
     }
@@ -114,6 +187,7 @@ export default function IntegrationsSettingsPage() {
     )
 
     setSavingId(null)
+    setMessage('Integration setting saved')
   }
 
   async function testConnection(integration: IntegrationSetting) {
@@ -122,10 +196,7 @@ export default function IntegrationsSettingsPage() {
       last_error: null,
     })
 
-    // Placeholder until real API routes are added.
-    // Later this should call something like:
-    // /api/integrations/linnworks/test
-    setTimeout(async () => {
+    window.setTimeout(async () => {
       await updateIntegration(integration.id, {
         connection_status: integration.enabled ? 'connected' : 'not_connected',
         last_synced_at: integration.enabled ? new Date().toISOString() : null,
@@ -135,117 +206,169 @@ export default function IntegrationsSettingsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-100 text-gray-900">
-      <AppNav />
+    <main className="min-h-screen bg-neutral-950 p-5 text-white">
+      <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Channel Integrations</h1>
 
-      <div className="mx-auto max-w-6xl px-6 py-8">
-        <div className="mb-8">
-          <p className="text-sm font-bold uppercase tracking-wide text-gray-500">
-            Settings
-          </p>
+            <p className="text-sm text-neutral-400">
+              Enable channels, control auto-sync, and check connection status.
+            </p>
+          </div>
 
-          <h1 className="mt-1 text-4xl font-black tracking-tight">
-            Channel Integrations
-          </h1>
-
-          <p className="mt-2 max-w-3xl text-gray-600">
-            Control which sales channels are active, whether they auto-sync, and
-            the connection state used by the Finalised page.
-          </p>
+          <AppNav current="settings" />
         </div>
 
-        {loading ? (
-          <div className="rounded-2xl bg-white p-8 shadow">
-            Loading integrations...
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            {integrations.map((integration) => (
+        <div className="flex items-center gap-3">
+          {message && (
+            <span className="rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2 text-sm">
+              {message}
+            </span>
+          )}
+
+          <Link
+            href="/settings"
+            className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-semibold hover:bg-neutral-800"
+          >
+            Back to Settings
+          </Link>
+        </div>
+      </div>
+
+      <section className="mb-5 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+        <h2 className="text-lg font-semibold">Export Status Rules</h2>
+
+        <p className="mt-1 text-sm text-neutral-400">
+          Grey icons mean disabled/not exported. Original logo colours mean
+          exported or synced. Red means failed. Pulsing grey means syncing.
+        </p>
+      </section>
+
+      {loading ? (
+        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-8 text-neutral-400">
+          Loading integrations...
+        </section>
+      ) : (
+        <section className="grid gap-4 xl:grid-cols-2">
+          {integrations.map((integration) => {
+            const channel = getChannelMeta(integration.channel)
+
+            return (
               <div
                 key={integration.id}
-                className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"
+                className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4"
               >
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-2xl font-black">
-                        {formatChannelName(integration.channel)}
-                      </h2>
-
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs font-black uppercase ${getStatusBadge(
-                          integration.connection_status
-                        )}`}
-                      >
-                        {integration.connection_status.replaceAll('_', ' ')}
-                      </span>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex min-w-0 gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-neutral-950">
+                      {channel.src ? (
+                        <img
+                          src={channel.src}
+                          alt=""
+                          className={`h-7 w-7 rounded-sm ${iconOpacity(
+                            integration
+                          )}`}
+                        />
+                      ) : (
+                        <span className="text-lg font-black">
+                          {channel.name.slice(0, 1)}
+                        </span>
+                      )}
                     </div>
 
-                    <p className="mt-1 text-sm text-gray-600">
-                      {channelDescriptions[integration.channel] ||
-                        'Channel integration settings.'}
-                    </p>
+                    <div className="min-w-0">
+                      <h2 className="text-xl font-black">{channel.name}</h2>
 
-                    {integration.last_error && (
-                      <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-                        {integration.last_error}
+                      <p className="mt-1 text-sm text-neutral-400">
+                        {channel.description}
                       </p>
-                    )}
 
-                    {integration.last_synced_at && (
-                      <p className="mt-2 text-xs text-gray-500">
-                        Last synced:{' '}
-                        {new Date(integration.last_synced_at).toLocaleString()}
-                      </p>
-                    )}
-                  </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-black uppercase ${statusClass(
+                            integration.connection_status
+                          )}`}
+                        >
+                          {statusText(integration.connection_status)}
+                        </span>
 
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold">
-                      <input
-                        type="checkbox"
-                        checked={integration.enabled}
-                        onChange={(event) =>
-                          updateIntegration(integration.id, {
-                            enabled: event.target.checked,
-                            connection_status: event.target.checked
-                              ? integration.connection_status
-                              : 'not_connected',
-                          })
-                        }
-                      />
-                      Enabled
-                    </label>
+                        {integration.auto_sync && (
+                          <span className="rounded-full border border-blue-700 bg-blue-950 px-3 py-1 text-xs font-black uppercase text-blue-300">
+                            auto sync
+                          </span>
+                        )}
 
-                    <label className="flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold">
-                      <input
-                        type="checkbox"
-                        checked={integration.auto_sync}
-                        disabled={!integration.enabled}
-                        onChange={(event) =>
-                          updateIntegration(integration.id, {
-                            auto_sync: event.target.checked,
-                          })
-                        }
-                      />
-                      Auto sync
-                    </label>
+                        {!integration.enabled && (
+                          <span className="rounded-full border border-neutral-700 bg-neutral-950 px-3 py-1 text-xs font-black uppercase text-neutral-500">
+                            disabled
+                          </span>
+                        )}
+                      </div>
 
-                    <button
-                      type="button"
-                      disabled={savingId === integration.id}
-                      onClick={() => testConnection(integration)}
-                      className="rounded-xl bg-black px-4 py-2 text-sm font-black text-white disabled:opacity-40"
-                    >
-                      {savingId === integration.id ? 'Saving...' : 'Test'}
-                    </button>
+                      {integration.last_error && (
+                        <p className="mt-3 rounded-xl border border-red-800 bg-red-950 p-3 text-sm font-bold text-red-300">
+                          {integration.last_error}
+                        </p>
+                      )}
+
+                      {integration.last_synced_at && (
+                        <p className="mt-3 text-xs text-neutral-500">
+                          Last synced:{' '}
+                          {new Date(integration.last_synced_at).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
+
+                <div className="mt-4 flex flex-wrap gap-2 border-t border-neutral-800 pt-4">
+                  <label className="flex items-center gap-2 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={integration.enabled}
+                      onChange={(event) =>
+                        updateIntegration(integration.id, {
+                          enabled: event.target.checked,
+                          connection_status: event.target.checked
+                            ? integration.connection_status
+                            : 'not_connected',
+                        })
+                      }
+                      className="h-4 w-4"
+                    />
+                    Enabled
+                  </label>
+
+                  <label className="flex items-center gap-2 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={integration.auto_sync}
+                      disabled={!integration.enabled}
+                      onChange={(event) =>
+                        updateIntegration(integration.id, {
+                          auto_sync: event.target.checked,
+                        })
+                      }
+                      className="h-4 w-4 disabled:opacity-30"
+                    />
+                    Auto Sync
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => testConnection(integration)}
+                    disabled={savingId === integration.id}
+                    className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-40"
+                  >
+                    {savingId === integration.id ? 'Saving...' : 'Test'}
+                  </button>
+                </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            )
+          })}
+        </section>
+      )}
     </main>
   )
 }
