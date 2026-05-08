@@ -178,14 +178,7 @@ function findLocationId(locations: any[], locationName: string) {
 }
 
 function getRowId(row: any) {
-  return (
-    row?.pkRowId ||
-    row?.PkRowId ||
-    row?.RowId ||
-    row?.Id ||
-    row?.id ||
-    null
-  )
+  return row?.pkRowId || row?.PkRowId || row?.RowId || row?.Id || row?.id || null
 }
 
 function findChannelRow(data: any[]) {
@@ -544,7 +537,7 @@ async function tryUpsertChannelTitle(
 async function tryUpsertExtendedProperty(
   server: string,
   token: string,
-  itemNumber: string,
+  stockItemId: string,
   propertyName: string,
   propertyValue: string
 ) {
@@ -553,8 +546,8 @@ async function tryUpsertExtendedProperty(
   }
 
   const baseProperty: any = {
-    ItemNumber: itemNumber,
-    PropertyName: propertyName,
+    fkStockItemId: stockItemId,
+    ProperyName: propertyName,
     PropertyValue: propertyValue,
     PropertyType: 'Attribute',
   }
@@ -565,8 +558,8 @@ async function tryUpsertExtendedProperty(
       token,
       '/api/Inventory/GetInventoryItemExtendedProperties',
       {
-        inventoryItemId: '00000000-0000-0000-0000-000000000000',
-        itemNumber,
+        inventoryItemId: stockItemId,
+        itemNumber: '',
         propertyParams: {},
       }
     )
@@ -575,7 +568,7 @@ async function tryUpsertExtendedProperty(
     const existingRow =
       existingProperties.find(
         (row) =>
-          normaliseText(row.PropertyName || row.propertyName).toLowerCase() ===
+          normaliseText(row.ProperyName || row.PropertyName || row.propertyName).toLowerCase() ===
           propertyName.toLowerCase()
       ) || null
 
@@ -716,7 +709,9 @@ export async function POST(request: Request) {
     const costPrice = normaliseNumber(body.cost_price)
     const stockLevel = normaliseNumber(body.stock_level) ?? 1
     const stockValue =
-      costPrice !== null && stockLevel !== null ? Number((stockLevel * costPrice).toFixed(2)) : null
+      costPrice !== null && stockLevel !== null
+        ? Number((stockLevel * costPrice).toFixed(2))
+        : null
     const weightGrams = normaliseNumber(body.weight_grams)
     const category = normaliseText(body.reporting_category)
 
@@ -763,14 +758,15 @@ export async function POST(request: Request) {
           })
         : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
 
-      stock_value: locationId && stockValue !== null
-        ? await tryUpdateStockField(server, token, {
-            stockItemId,
-            fieldName: 'StockValue',
-            fieldValue: stockValue,
-            locationId,
-          })
-        : { ok: false, skipped: true, reason: 'Missing location or cost price' },
+      stock_value:
+        locationId && stockValue !== null
+          ? await tryUpdateStockField(server, token, {
+              stockItemId,
+              fieldName: 'StockValue',
+              fieldValue: stockValue,
+              locationId,
+            })
+          : { ok: false, skipped: true, reason: 'Missing location or cost price' },
 
       binrack: locationId
         ? await tryUpdateStockField(server, token, {
@@ -786,35 +782,35 @@ export async function POST(request: Request) {
       dohpe_app_managed: await tryUpsertExtendedProperty(
         server,
         token,
-        sku,
+        stockItemId,
         'dohpe_app_managed',
         'true'
       ),
       brand: await tryUpsertExtendedProperty(
         server,
         token,
-        sku,
+        stockItemId,
         'brand',
         normaliseText(body.brand)
       ),
       reporting_category: await tryUpsertExtendedProperty(
         server,
         token,
-        sku,
+        stockItemId,
         'reporting_category',
         normaliseText(body.reporting_category)
       ),
       tagged_size: await tryUpsertExtendedProperty(
         server,
         token,
-        sku,
+        stockItemId,
         'tagged_size',
         normaliseText(body.tagged_size)
       ),
       condition: await tryUpsertExtendedProperty(
         server,
         token,
-        sku,
+        stockItemId,
         'condition',
         normaliseText(body.condition)
       ),
