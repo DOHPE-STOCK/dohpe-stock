@@ -147,6 +147,51 @@ function findLocationId(locations: any[], locationName: string) {
   )
 }
 
+function findStockItemIdFromData(data: any) {
+  if (!data) return null
+
+  if (Array.isArray(data)) {
+    const first = data[0]
+    return (
+      first?.StockItemId ||
+      first?.stockItemId ||
+      first?.Id ||
+      first?.id ||
+      null
+    )
+  }
+
+  return (
+    data?.StockItemId ||
+    data?.stockItemId ||
+    data?.Id ||
+    data?.id ||
+    data?.Item?.StockItemId ||
+    data?.item?.stockItemId ||
+    null
+  )
+}
+
+async function findLinnworksItemBySku(
+  server: string,
+  token: string,
+  sku: string
+) {
+  try {
+    const encodedSku = encodeURIComponent(sku)
+
+    const data = await linnworksGet(
+      server,
+      token,
+      `/api/Inventory/GetInventoryItem?sKU=${encodedSku}`
+    )
+
+    return findStockItemIdFromData(data)
+  } catch {
+    return null
+  }
+}
+
 async function updateInventoryField(
   server: string,
   token: string,
@@ -178,7 +223,9 @@ export async function POST(request: Request) {
     const body = await request.json()
 
     const sku = normaliseText(body.sku)
-    const title = normaliseText(body.title || body.final_title || body.ai_title || body.basic_title || sku)
+    const title = normaliseText(
+      body.title || body.final_title || body.ai_title || body.basic_title || sku
+    )
 
     if (!sku) {
       return NextResponse.json(
@@ -197,10 +244,23 @@ export async function POST(request: Request) {
     const { server, token } = await authoriseLinnworks()
 
     const existingLinnworksItemId = normaliseText(body.linnworks_item_id)
-    const stockItemId = existingLinnworksItemId || crypto.randomUUID()
-    const createdNew = !existingLinnworksItemId
 
-    if (createdNew) {
+    let stockItemId = existingLinnworksItemId
+    let createdNew = false
+    let linkedExisting = false
+
+    if (!stockItemId) {
+      stockItemId = await findLinnworksItemBySku(server, token, sku)
+
+      if (stockItemId) {
+        linkedExisting = true
+      }
+    }
+
+    if (!stockItemId) {
+      stockItemId = crypto.randomUUID()
+      createdNew = true
+
       await linnworksPost(server, token, '/api/Inventory/AddInventoryItem', {
         inventoryItem: {
           StockItemId: stockItemId,
@@ -228,19 +288,35 @@ export async function POST(request: Request) {
     const weightGrams = normaliseNumber(body.weight_grams)
 
     await updateInventoryField(server, token, stockItemId, 'Title', title)
-    await updateInventoryField(server, token, stockItemId, 'Category', normaliseText(body.reporting_category))
+    await updateInventoryField(
+      server,
+      token,
+      stockItemId,
+      'Category',
+      normaliseText(body.reporting_category)
+    )
     await updateInventoryField(server, token, stockItemId, 'RetailPrice', sellingPrice)
     await updateInventoryField(server, token, stockItemId, 'PurchasePrice', costPrice)
     await updateInventoryField(server, token, stockItemId, 'Weight', weightGrams)
 
     if (locationId) {
-      await updateInventoryField(server, token, stockItemId, 'StockLevel', stockLevel ?? 1, locationId)
+      await updateInventoryField(
+        server,
+        token,
+        stockItemId,
+        'StockLevel',
+        stockLevel ?? 1,
+        locationId
+      )
+
       await updateInventoryField(
         server,
         token,
         stockItemId,
         'BinRack',
-        normaliseText(body.current_bin) || normaliseText(body.default_binrack) || 'Default',
+        normaliseText(body.current_bin) ||
+          normaliseText(body.default_binrack) ||
+          'Default',
         locationId
       )
     }
@@ -249,8 +325,11 @@ export async function POST(request: Request) {
       ok: true,
       message: createdNew
         ? 'Linnworks inventory item created and updated.'
-        : 'Linnworks inventory item updated.',
+        : linkedExisting
+          ? 'Existing Linnworks inventory item linked and updated.'
+          : 'Linnworks inventory item updated.',
       created_new: createdNew,
+      linked_existing: linkedExisting,
       linnworks_item_id: stockItemId,
       linnworks_item_number: sku,
       location_used: defaultLocation,
