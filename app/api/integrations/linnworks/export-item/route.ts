@@ -657,33 +657,33 @@ async function tryAddImage(
 
 function addFilledMeasurementProperties(body: any, target: Record<string, any>) {
   const directMeasurementFields = [
-    'pit_to_pit',
-    'pit_to_cuff',
-    'pit_to_hem',
-    'collar_to_hem',
-    'shoulder_to_hem',
-    'shoulder_to_shoulder',
-    'sleeve_length',
-    'waist',
-    'inside_leg',
-    'inseam',
-    'leg_opening',
-    'rise',
-    'front_rise',
-    'back_rise',
-    'length',
-    'chest',
-    'hem',
-    'width',
-    'height',
-    'depth',
+    'pit_to_pit_in',
+    'collar_to_hem_in',
+    'pit_to_cuff_in',
+    'sleeve_in',
+    'waist_in',
+    'inside_leg_in',
+    'rise_in',
+    'hem_width_in',
   ]
+
+  const measurementPropertyNames: Record<string, string> = {
+    pit_to_pit_in: 'measurement_pit_to_pit',
+    collar_to_hem_in: 'measurement_collar_to_hem',
+    pit_to_cuff_in: 'measurement_pit_to_cuff',
+    sleeve_in: 'measurement_sleeve',
+    waist_in: 'measurement_waist',
+    inside_leg_in: 'measurement_inside_leg',
+    rise_in: 'measurement_rise',
+    hem_width_in: 'measurement_hem_width',
+  }
 
   for (const field of directMeasurementFields) {
     const value = normaliseText(body[field])
 
     if (value) {
-      target[`measurement_${field}`] = value
+      const propertyName = measurementPropertyNames[field] || `measurement_${field}`
+      target[propertyName] = value
     }
   }
 
