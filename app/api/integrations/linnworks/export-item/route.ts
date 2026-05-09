@@ -615,6 +615,80 @@ async function tryUpsertExtendedProperty(
   }
 }
 
+function getImageUrlFromLinnworksImage(image: any) {
+  return normaliseText(
+    image?.ImageUrl ||
+      image?.imageUrl ||
+      image?.Source ||
+      image?.source ||
+      image?.Url ||
+      image?.url
+  )
+}
+
+async function tryGetLinnworksImages(server: string, token: string, stockItemId: string) {
+  try {
+    const data = await linnworksGet(
+      server,
+      token,
+      `/api/Inventory/GetInventoryItemImages?inventoryItemId=${encodeURIComponent(stockItemId)}`
+    )
+
+    const images = Array.isArray(data) ? data : []
+    const imageUrls = images.map(getImageUrlFromLinnworksImage).filter(Boolean)
+
+    return {
+      ok: true,
+      skipped: false,
+      images,
+      imageUrls,
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown get images error',
+      images: [],
+      imageUrls: [],
+    }
+  }
+}
+
+async function tryDeleteLinnworksImages(
+  server: string,
+  token: string,
+  stockItemId: string,
+  imageUrls: string[]
+) {
+  if (imageUrls.length === 0) {
+    return { ok: true, skipped: true, reason: 'no existing images' }
+  }
+
+  const payload = {
+    inventoryItemImages: {
+      [stockItemId]: imageUrls,
+    },
+  }
+
+  try {
+    const data = await linnworksPost(
+      server,
+      token,
+      '/api/Inventory/DeleteImagesFromInventoryItem',
+      payload
+    )
+
+    return { ok: true, skipped: false, data, payload }
+  } catch (error: any) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error.message || 'Unknown delete images error',
+      payload,
+    }
+  }
+}
+
 async function tryAddImage(
   server: string,
   token: string,
@@ -652,6 +726,72 @@ async function tryAddImage(
       reason: error.message || 'Unknown image sync error',
       imageUrl,
     }
+  }
+}
+
+async function tryReplaceImages(
+  server: string,
+  token: string,
+  stockItemId: string,
+  processedImages: string[]
+) {
+  const existing = await tryGetLinnworksImages(server, token, stockItemId)
+
+  if (!existing.ok) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: existing.reason,
+      existing,
+      deleted: null,
+      added: [],
+    }
+  }
+
+  const deleted = await tryDeleteLinnworksImages(
+    server,
+    token,
+    stockItemId,
+    existing.imageUrls
+  )
+
+  if (!deleted.ok) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: deleted.reason,
+      existing,
+      deleted,
+      added: [],
+    }
+  }
+
+  const added = []
+
+  for (let i = 0; i < processedImages.length; i++) {
+    added.push(
+      await tryAddImage(
+        server,
+        token,
+        stockItemId,
+        processedImages[i],
+        i === 0,
+        i + 1
+      )
+    )
+  }
+
+  const failedAdded = added.filter((result: any) => !result.ok && !result.skipped)
+
+  return {
+    ok: failedAdded.length === 0,
+    skipped: false,
+    existing,
+    deleted,
+    added,
+    replaced_existing_count: existing.imageUrls.length,
+    added_count: added.filter((result: any) => result.ok).length,
+    failed_added_count: failedAdded.length,
   }
 }
 
@@ -864,20 +1004,8 @@ export async function POST(request: Request) {
       )
     }
 
-    const images = []
-
-    for (let i = 0; i < processedImages.length; i++) {
-      images.push(
-        await tryAddImage(
-          server,
-          token,
-          stockItemId,
-          processedImages[i],
-          i === 0,
-          i + 1
-        )
-      )
-    }
+    const image_replace = await tryReplaceImages(server, token, stockItemId, processedImages)
+    const images = image_replace.added || []
 
     const failedUpdates = Object.entries(updates).filter(
       ([, result]: any) => !result.ok && !result.skipped
@@ -887,7 +1015,9 @@ export async function POST(request: Request) {
       ([, result]: any) => !result.ok && !result.skipped
     )
 
-    const failedImages = images.filter((result: any) => !result.ok && !result.skipped)
+    const failedImages = !image_replace.ok
+      ? [image_replace]
+      : images.filter((result: any) => !result.ok && !result.skipped)
 
     console.log(
       'LINNWORKS_EXPORT_DEBUG',
@@ -910,6 +1040,7 @@ export async function POST(request: Request) {
         },
         updates,
         extended_properties,
+        image_replace,
         images,
       })
     )
@@ -918,7 +1049,7 @@ export async function POST(request: Request) {
       ok: true,
       message:
         failedUpdates.length > 0 || failedExtended.length > 0 || failedImages.length > 0
-          ? `Linnworks item linked/created, but ${failedUpdates.length} field update(s), ${failedExtended.length} extended property update(s), and ${failedImages.length} image(s) failed.`
+          ? `Linnworks item linked/created, but ${failedUpdates.length} field update(s), ${failedExtended.length} extended property update(s), and ${failedImages.length} image sync step(s) failed.`
           : createdNew
             ? 'Linnworks inventory item created and fully synced.'
             : linkedExisting
@@ -934,6 +1065,7 @@ export async function POST(request: Request) {
       processed_image_count: processedImages.length,
       updates,
       extended_properties,
+      image_replace,
       images,
     })
   } catch (error: any) {
