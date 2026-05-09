@@ -34,26 +34,14 @@ function getExportDescription(item: any) {
 }
 
 const MEASUREMENT_FIELDS = [
-  'pit_to_pit',
-  'pit_to_cuff',
-  'pit_to_hem',
-  'collar_to_hem',
-  'shoulder_to_hem',
-  'shoulder_to_shoulder',
-  'sleeve_length',
-  'waist',
-  'inside_leg',
-  'inseam',
-  'leg_opening',
-  'rise',
-  'front_rise',
-  'back_rise',
-  'length',
-  'chest',
-  'hem',
-  'width',
-  'height',
-  'depth',
+  'pit_to_pit_in',
+  'collar_to_hem_in',
+  'pit_to_cuff_in',
+  'sleeve_in',
+  'waist_in',
+  'inside_leg_in',
+  'rise_in',
+  'hem_width_in',
 ]
 
 function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
