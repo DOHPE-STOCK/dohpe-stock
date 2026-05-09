@@ -290,13 +290,13 @@ function TextArea({ label, value, onChange }: any) {
   )
 }
 
-function PhotoPreview({ itemId }: { itemId: string }) {
+function PhotoPreview({ itemId, refreshKey }: { itemId: string; refreshKey: number }) {
   const [images, setImages] = useState<any[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
 
   useEffect(() => {
     fetchImages()
-  }, [itemId])
+  }, [itemId, refreshKey])
 
   async function fetchImages() {
     const { data } = await supabase
@@ -385,6 +385,7 @@ export default function ItemPage() {
   const [generatingAi, setGeneratingAi] = useState(false)
   const [processingImages, setProcessingImages] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [photoRefreshKey, setPhotoRefreshKey] = useState(0)
 
   const originalItemRef = useRef<any>(null)
 
@@ -516,6 +517,7 @@ export default function ItemPage() {
         .from('item-images')
         .upload(path, processedBlob, {
           contentType: 'image/jpeg',
+          cacheControl: '0',
           upsert: true,
         })
 
@@ -527,13 +529,12 @@ export default function ItemPage() {
         .from('item-images')
         .getPublicUrl(path)
 
-      const processedUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`
+      const processedUrl = publicUrlData.publicUrl
 
       const { error: updateError } = await supabase
         .from('item_images')
         .update({
           processed_url: processedUrl,
-          updated_at: new Date().toISOString(),
         })
         .eq('id', image.id)
 
@@ -541,6 +542,8 @@ export default function ItemPage() {
         throw new Error(updateError.message)
       }
     }
+
+    setPhotoRefreshKey((current) => current + 1)
   }
 
   function missingFinaliseFields(itemToCheck: any, imageCount: number) {
@@ -854,11 +857,7 @@ export default function ItemPage() {
             </h2>
 
             <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-              <Field
-                label="Brand"
-                value={item.brand}
-                onChange={(v: string) => updateField('brand', v)}
-              />
+              <Field label="Brand" value={item.brand} onChange={(v: string) => updateField('brand', v)} />
 
               <DatalistField
                 label="Reporting Category"
@@ -869,43 +868,17 @@ export default function ItemPage() {
                 placeholder="Type or select category"
               />
 
-              <Field
-                label="Sub Type"
-                value={item.sub_type}
-                onChange={(v: string) => updateField('sub_type', v)}
-              />
+              <Field label="Sub Type" value={item.sub_type} onChange={(v: string) => updateField('sub_type', v)} />
 
-              <SelectField
-                label="Gender"
-                value={item.gender}
-                onChange={(v: string) => updateField('gender', v)}
-                options={genderOptions}
-              />
+              <SelectField label="Gender" value={item.gender} onChange={(v: string) => updateField('gender', v)} options={genderOptions} />
 
-              <Field
-                label="Tagged Size"
-                value={item.tagged_size}
-                onChange={(v: string) => updateField('tagged_size', v)}
-              />
+              <Field label="Tagged Size" value={item.tagged_size} onChange={(v: string) => updateField('tagged_size', v)} />
 
-              <Field
-                label="Primary Colour"
-                value={item.colour_primary}
-                onChange={(v: string) => updateField('colour_primary', v)}
-              />
+              <Field label="Primary Colour" value={item.colour_primary} onChange={(v: string) => updateField('colour_primary', v)} />
 
-              <Field
-                label="Secondary Colour"
-                value={item.colour_secondary}
-                onChange={(v: string) => updateField('colour_secondary', v)}
-              />
+              <Field label="Secondary Colour" value={item.colour_secondary} onChange={(v: string) => updateField('colour_secondary', v)} />
 
-              <SelectField
-                label="Condition"
-                value={item.condition}
-                onChange={(v: string) => updateField('condition', v)}
-                options={conditionOptions}
-              />
+              <SelectField label="Condition" value={item.condition} onChange={(v: string) => updateField('condition', v)} options={conditionOptions} />
 
               <DatalistField
                 label="Material"
@@ -916,23 +889,11 @@ export default function ItemPage() {
                 placeholder="Type or select material"
               />
 
-              <Field
-                label="Era"
-                value={item.era}
-                onChange={(v: string) => updateField('era', v)}
-              />
+              <Field label="Era" value={item.era} onChange={(v: string) => updateField('era', v)} />
 
-              <Field
-                label="Style"
-                value={item.style}
-                onChange={(v: string) => updateField('style', v)}
-              />
+              <Field label="Style" value={item.style} onChange={(v: string) => updateField('style', v)} />
 
-              <Field
-                label="Staff Notes"
-                value={item.staff_notes}
-                onChange={(v: string) => updateField('staff_notes', v)}
-              />
+              <Field label="Staff Notes" value={item.staff_notes} onChange={(v: string) => updateField('staff_notes', v)} />
             </div>
           </section>
 
@@ -952,17 +913,9 @@ export default function ItemPage() {
                   />
                 ))}
 
-                <Field
-                  label="Weight (g)"
-                  value={item.weight_grams}
-                  onChange={(v: string) => updateField('weight_grams', v)}
-                />
+                <Field label="Weight (g)" value={item.weight_grams} onChange={(v: string) => updateField('weight_grams', v)} />
 
-                <Field
-                  label="Stock Level"
-                  value={item.stock_level}
-                  onChange={(v: string) => updateField('stock_level', v)}
-                />
+                <Field label="Stock Level" value={item.stock_level} onChange={(v: string) => updateField('stock_level', v)} />
               </div>
             </section>
           )}
@@ -985,43 +938,19 @@ export default function ItemPage() {
 
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="space-y-3">
-                <Field
-                  label="Basic Title"
-                  value={item.basic_title}
-                  onChange={(v: string) => updateField('basic_title', v)}
-                />
+                <Field label="Basic Title" value={item.basic_title} onChange={(v: string) => updateField('basic_title', v)} />
 
-                <TextArea
-                  label="Basic Description"
-                  value={item.basic_description}
-                  onChange={(v: string) => updateField('basic_description', v)}
-                />
+                <TextArea label="Basic Description" value={item.basic_description} onChange={(v: string) => updateField('basic_description', v)} />
 
-                <TextArea
-                  label="Flaws"
-                  value={item.flaws}
-                  onChange={(v: string) => updateField('flaws', v)}
-                />
+                <TextArea label="Flaws" value={item.flaws} onChange={(v: string) => updateField('flaws', v)} />
               </div>
 
               <div className="space-y-3">
-                <Field
-                  label="AI Marketplace Title"
-                  value={item.ai_title}
-                  onChange={(v: string) => updateField('ai_title', v)}
-                />
+                <Field label="AI Marketplace Title" value={item.ai_title} onChange={(v: string) => updateField('ai_title', v)} />
 
-                <Field
-                  label="Website Title"
-                  value={item.website_title}
-                  onChange={(v: string) => updateField('website_title', v)}
-                />
+                <Field label="Website Title" value={item.website_title} onChange={(v: string) => updateField('website_title', v)} />
 
-                <TextArea
-                  label="AI Description"
-                  value={item.ai_description}
-                  onChange={(v: string) => updateField('ai_description', v)}
-                />
+                <TextArea label="AI Description" value={item.ai_description} onChange={(v: string) => updateField('ai_description', v)} />
               </div>
             </div>
           </section>
@@ -1033,7 +962,7 @@ export default function ItemPage() {
               Photos
             </h2>
 
-            <PhotoPreview itemId={id} />
+            <PhotoPreview itemId={id} refreshKey={photoRefreshKey} />
 
             <button
               type="button"
@@ -1050,23 +979,11 @@ export default function ItemPage() {
             </h2>
 
             <div className="space-y-3">
-              <Field
-                label="Cost Price (£)"
-                value={item.cost_price}
-                onChange={(v: string) => updateField('cost_price', v)}
-              />
+              <Field label="Cost Price (£)" value={item.cost_price} onChange={(v: string) => updateField('cost_price', v)} />
 
-              <Field
-                label="Selling Price (£)"
-                value={item.selling_price}
-                onChange={(v: string) => updateField('selling_price', v)}
-              />
+              <Field label="Selling Price (£)" value={item.selling_price} onChange={(v: string) => updateField('selling_price', v)} />
 
-              <Field
-                label="Status"
-                value={item.status}
-                onChange={(v: string) => updateField('status', v)}
-              />
+              <Field label="Status" value={item.status} onChange={(v: string) => updateField('status', v)} />
             </div>
           </section>
         </aside>
