@@ -112,6 +112,17 @@ const bottomMeasurements = [
   'hem_width_in',
 ]
 
+const allMeasurementFields = [
+  'pit_to_pit_in',
+  'collar_to_hem_in',
+  'pit_to_cuff_in',
+  'sleeve_in',
+  'waist_in',
+  'inside_leg_in',
+  'rise_in',
+  'hem_width_in',
+]
+
 const measurementMap: Record<string, string[]> = {
   'T-Shirt': sleevedTopMeasurements,
   'Long Sleeve T-Shirt': sleevedTopMeasurements,
@@ -197,6 +208,7 @@ const measurementLabels: Record<string, string> = {
   pit_to_pit_in: 'Pit to Pit',
   collar_to_hem_in: 'Collar to Hem',
   pit_to_cuff_in: 'Pit to Cuff',
+  sleeve_in: 'Sleeve',
   waist_in: 'Waist',
   inside_leg_in: 'Inside Leg',
   rise_in: 'Rise',
@@ -290,7 +302,13 @@ function TextArea({ label, value, onChange }: any) {
   )
 }
 
-function PhotoPreview({ itemId, refreshKey }: { itemId: string; refreshKey: number }) {
+function PhotoPreview({
+  itemId,
+  refreshKey,
+}: {
+  itemId: string
+  refreshKey: number
+}) {
   const [images, setImages] = useState<any[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
 
@@ -453,6 +471,60 @@ export default function ItemPage() {
       : value
   }
 
+  function hasValue(value: any) {
+    return !(
+      value === '' ||
+      value === null ||
+      value === undefined ||
+      String(value).trim() === ''
+    )
+  }
+
+  function cleanNumber(value: any) {
+    const cleaned = blankToNull(value)
+    if (cleaned === null) return null
+
+    const numberValue = Number(cleaned)
+    return Number.isFinite(numberValue) ? numberValue : cleaned
+  }
+
+  function updateReportingCategory(newCategory: string) {
+    if (!item) return
+
+    const allowedMeasurements = measurementMap[newCategory] || []
+    const measurementsToClear = allMeasurementFields.filter(
+      (field) => !allowedMeasurements.includes(field) && hasValue(item[field])
+    )
+
+    if (measurementsToClear.length > 0) {
+      const labels = measurementsToClear.map(
+        (field) => measurementLabels[field] || field
+      )
+
+      const confirmed = window.confirm(
+        `Changing category to ${newCategory || 'blank'} will remove these measurement value(s):\n\n${labels.join(
+          ', '
+        )}\n\nContinue?`
+      )
+
+      if (!confirmed) return
+    }
+
+    const updatedItem: any = {
+      ...item,
+      reporting_category: newCategory,
+    }
+
+    for (const field of measurementsToClear) {
+      updatedItem[field] = null
+    }
+
+    setItem(updatedItem)
+    setHasUnsavedChanges(
+      JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+    )
+  }
+
   async function createProcessedBlob(imageUrl: string) {
     const response = await fetch(imageUrl)
     const blob = await response.blob()
@@ -613,6 +685,12 @@ export default function ItemPage() {
       return null
     }
 
+    const oldStockLevel = cleanNumber(originalItemRef.current?.stock_level)
+    const newStockLevel = cleanNumber(item.stock_level)
+
+    const stockLevelChanged =
+      String(oldStockLevel ?? '') !== String(newStockLevel ?? '')
+
     const priceChanged =
       String(originalItemRef.current?.cost_price || '') !==
         String(item.cost_price || '') ||
@@ -624,7 +702,7 @@ export default function ItemPage() {
 
       cost_price: blankToNull(item.cost_price),
       selling_price: blankToNull(item.selling_price),
-      stock_level: blankToNull(item.stock_level),
+      stock_level: newStockLevel,
 
       waist_in: blankToNull(item.waist_in),
       inside_leg_in: blankToNull(item.inside_leg_in),
@@ -634,11 +712,18 @@ export default function ItemPage() {
       pit_to_pit_in: blankToNull(item.pit_to_pit_in),
       collar_to_hem_in: blankToNull(item.collar_to_hem_in),
       pit_to_cuff_in: blankToNull(item.pit_to_cuff_in),
+      sleeve_in: blankToNull(item.sleeve_in),
 
       weight_grams: blankToNull(item.weight_grams),
 
       last_saved_by: staff.id,
       ...(priceChanged ? { priced_by: staff.id } : {}),
+      ...(stockLevelChanged
+        ? {
+            linnworks_location_sync_status: 'pending',
+            linnworks_sync_error: null,
+          }
+        : {}),
     }
 
     const { error } = await supabase
@@ -651,10 +736,43 @@ export default function ItemPage() {
       return null
     }
 
+    if (stockLevelChanged) {
+      const { error: queueError } = await supabase
+        .from('linnworks_sync_queue')
+        .insert({
+          item_id: id,
+          sku: cleanedItem.sku,
+          action: 'update_stock',
+          payload: {
+            sku: cleanedItem.sku,
+            stock_level: newStockLevel,
+            location: cleanedItem.current_location || 'Default',
+            bin: cleanedItem.current_bin || 'Default',
+            reason: 'manual_item_edit_stock_level',
+            changed_by: staff.name,
+            changed_at: new Date().toISOString(),
+          },
+          status: 'pending',
+        })
+
+      if (queueError) {
+        setMessage(`Saved item, but Linnworks queue failed: ${queueError.message}`)
+        originalItemRef.current = cleanedItem
+        setItem(cleanedItem)
+        setHasUnsavedChanges(false)
+        return cleanedItem
+      }
+    }
+
     originalItemRef.current = cleanedItem
     setItem(cleanedItem)
     setHasUnsavedChanges(false)
-    setMessage(`Saved by ${staff.name}`)
+
+    setMessage(
+      stockLevelChanged
+        ? `Saved by ${staff.name}. Linnworks stock sync queued.`
+        : `Saved by ${staff.name}`
+    )
 
     return cleanedItem
   }
@@ -857,28 +975,58 @@ export default function ItemPage() {
             </h2>
 
             <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-              <Field label="Brand" value={item.brand} onChange={(v: string) => updateField('brand', v)} />
+              <Field
+                label="Brand"
+                value={item.brand}
+                onChange={(v: string) => updateField('brand', v)}
+              />
 
               <DatalistField
                 label="Reporting Category"
                 value={item.reporting_category}
-                onChange={(v: string) => updateField('reporting_category', v)}
+                onChange={(v: string) => updateReportingCategory(v)}
                 options={reportingCategories}
                 listId="reporting-categories"
                 placeholder="Type or select category"
               />
 
-              <Field label="Sub Type" value={item.sub_type} onChange={(v: string) => updateField('sub_type', v)} />
+              <Field
+                label="Sub Type"
+                value={item.sub_type}
+                onChange={(v: string) => updateField('sub_type', v)}
+              />
 
-              <SelectField label="Gender" value={item.gender} onChange={(v: string) => updateField('gender', v)} options={genderOptions} />
+              <SelectField
+                label="Gender"
+                value={item.gender}
+                onChange={(v: string) => updateField('gender', v)}
+                options={genderOptions}
+              />
 
-              <Field label="Tagged Size" value={item.tagged_size} onChange={(v: string) => updateField('tagged_size', v)} />
+              <Field
+                label="Tagged Size"
+                value={item.tagged_size}
+                onChange={(v: string) => updateField('tagged_size', v)}
+              />
 
-              <Field label="Primary Colour" value={item.colour_primary} onChange={(v: string) => updateField('colour_primary', v)} />
+              <Field
+                label="Primary Colour"
+                value={item.colour_primary}
+                onChange={(v: string) => updateField('colour_primary', v)}
+              />
 
-              <Field label="Secondary Colour" value={item.colour_secondary} onChange={(v: string) => updateField('colour_secondary', v)} />
+              <Field
+                label="Secondary Colour"
+                value={item.colour_secondary}
+                onChange={(v: string) => updateField('colour_secondary', v)}
+              />
 
-              <SelectField label="Condition" value={item.condition} onChange={(v: string) => updateField('condition', v)} options={conditionOptions} />
+              <SelectField
+                label="Condition"
+                value={item.condition}
+                onChange={(v: string) => updateField('condition', v)}
+                options={conditionOptions}
+              />
 
               <DatalistField
                 label="Material"
@@ -889,11 +1037,23 @@ export default function ItemPage() {
                 placeholder="Type or select material"
               />
 
-              <Field label="Era" value={item.era} onChange={(v: string) => updateField('era', v)} />
+              <Field
+                label="Era"
+                value={item.era}
+                onChange={(v: string) => updateField('era', v)}
+              />
 
-              <Field label="Style" value={item.style} onChange={(v: string) => updateField('style', v)} />
+              <Field
+                label="Style"
+                value={item.style}
+                onChange={(v: string) => updateField('style', v)}
+              />
 
-              <Field label="Staff Notes" value={item.staff_notes} onChange={(v: string) => updateField('staff_notes', v)} />
+              <Field
+                label="Staff Notes"
+                value={item.staff_notes}
+                onChange={(v: string) => updateField('staff_notes', v)}
+              />
             </div>
           </section>
 
@@ -913,9 +1073,11 @@ export default function ItemPage() {
                   />
                 ))}
 
-                <Field label="Weight (g)" value={item.weight_grams} onChange={(v: string) => updateField('weight_grams', v)} />
-
-                <Field label="Stock Level" value={item.stock_level} onChange={(v: string) => updateField('stock_level', v)} />
+                <Field
+                  label="Weight (g)"
+                  value={item.weight_grams}
+                  onChange={(v: string) => updateField('weight_grams', v)}
+                />
               </div>
             </section>
           )}
@@ -938,19 +1100,43 @@ export default function ItemPage() {
 
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="space-y-3">
-                <Field label="Basic Title" value={item.basic_title} onChange={(v: string) => updateField('basic_title', v)} />
+                <Field
+                  label="Basic Title"
+                  value={item.basic_title}
+                  onChange={(v: string) => updateField('basic_title', v)}
+                />
 
-                <TextArea label="Basic Description" value={item.basic_description} onChange={(v: string) => updateField('basic_description', v)} />
+                <TextArea
+                  label="Basic Description"
+                  value={item.basic_description}
+                  onChange={(v: string) => updateField('basic_description', v)}
+                />
 
-                <TextArea label="Flaws" value={item.flaws} onChange={(v: string) => updateField('flaws', v)} />
+                <TextArea
+                  label="Flaws"
+                  value={item.flaws}
+                  onChange={(v: string) => updateField('flaws', v)}
+                />
               </div>
 
               <div className="space-y-3">
-                <Field label="AI Marketplace Title" value={item.ai_title} onChange={(v: string) => updateField('ai_title', v)} />
+                <Field
+                  label="AI Marketplace Title"
+                  value={item.ai_title}
+                  onChange={(v: string) => updateField('ai_title', v)}
+                />
 
-                <Field label="Website Title" value={item.website_title} onChange={(v: string) => updateField('website_title', v)} />
+                <Field
+                  label="Website Title"
+                  value={item.website_title}
+                  onChange={(v: string) => updateField('website_title', v)}
+                />
 
-                <TextArea label="AI Description" value={item.ai_description} onChange={(v: string) => updateField('ai_description', v)} />
+                <TextArea
+                  label="AI Description"
+                  value={item.ai_description}
+                  onChange={(v: string) => updateField('ai_description', v)}
+                />
               </div>
             </div>
           </section>
@@ -978,12 +1164,30 @@ export default function ItemPage() {
               Pricing / Status
             </h2>
 
-            <div className="space-y-3">
-              <Field label="Cost Price (£)" value={item.cost_price} onChange={(v: string) => updateField('cost_price', v)} />
+            <div className="grid grid-cols-2 gap-3">
+              <Field
+                label="Cost Price (£)"
+                value={item.cost_price}
+                onChange={(v: string) => updateField('cost_price', v)}
+              />
 
-              <Field label="Selling Price (£)" value={item.selling_price} onChange={(v: string) => updateField('selling_price', v)} />
+              <Field
+                label="Selling Price (£)"
+                value={item.selling_price}
+                onChange={(v: string) => updateField('selling_price', v)}
+              />
 
-              <Field label="Status" value={item.status} onChange={(v: string) => updateField('status', v)} />
+              <Field
+                label="Stock Level"
+                value={item.stock_level}
+                onChange={(v: string) => updateField('stock_level', v)}
+              />
+
+              <Field
+                label="Status"
+                value={item.status}
+                onChange={(v: string) => updateField('status', v)}
+              />
             </div>
           </section>
         </aside>
