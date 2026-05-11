@@ -134,6 +134,10 @@ function getStockLevel(row: any) {
     normaliseNumber(row.quantity) ??
     normaliseNumber(row.Available) ??
     normaliseNumber(row.available) ??
+    normaliseNumber(row.Level) ??
+    normaliseNumber(row.level) ??
+    normaliseNumber(row.OnHand) ??
+    normaliseNumber(row.onHand) ??
     0
   )
 }
@@ -451,6 +455,52 @@ function chooseLocationForAdjustment(params: {
   throw new Error('Delta cannot be 0.')
 }
 
+async function processDebugLocationsQueueRow(params: {
+  row: any
+  server: string
+  token: string
+  locations: any[]
+}) {
+  const { row, server, token, locations } = params
+  const payload = row.payload || {}
+
+  const sku = normaliseText(payload.sku || row.sku)
+  if (!sku) throw new Error('Missing SKU in queue payload.')
+
+  const stockItemId =
+    normaliseText(payload.linnworks_item_id) ||
+    normaliseText(payload.stockItemId) ||
+    (await findLinnworksItemBySku(server, token, sku))
+
+  if (!stockItemId) {
+    throw new Error(`Could not find Linnworks item for SKU ${sku}`)
+  }
+
+  const rawLocationRows = await getInventoryItemLocations(server, token, stockItemId)
+
+  const mappedRows = rawLocationRows.map((row) => {
+    const locationId = getLocationId(row)
+
+    return {
+      raw: row,
+      detected_location_id: locationId,
+      detected_location_name:
+        getLocationName(row) ||
+        (locationId ? findLocationNameById(locations, locationId) : ''),
+      detected_stock_level: getStockLevel(row),
+      detected_binrack: getBinRack(row),
+      raw_keys: Object.keys(row || {}),
+    }
+  })
+
+  return {
+    sku,
+    stockItemId,
+    rawLocationRows,
+    mappedRows,
+  }
+}
+
 async function processAdjustStockQueueRow(params: {
   row: any
   supabase: any
@@ -764,7 +814,14 @@ async function processQueue(request: Request) {
         let result: any = null
         const action = normaliseAction(row.action)
 
-        if (action === 'adjust_stock') {
+        if (action === 'debug_locations') {
+          result = await processDebugLocationsQueueRow({
+            row,
+            server,
+            token,
+            locations: Array.isArray(locations) ? locations : [],
+          })
+        } else if (action === 'adjust_stock') {
           result = await processAdjustStockQueueRow({
             row,
             supabase,
