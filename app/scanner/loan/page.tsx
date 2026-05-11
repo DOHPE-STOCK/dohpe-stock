@@ -79,6 +79,11 @@ export default function LoanPage() {
     return /^\d{10}$/.test(value)
   }
 
+  function getCurrentStockLevel(value: number | null | undefined) {
+    const stock = Number(value ?? 0)
+    return Number.isFinite(stock) ? stock : 0
+  }
+
   async function fetchLoans() {
     const { data, error } = await supabase
       .from('items')
@@ -217,8 +222,11 @@ export default function LoanPage() {
       return
     }
 
+    const currentStockLevel = getCurrentStockLevel(itemRow.stock_level)
+    const newStockLevel = Math.max(0, currentStockLevel - 1)
+
     const confirmed = window.confirm(
-      `Mark SKU ${sku} as ON LOAN by ${staff.name}?\n\nThis will set stock level to 0.`
+      `Mark SKU ${sku} as ON LOAN by ${staff.name}?\n\nStock level will change from ${currentStockLevel} to ${newStockLevel}.`
     )
 
     if (!confirmed) {
@@ -232,7 +240,7 @@ export default function LoanPage() {
     const { error: updateError } = await supabase
       .from('items')
       .update({
-        stock_level: 0,
+        stock_level: newStockLevel,
         loan_status: 'on_loan',
         loaned_at: now,
         loan_returned_at: null,
@@ -270,8 +278,10 @@ export default function LoanPage() {
         action: 'update_stock',
         payload: {
           sku: itemRow.sku,
-          stock_level: 0,
+          stock_level: newStockLevel,
+          quantity_change: -1,
           reason: 'loan_out',
+          source: 'dohpe_app',
           loaned_at: now,
           loaned_by: staff.name,
         },
@@ -285,7 +295,9 @@ export default function LoanPage() {
     }
 
     setBusy(false)
-    setMessage(`${sku} marked as on loan by ${staff.name}.`)
+    setMessage(
+      `${sku} marked as on loan by ${staff.name}. Stock ${currentStockLevel} → ${newStockLevel}.`
+    )
     await fetchLoans()
   }
 
@@ -335,8 +347,11 @@ export default function LoanPage() {
     const returnReason =
       target === 'shop' ? 'loan_returned_to_shop' : 'loan_returned_to_warehouse'
 
+    const currentStockLevel = getCurrentStockLevel(item.stock_level)
+    const newStockLevel = currentStockLevel + 1
+
     const confirmed = window.confirm(
-      `Return SKU ${item.sku} to ${returnLocation} by ${staff.name}?\n\nThis will set stock level back to 1.`
+      `Return SKU ${item.sku} to ${returnLocation} by ${staff.name}?\n\nStock level will change from ${currentStockLevel} to ${newStockLevel}.`
     )
 
     if (!confirmed) return
@@ -349,7 +364,7 @@ export default function LoanPage() {
     const { error: updateError } = await supabase
       .from('items')
       .update({
-        stock_level: 1,
+        stock_level: newStockLevel,
         loan_status: 'not_on_loan',
         loan_returned_at: now,
         loan_notes: null,
@@ -393,10 +408,12 @@ export default function LoanPage() {
         action: 'update_stock',
         payload: {
           sku: item.sku,
-          stock_level: 1,
+          stock_level: newStockLevel,
+          quantity_change: 1,
           location: returnLocation,
           bin: returnLocation,
           reason: returnReason,
+          source: 'dohpe_app',
           returned_at: now,
           returned_by: staff.name,
         },
@@ -412,7 +429,9 @@ export default function LoanPage() {
     setPendingReturn(null)
     setSelectedItems((prev) => prev.filter((id) => id !== item.id))
     setBusy(false)
-    setMessage(`${item.sku} returned to ${returnLocation} by ${staff.name}.`)
+    setMessage(
+      `${item.sku} returned to ${returnLocation} by ${staff.name}. Stock ${currentStockLevel} → ${newStockLevel}.`
+    )
     await fetchLoans()
     focusInput()
   }
