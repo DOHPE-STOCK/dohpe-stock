@@ -102,6 +102,53 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+function getLocationName(row: any) {
+  return normaliseText(
+    row.LocationName ||
+      row.locationName ||
+      row.StockLocationName ||
+      row.stockLocationName ||
+      row.Name ||
+      row.name
+  )
+}
+
+function getLocationId(row: any) {
+  return (
+    row.StockLocationId ||
+    row.stockLocationId ||
+    row.pkStockLocationId ||
+    row.LocationId ||
+    row.locationId ||
+    row.Id ||
+    row.id ||
+    null
+  )
+}
+
+function getStockLevel(row: any) {
+  return (
+    normaliseNumber(row.StockLevel) ??
+    normaliseNumber(row.stockLevel) ??
+    normaliseNumber(row.Quantity) ??
+    normaliseNumber(row.quantity) ??
+    normaliseNumber(row.Available) ??
+    normaliseNumber(row.available) ??
+    0
+  )
+}
+
+function getBinRack(row: any) {
+  return normaliseText(
+    row.BinRack ||
+      row.binRack ||
+      row.Binrack ||
+      row.binrack ||
+      row.Bin ||
+      row.bin
+  )
+}
+
 function findStockItemIdFromData(data: any) {
   if (!data) return null
 
@@ -149,16 +196,41 @@ function findLocationId(locations: any[], locationName: string) {
     return possibleNames.includes(wanted)
   })
 
-  return (
-    match?.StockLocationId ||
-    match?.stockLocationId ||
-    match?.pkStockLocationId ||
-    match?.LocationId ||
-    match?.locationId ||
-    match?.Id ||
-    match?.id ||
-    null
+  return getLocationId(match)
+}
+
+function findLocationNameById(locations: any[], locationId: string) {
+  const wanted = locationId.toLowerCase().trim()
+
+  const match = locations.find((location) => {
+    const possibleIds = [
+      location.StockLocationId,
+      location.stockLocationId,
+      location.pkStockLocationId,
+      location.LocationId,
+      location.locationId,
+      location.Id,
+      location.id,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase().trim())
+
+    return possibleIds.includes(wanted)
+  })
+
+  return match ? getLocationName(match) : ''
+}
+
+async function getInventoryItemLocations(server: string, token: string, stockItemId: string) {
+  const data = await linnworksGet(
+    server,
+    token,
+    `/api/Inventory/GetInventoryItemLocations?inventoryItemId=${encodeURIComponent(stockItemId)}`
   )
+
+  if (!Array.isArray(data)) return []
+
+  return data
 }
 
 async function updateStockField(
@@ -218,6 +290,310 @@ async function sendTelegramMessage(message: string) {
 function isShopLocation(locationName: string) {
   const value = locationName.toLowerCase()
   return value.startsWith('shop') || value.includes('shop-')
+}
+
+function normaliseAction(value: any) {
+  return normaliseText(value).toLowerCase()
+}
+
+function getLocationPriority(locationName: string, payload: any, item: any) {
+  const value = locationName.toLowerCase()
+  const payloadLocation = normaliseText(payload.location).toLowerCase()
+  const itemLocation = normaliseText(item?.current_location).toLowerCase()
+  const saleLocation = normaliseText(payload.sale_location).toLowerCase()
+
+  if (saleLocation && value === saleLocation) return 0
+  if (payloadLocation && value === payloadLocation) return 1
+  if (itemLocation && value === itemLocation) return 2
+
+  if (value.startsWith('shop') || value.includes('shop-')) return 3
+  if (value.includes('warehouse')) return 4
+  if (value === 'default') return 5
+  if (value.includes('transit')) return 9
+
+  return 6
+}
+
+function chooseLocationForAdjustment(params: {
+  linnworksLocationRows: any[]
+  locations: any[]
+  payload: any
+  item: any
+  delta: number
+}) {
+  const { linnworksLocationRows, locations, payload, item, delta } = params
+
+  const rows = linnworksLocationRows.map((row) => {
+    const locationId = getLocationId(row)
+    const locationName =
+      getLocationName(row) ||
+      (locationId ? findLocationNameById(locations, locationId) : '') ||
+      ''
+    const stockLevel = getStockLevel(row)
+    const binRack = getBinRack(row)
+
+    return {
+      raw: row,
+      locationId,
+      locationName,
+      stockLevel,
+      binRack,
+    }
+  })
+
+  const wantedLocation =
+    normaliseText(payload.location) ||
+    normaliseText(payload.sale_location) ||
+    ''
+
+  const wantedLocationLower = wantedLocation.toLowerCase()
+
+  const rowsWithStock = rows.filter((row) => row.locationId && row.stockLevel > 0)
+
+  if (delta < 0) {
+    if (wantedLocationLower) {
+      const exactWanted = rows.find(
+        (row) => row.locationName.toLowerCase() === wantedLocationLower
+      )
+
+      if (exactWanted && exactWanted.stockLevel > 0) {
+        return {
+          ...exactWanted,
+          newStockLevel: Math.max(0, exactWanted.stockLevel + delta),
+          selectionReason: 'wanted_location_had_stock',
+        }
+      }
+
+      if (payload.strict_location === true) {
+        throw new Error(
+          `Wanted location ${wantedLocation} has no stock for ${payload.sku || item?.sku}. Refusing to deduct from another location.`
+        )
+      }
+    }
+
+    if (rowsWithStock.length === 1) {
+      const selected = rowsWithStock[0]
+
+      return {
+        ...selected,
+        newStockLevel: Math.max(0, selected.stockLevel + delta),
+        selectionReason: 'only_location_with_stock',
+      }
+    }
+
+    if (rowsWithStock.length > 1) {
+      const sorted = [...rowsWithStock].sort((a, b) => {
+        const priorityA = getLocationPriority(a.locationName, payload, item)
+        const priorityB = getLocationPriority(b.locationName, payload, item)
+
+        if (priorityA !== priorityB) return priorityA - priorityB
+        return b.stockLevel - a.stockLevel
+      })
+
+      const selected = sorted[0]
+
+      return {
+        ...selected,
+        newStockLevel: Math.max(0, selected.stockLevel + delta),
+        selectionReason: 'best_location_with_stock',
+      }
+    }
+
+    throw new Error(`No Linnworks location has stock available to deduct.`)
+  }
+
+  if (delta > 0) {
+    if (wantedLocationLower) {
+      const exactWanted = rows.find(
+        (row) => row.locationName.toLowerCase() === wantedLocationLower
+      )
+
+      if (exactWanted) {
+        return {
+          ...exactWanted,
+          newStockLevel: exactWanted.stockLevel + delta,
+          selectionReason: 'wanted_location_for_increment',
+        }
+      }
+    }
+
+    const itemLocation = normaliseText(item?.current_location).toLowerCase()
+
+    if (itemLocation) {
+      const itemLocationRow = rows.find(
+        (row) => row.locationName.toLowerCase() === itemLocation
+      )
+
+      if (itemLocationRow) {
+        return {
+          ...itemLocationRow,
+          newStockLevel: itemLocationRow.stockLevel + delta,
+          selectionReason: 'item_current_location_for_increment',
+        }
+      }
+    }
+
+    const defaultRow =
+      rows.find((row) => row.locationName.toLowerCase() === 'default') ||
+      rows[0]
+
+    if (!defaultRow?.locationId) {
+      throw new Error('Could not find a Linnworks location to increment.')
+    }
+
+    return {
+      ...defaultRow,
+      newStockLevel: defaultRow.stockLevel + delta,
+      selectionReason: 'fallback_increment_location',
+    }
+  }
+
+  throw new Error('Delta cannot be 0.')
+}
+
+async function processAdjustStockQueueRow(params: {
+  row: any
+  supabase: any
+  server: string
+  token: string
+  locations: any[]
+}) {
+  const { row, supabase, server, token, locations } = params
+  const payload = row.payload || {}
+
+  const sku = normaliseText(payload.sku || row.sku)
+  if (!sku) throw new Error('Missing SKU in queue payload.')
+
+  const delta = normaliseNumber(payload.delta)
+
+  if (delta === null || delta === 0) {
+    throw new Error('adjust_stock requires payload.delta, for example -1 or 1.')
+  }
+
+  const stockItemId =
+    normaliseText(payload.linnworks_item_id) ||
+    normaliseText(payload.stockItemId) ||
+    (await findLinnworksItemBySku(server, token, sku))
+
+  if (!stockItemId) {
+    throw new Error(`Could not find Linnworks item for SKU ${sku}`)
+  }
+
+  const itemResult = await supabase
+    .from('items')
+    .select('id, sku, cost_price, stock_level, current_location, current_bin')
+    .eq('sku', sku)
+    .maybeSingle()
+
+  if (itemResult.error) throw new Error(itemResult.error.message)
+
+  const item = itemResult.data
+
+  const linnworksLocationRows = await getInventoryItemLocations(server, token, stockItemId)
+
+  const selected = chooseLocationForAdjustment({
+    linnworksLocationRows,
+    locations,
+    payload: { ...payload, sku },
+    item,
+    delta,
+  })
+
+  const costPrice = normaliseNumber(item?.cost_price) ?? 0
+  const stockValue = Number((selected.newStockLevel * costPrice).toFixed(2))
+
+  const binRack =
+    normaliseText(payload.bin) ||
+    selected.binRack ||
+    normaliseText(item?.current_bin) ||
+    selected.locationName ||
+    'Default'
+
+  const results: any = {}
+
+  results.stock_level = await updateStockField(server, token, {
+    stockItemId,
+    fieldName: 'StockLevel',
+    fieldValue: selected.newStockLevel,
+    locationId: selected.locationId,
+  })
+
+  results.stock_value = await updateStockField(server, token, {
+    stockItemId,
+    fieldName: 'StockValue',
+    fieldValue: stockValue,
+    locationId: selected.locationId,
+  })
+
+  if (binRack) {
+    results.binrack = await updateStockField(server, token, {
+      stockItemId,
+      fieldName: 'BinRack',
+      fieldValue: binRack,
+      locationId: selected.locationId,
+    })
+  }
+
+  const updatedLocationRows = linnworksLocationRows.map((row) => {
+    const rowLocationId = getLocationId(row)
+
+    if (
+      rowLocationId &&
+      selected.locationId &&
+      String(rowLocationId).toLowerCase() === String(selected.locationId).toLowerCase()
+    ) {
+      return {
+        ...row,
+        StockLevel: selected.newStockLevel,
+      }
+    }
+
+    return row
+  })
+
+  const totalStockLevel = updatedLocationRows.reduce((sum, row) => {
+    return sum + getStockLevel(row)
+  }, 0)
+
+  if (isShopLocation(selected.locationName) || isShopLocation(normaliseText(payload.sale_location))) {
+    try {
+      results.telegram = await sendTelegramMessage(
+        `Stock adjusted: ${sku}\nDelta: ${delta}\nLocation: ${selected.locationName}\nBin: ${binRack}\nLocation stock: ${selected.stockLevel} → ${selected.newStockLevel}\nTotal stock: ${totalStockLevel}\nReason: ${payload.reason || 'adjust_stock'}`
+      )
+    } catch (error: any) {
+      results.telegram = { ok: false, error: error.message }
+    }
+  }
+
+  await supabase
+    .from('items')
+    .update({
+      stock_level: totalStockLevel,
+      current_location: selected.locationName,
+      current_bin: binRack,
+      linnworks_location_sync_status: 'synced',
+      linnworks_location_synced_at: new Date().toISOString(),
+      linnworks_status: 'synced',
+      linnworks_sync_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('sku', sku)
+
+  return {
+    sku,
+    stockItemId,
+    action: 'adjust_stock',
+    delta,
+    previousLocationStock: selected.stockLevel,
+    newLocationStock: selected.newStockLevel,
+    totalStockLevel,
+    stockValue,
+    locationName: selected.locationName,
+    locationId: selected.locationId,
+    binRack,
+    selectionReason: selected.selectionReason,
+    results,
+  }
 }
 
 async function processUpdateStockQueueRow(params: {
@@ -304,7 +680,7 @@ async function processUpdateStockQueueRow(params: {
   if (isShopLocation(locationName)) {
     try {
       results.telegram = await sendTelegramMessage(
-        `Stock sync: ${sku}\nLocation: ${locationName}\nBin: ${binRack}\nStock level: ${stockLevel}\nReason: ${payload.reason || 'update_stock'}`
+        `Stock set: ${sku}\nLocation: ${locationName}\nBin: ${binRack}\nStock level: ${stockLevel}\nReason: ${payload.reason || 'update_stock'}`
       )
     } catch (error: any) {
       results.telegram = { ok: false, error: error.message }
@@ -328,6 +704,7 @@ async function processUpdateStockQueueRow(params: {
   return {
     sku,
     stockItemId,
+    action: 'update_stock',
     stockLevel,
     stockValue,
     locationName,
@@ -385,8 +762,17 @@ async function processQueue(request: Request) {
 
       try {
         let result: any = null
+        const action = normaliseAction(row.action)
 
-        if (row.action === 'update_stock') {
+        if (action === 'adjust_stock') {
+          result = await processAdjustStockQueueRow({
+            row,
+            supabase,
+            server,
+            token,
+            locations: Array.isArray(locations) ? locations : [],
+          })
+        } else if (action === 'update_stock') {
           result = await processUpdateStockQueueRow({
             row,
             supabase,
