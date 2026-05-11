@@ -102,54 +102,74 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+function normaliseAction(value: any) {
+  return normaliseText(value).toLowerCase()
+}
+
 function getLocationName(row: any) {
   return normaliseText(
-    row.LocationName ||
-      row.locationName ||
-      row.StockLocationName ||
-      row.stockLocationName ||
-      row.Name ||
-      row.name
+    row?.LocationName ||
+      row?.locationName ||
+      row?.StockLocationName ||
+      row?.stockLocationName ||
+      row?.Location ||
+      row?.location ||
+      row?.Name ||
+      row?.name
   )
 }
 
 function getLocationId(row: any) {
   return (
-    row.StockLocationId ||
-    row.stockLocationId ||
-    row.pkStockLocationId ||
-    row.LocationId ||
-    row.locationId ||
-    row.Id ||
-    row.id ||
+    row?.StockLocationId ||
+    row?.stockLocationId ||
+    row?.pkStockLocationId ||
+    row?.LocationId ||
+    row?.locationId ||
+    row?.FKStockLocationId ||
+    row?.fkStockLocationId ||
+    row?.Id ||
+    row?.id ||
     null
   )
 }
 
 function getStockLevel(row: any) {
   return (
-    normaliseNumber(row.StockLevel) ??
-    normaliseNumber(row.stockLevel) ??
-    normaliseNumber(row.Quantity) ??
-    normaliseNumber(row.quantity) ??
-    normaliseNumber(row.Available) ??
-    normaliseNumber(row.available) ??
-    normaliseNumber(row.Level) ??
-    normaliseNumber(row.level) ??
-    normaliseNumber(row.OnHand) ??
-    normaliseNumber(row.onHand) ??
+    normaliseNumber(row?.StockLevel) ??
+    normaliseNumber(row?.stockLevel) ??
+    normaliseNumber(row?.Level) ??
+    normaliseNumber(row?.level) ??
+    normaliseNumber(row?.Quantity) ??
+    normaliseNumber(row?.quantity) ??
+    normaliseNumber(row?.Available) ??
+    normaliseNumber(row?.available) ??
+    normaliseNumber(row?.OnHand) ??
+    normaliseNumber(row?.onHand) ??
+    normaliseNumber(row?.InStock) ??
+    normaliseNumber(row?.inStock) ??
     0
+  )
+}
+
+function getStockValue(row: any) {
+  return (
+    normaliseNumber(row?.StockValue) ??
+    normaliseNumber(row?.stockValue) ??
+    normaliseNumber(row?.Value) ??
+    normaliseNumber(row?.value) ??
+    null
   )
 }
 
 function getBinRack(row: any) {
   return normaliseText(
-    row.BinRack ||
-      row.binRack ||
-      row.Binrack ||
-      row.binrack ||
-      row.Bin ||
-      row.bin
+    row?.BinRack ||
+      row?.binRack ||
+      row?.Binrack ||
+      row?.binrack ||
+      row?.Bin ||
+      row?.bin
   )
 }
 
@@ -232,9 +252,147 @@ async function getInventoryItemLocations(server: string, token: string, stockIte
     `/api/Inventory/GetInventoryItemLocations?inventoryItemId=${encodeURIComponent(stockItemId)}`
   )
 
-  if (!Array.isArray(data)) return []
+  return Array.isArray(data) ? data : []
+}
 
-  return data
+async function getStockItemsFull(server: string, token: string, sku: string) {
+  return await linnworksPost(server, token, '/api/Stock/GetStockItemsFull', {
+    keyword: sku,
+    searchTypes: ['SKU'],
+    dataRequirements: ['StockLevels'],
+    entriesPerPage: 1,
+    pageNumber: 1,
+    loadCompositeParents: false,
+    loadVariationParents: false,
+  })
+}
+
+function getStockItemsFromFullResponse(data: any) {
+  if (!data) return []
+
+  if (Array.isArray(data)) return data
+
+  const candidates = [
+    data.Data,
+    data.data,
+    data.Items,
+    data.items,
+    data.StockItems,
+    data.stockItems,
+    data.Results,
+    data.results,
+  ]
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate
+  }
+
+  return [data]
+}
+
+function getStockLevelsFromFullItem(item: any) {
+  const candidates = [
+    item?.StockLevels,
+    item?.stockLevels,
+    item?.StockItemLevels,
+    item?.stockItemLevels,
+    item?.Levels,
+    item?.levels,
+    item?.Locations,
+    item?.locations,
+    item?.LocationStockLevels,
+    item?.locationStockLevels,
+  ]
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate
+  }
+
+  return []
+}
+
+function getSkuFromFullItem(item: any) {
+  return normaliseText(
+    item?.SKU ||
+      item?.Sku ||
+      item?.sku ||
+      item?.ItemNumber ||
+      item?.itemNumber ||
+      item?.ItemNumberSKU ||
+      item?.itemNumberSKU
+  )
+}
+
+function getStockItemIdFromFullItem(item: any) {
+  return (
+    item?.StockItemId ||
+    item?.stockItemId ||
+    item?.Id ||
+    item?.id ||
+    item?.Item?.StockItemId ||
+    item?.item?.stockItemId ||
+    null
+  )
+}
+
+async function getLinnworksStockRows(params: {
+  server: string
+  token: string
+  sku: string
+  stockItemId: string
+  locations: any[]
+}) {
+  const { server, token, sku, stockItemId, locations } = params
+
+  const [stockFullRaw, locationRows] = await Promise.all([
+    getStockItemsFull(server, token, sku),
+    getInventoryItemLocations(server, token, stockItemId),
+  ])
+
+  const fullItems = getStockItemsFromFullResponse(stockFullRaw)
+  const fullItem =
+    fullItems.find((item) => getSkuFromFullItem(item).toLowerCase() === sku.toLowerCase()) ||
+    fullItems[0] ||
+    null
+
+  const stockLevelRows = fullItem ? getStockLevelsFromFullItem(fullItem) : []
+
+  const mappedRows = stockLevelRows.map((stockRow) => {
+    const locationId = getLocationId(stockRow)
+    const matchingLocationRow =
+      locationId
+        ? locationRows.find(
+            (row) =>
+              String(getLocationId(row) || '').toLowerCase() ===
+              String(locationId).toLowerCase()
+          )
+        : null
+
+    const locationName =
+      getLocationName(stockRow) ||
+      getLocationName(matchingLocationRow) ||
+      (locationId ? findLocationNameById(locations, locationId) : '') ||
+      ''
+
+    return {
+      raw: stockRow,
+      locationRaw: matchingLocationRow,
+      locationId,
+      locationName,
+      stockLevel: getStockLevel(stockRow),
+      stockValue: getStockValue(stockRow),
+      binRack: getBinRack(stockRow) || getBinRack(matchingLocationRow),
+    }
+  })
+
+  return {
+    stockFullRaw,
+    fullItems,
+    fullItem,
+    stockLevelRows,
+    locationRows,
+    mappedRows,
+  }
 }
 
 async function updateStockField(
@@ -296,10 +454,6 @@ function isShopLocation(locationName: string) {
   return value.startsWith('shop') || value.includes('shop-')
 }
 
-function normaliseAction(value: any) {
-  return normaliseText(value).toLowerCase()
-}
-
 function getLocationPriority(locationName: string, payload: any, item: any) {
   const value = locationName.toLowerCase()
   const payloadLocation = normaliseText(payload.location).toLowerCase()
@@ -319,31 +473,12 @@ function getLocationPriority(locationName: string, payload: any, item: any) {
 }
 
 function chooseLocationForAdjustment(params: {
-  linnworksLocationRows: any[]
-  locations: any[]
+  stockRows: any[]
   payload: any
   item: any
   delta: number
 }) {
-  const { linnworksLocationRows, locations, payload, item, delta } = params
-
-  const rows = linnworksLocationRows.map((row) => {
-    const locationId = getLocationId(row)
-    const locationName =
-      getLocationName(row) ||
-      (locationId ? findLocationNameById(locations, locationId) : '') ||
-      ''
-    const stockLevel = getStockLevel(row)
-    const binRack = getBinRack(row)
-
-    return {
-      raw: row,
-      locationId,
-      locationName,
-      stockLevel,
-      binRack,
-    }
-  })
+  const { stockRows, payload, item, delta } = params
 
   const wantedLocation =
     normaliseText(payload.location) ||
@@ -351,12 +486,11 @@ function chooseLocationForAdjustment(params: {
     ''
 
   const wantedLocationLower = wantedLocation.toLowerCase()
-
-  const rowsWithStock = rows.filter((row) => row.locationId && row.stockLevel > 0)
+  const rowsWithStock = stockRows.filter((row) => row.locationId && row.stockLevel > 0)
 
   if (delta < 0) {
     if (wantedLocationLower) {
-      const exactWanted = rows.find(
+      const exactWanted = stockRows.find(
         (row) => row.locationName.toLowerCase() === wantedLocationLower
       )
 
@@ -403,12 +537,12 @@ function chooseLocationForAdjustment(params: {
       }
     }
 
-    throw new Error(`No Linnworks location has stock available to deduct.`)
+    throw new Error('No Linnworks location has stock available to deduct.')
   }
 
   if (delta > 0) {
     if (wantedLocationLower) {
-      const exactWanted = rows.find(
+      const exactWanted = stockRows.find(
         (row) => row.locationName.toLowerCase() === wantedLocationLower
       )
 
@@ -424,7 +558,7 @@ function chooseLocationForAdjustment(params: {
     const itemLocation = normaliseText(item?.current_location).toLowerCase()
 
     if (itemLocation) {
-      const itemLocationRow = rows.find(
+      const itemLocationRow = stockRows.find(
         (row) => row.locationName.toLowerCase() === itemLocation
       )
 
@@ -438,8 +572,8 @@ function chooseLocationForAdjustment(params: {
     }
 
     const defaultRow =
-      rows.find((row) => row.locationName.toLowerCase() === 'default') ||
-      rows[0]
+      stockRows.find((row) => row.locationName.toLowerCase() === 'default') ||
+      stockRows[0]
 
     if (!defaultRow?.locationId) {
       throw new Error('Could not find a Linnworks location to increment.')
@@ -496,8 +630,48 @@ async function processDebugLocationsQueueRow(params: {
   return {
     sku,
     stockItemId,
+    note: 'Inventory/GetInventoryItemLocations does not include stock quantity. Use debug_stock_full for live stock levels.',
     rawLocationRows,
     mappedRows,
+  }
+}
+
+async function processDebugStockFullQueueRow(params: {
+  row: any
+  server: string
+  token: string
+  locations: any[]
+}) {
+  const { row, server, token, locations } = params
+  const payload = row.payload || {}
+
+  const sku = normaliseText(payload.sku || row.sku)
+  if (!sku) throw new Error('Missing SKU in queue payload.')
+
+  const stockItemId =
+    normaliseText(payload.linnworks_item_id) ||
+    normaliseText(payload.stockItemId) ||
+    (await findLinnworksItemBySku(server, token, sku))
+
+  if (!stockItemId) {
+    throw new Error(`Could not find Linnworks item for SKU ${sku}`)
+  }
+
+  const stockData = await getLinnworksStockRows({
+    server,
+    token,
+    sku,
+    stockItemId,
+    locations,
+  })
+
+  return {
+    sku,
+    stockItemId,
+    stockFullRaw: stockData.stockFullRaw,
+    stockLevelRows: stockData.stockLevelRows,
+    locationRows: stockData.locationRows,
+    mappedRows: stockData.mappedRows,
   }
 }
 
@@ -539,11 +713,20 @@ async function processAdjustStockQueueRow(params: {
 
   const item = itemResult.data
 
-  const linnworksLocationRows = await getInventoryItemLocations(server, token, stockItemId)
+  const stockData = await getLinnworksStockRows({
+    server,
+    token,
+    sku,
+    stockItemId,
+    locations,
+  })
+
+  if (stockData.mappedRows.length === 0) {
+    throw new Error('No Linnworks stock-level rows returned from GetStockItemsFull.')
+  }
 
   const selected = chooseLocationForAdjustment({
-    linnworksLocationRows,
-    locations,
+    stockRows: stockData.mappedRows,
     payload: { ...payload, sku },
     item,
     delta,
@@ -584,24 +767,22 @@ async function processAdjustStockQueueRow(params: {
     })
   }
 
-  const updatedLocationRows = linnworksLocationRows.map((row) => {
-    const rowLocationId = getLocationId(row)
-
+  const updatedStockRows = stockData.mappedRows.map((row) => {
     if (
-      rowLocationId &&
+      row.locationId &&
       selected.locationId &&
-      String(rowLocationId).toLowerCase() === String(selected.locationId).toLowerCase()
+      String(row.locationId).toLowerCase() === String(selected.locationId).toLowerCase()
     ) {
       return {
         ...row,
-        StockLevel: selected.newStockLevel,
+        stockLevel: selected.newStockLevel,
       }
     }
 
     return row
   })
 
-  const totalStockLevel = updatedLocationRows.reduce((sum, row) => {
+  const totalStockLevel = updatedStockRows.reduce((sum, row) => {
     return sum + getStockLevel(row)
   }, 0)
 
@@ -642,6 +823,7 @@ async function processAdjustStockQueueRow(params: {
     locationId: selected.locationId,
     binRack,
     selectionReason: selected.selectionReason,
+    stockRowsUsed: stockData.mappedRows,
     results,
   }
 }
@@ -814,7 +996,14 @@ async function processQueue(request: Request) {
         let result: any = null
         const action = normaliseAction(row.action)
 
-        if (action === 'debug_locations') {
+        if (action === 'debug_stock_full') {
+          result = await processDebugStockFullQueueRow({
+            row,
+            server,
+            token,
+            locations: Array.isArray(locations) ? locations : [],
+          })
+        } else if (action === 'debug_locations') {
           result = await processDebugLocationsQueueRow({
             row,
             server,
