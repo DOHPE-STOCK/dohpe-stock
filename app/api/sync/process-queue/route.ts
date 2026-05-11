@@ -108,12 +108,12 @@ function normaliseAction(value: any) {
 
 function getLocationName(row: any) {
   return normaliseText(
-    row?.LocationName ||
+    row?.Location?.LocationName ||
+      row?.Location?.locationName ||
+      row?.LocationName ||
       row?.locationName ||
       row?.StockLocationName ||
       row?.stockLocationName ||
-      row?.Location ||
-      row?.location ||
       row?.Name ||
       row?.name
   )
@@ -121,6 +121,11 @@ function getLocationName(row: any) {
 
 function getLocationId(row: any) {
   return (
+    row?.Location?.StockLocationId ||
+    row?.Location?.stockLocationId ||
+    row?.Location?.pkStockLocationId ||
+    row?.Location?.LocationId ||
+    row?.Location?.locationId ||
     row?.StockLocationId ||
     row?.stockLocationId ||
     row?.pkStockLocationId ||
@@ -164,7 +169,9 @@ function getStockValue(row: any) {
 
 function getBinRack(row: any) {
   return normaliseText(
-    row?.BinRack ||
+    row?.Location?.BinRack ||
+      row?.Location?.binRack ||
+      row?.BinRack ||
       row?.binRack ||
       row?.Binrack ||
       row?.binrack ||
@@ -269,7 +276,6 @@ async function getStockItemsFull(server: string, token: string, sku: string) {
 
 function getStockItemsFromFullResponse(data: any) {
   if (!data) return []
-
   if (Array.isArray(data)) return data
 
   const candidates = [
@@ -323,18 +329,6 @@ function getSkuFromFullItem(item: any) {
   )
 }
 
-function getStockItemIdFromFullItem(item: any) {
-  return (
-    item?.StockItemId ||
-    item?.stockItemId ||
-    item?.Id ||
-    item?.id ||
-    item?.Item?.StockItemId ||
-    item?.item?.stockItemId ||
-    null
-  )
-}
-
 async function getLinnworksStockRows(params: {
   server: string
   token: string
@@ -359,14 +353,14 @@ async function getLinnworksStockRows(params: {
 
   const mappedRows = stockLevelRows.map((stockRow) => {
     const locationId = getLocationId(stockRow)
-    const matchingLocationRow =
-      locationId
-        ? locationRows.find(
-            (row) =>
-              String(getLocationId(row) || '').toLowerCase() ===
-              String(locationId).toLowerCase()
-          )
-        : null
+
+    const matchingLocationRow = locationId
+      ? locationRows.find(
+          (row) =>
+            String(getLocationId(row) || '').toLowerCase() ===
+            String(locationId).toLowerCase()
+        )
+      : null
 
     const locationName =
       getLocationName(stockRow) ||
