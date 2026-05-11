@@ -777,7 +777,7 @@ async function processAdjustStockQueueRow(params: {
   })
 
   const totalStockLevel = updatedStockRows.reduce((sum, row) => {
-    return sum + getStockLevel(row)
+    return sum + (normaliseNumber(row.stockLevel) ?? 0)
   }, 0)
 
   if (isShopLocation(selected.locationName) || isShopLocation(normaliseText(payload.sale_location))) {
@@ -1089,19 +1089,12 @@ async function processQueue(request: Request) {
 }
 
 export async function POST(request: Request) {
-  // Auth temporarily disabled for browser testing.
-  // Re-enable this before using Vercel Cron/public production access.
-  //
-  // const authHeader = request.headers.get('authorization')
-  // const cronSecret = process.env.SYNC_CRON_SECRET
-  //
-  // if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-  //   return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
-  // }
+  const authHeader = request.headers.get('authorization')
+  const cronSecret = process.env.SYNC_CRON_SECRET
 
-  return processQueue(request)
-}
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
+  }
 
-export async function GET(request: Request) {
   return processQueue(request)
 }
