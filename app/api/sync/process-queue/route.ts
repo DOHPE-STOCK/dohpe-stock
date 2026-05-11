@@ -337,15 +337,8 @@ async function processUpdateStockQueueRow(params: {
   }
 }
 
-export async function POST(request: Request) {
+async function processQueue(request: Request) {
   const startedAt = new Date().toISOString()
-
-  const authHeader = request.headers.get('authorization')
-  const cronSecret = process.env.SYNC_CRON_SECRET
-
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
-  }
 
   try {
     const supabase = getSupabaseAdmin()
@@ -467,4 +460,22 @@ export async function POST(request: Request) {
       { status: 500 }
     )
   }
+}
+
+export async function POST(request: Request) {
+  // Auth temporarily disabled for browser testing.
+  // Re-enable this before using Vercel Cron/public production access.
+  //
+  // const authHeader = request.headers.get('authorization')
+  // const cronSecret = process.env.SYNC_CRON_SECRET
+  //
+  // if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  //   return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
+  // }
+
+  return processQueue(request)
+}
+
+export async function GET(request: Request) {
+  return processQueue(request)
 }
