@@ -1090,7 +1090,18 @@ async function processQueue(request: Request) {
 
 export async function POST(request: Request) {
   const authHeader = request.headers.get('authorization')
-  const cronSecret = process.env.SYNC_CRON_SECRET
+  const cronSecret = process.env.CRON_SECRET
+
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
+  }
+
+  return processQueue(request)
+}
+
+export async function GET(request: Request) {
+  const authHeader = request.headers.get('authorization')
+  const cronSecret = process.env.CRON_SECRET
 
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
