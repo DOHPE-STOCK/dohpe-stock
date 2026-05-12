@@ -14,6 +14,86 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function text(value: any) {
+  if (value === null || value === undefined) return ''
+  return String(value).trim()
+}
+
+async function existingSaleCheck(supabase: any, sale: any) {
+  const saleId = text(sale?.id)
+  const saleNumber = text(sale?.sale_number)
+
+  if (!saleId && !saleNumber) return null
+
+  let query = supabase.from('pos_sales').select('id, sale_number').limit(1)
+
+  if (saleId && saleNumber) {
+    query = query.or(`id.eq.${saleId},sale_number.eq.${saleNumber}`)
+  } else if (saleId) {
+    query = query.eq('id', saleId)
+  } else {
+    query = query.eq('sale_number', saleNumber)
+  }
+
+  const { data, error } = await query.maybeSingle()
+
+  if (error) throw new Error(`existing sale check failed: ${error.message}`)
+
+  return data
+}
+
+async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
+  let inserted = 0
+  let skipped = 0
+
+  for (const queueRow of queueRows) {
+    const saleId = text(queueRow?.payload?.sale_id)
+    const saleNumber = text(queueRow?.payload?.sale_number)
+    const sku = text(queueRow?.sku || queueRow?.payload?.sku)
+    const reason = text(queueRow?.payload?.reason)
+    const delta = text(queueRow?.payload?.delta)
+    const action = text(queueRow?.action)
+
+    if (!saleId || !sku || !reason || !action) {
+      const { error } = await supabase.from('linnworks_sync_queue').insert(queueRow)
+      if (error) throw new Error(`queue insert failed: ${error.message}`)
+      inserted += 1
+      continue
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from('linnworks_sync_queue')
+      .select('id')
+      .eq('sku', sku)
+      .eq('action', action)
+      .eq('payload->>sale_id', saleId)
+      .eq('payload->>reason', reason)
+      .eq('payload->>delta', delta)
+      .limit(1)
+
+    if (existingError) {
+      throw new Error(`queue duplicate check failed: ${existingError.message}`)
+    }
+
+    if (existing && existing.length > 0) {
+      skipped += 1
+      continue
+    }
+
+    const { error: insertError } = await supabase
+      .from('linnworks_sync_queue')
+      .insert(queueRow)
+
+    if (insertError) {
+      throw new Error(`queue insert failed: ${insertError.message}`)
+    }
+
+    inserted += 1
+  }
+
+  return { inserted, skipped }
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
@@ -28,60 +108,48 @@ export async function POST(request: Request) {
       )
     }
 
-    const { data: existingSale, error: existingSaleError } = await supabase
-      .from('pos_sales')
-      .select('id, sale_number')
-      .eq('id', sale.id)
-      .maybeSingle()
-
-    if (existingSaleError) {
-      throw new Error(`existing sale check failed: ${existingSaleError.message}`)
-    }
+    const existingSale = await existingSaleCheck(supabase, sale)
 
     if (existingSale) {
       return NextResponse.json({
         ok: true,
-        duplicate: true,
-        sale_number: existingSale.sale_number,
+        idempotent: true,
+        message: 'Transaction already saved.',
         sale_id: existingSale.id,
-        queue_rows: 0,
+        sale_number: existingSale.sale_number,
+        queue_rows_inserted: 0,
+        queue_rows_skipped: 0,
         lines: 0,
       })
     }
 
-    const { error: saleError } = await supabase.from('pos_sales').insert(sale)
+    const { error: saleError } = await supabase
+      .from('pos_sales')
+      .insert(sale)
 
-    if (saleError) {
-      throw new Error(`pos_sales insert failed: ${saleError.message}`)
-    }
+    if (saleError) throw new Error(`pos_sales insert failed: ${saleError.message}`)
 
     if (Array.isArray(lines) && lines.length > 0) {
-      const { error: linesError } = await supabase.from('pos_sale_lines').insert(lines)
+      const { error: linesError } = await supabase
+        .from('pos_sale_lines')
+        .insert(lines)
 
-      if (linesError) {
-        throw new Error(`pos_sale_lines insert failed: ${linesError.message}`)
-      }
+      if (linesError) throw new Error(`pos_sale_lines insert failed: ${linesError.message}`)
     }
 
-    if (Array.isArray(queueRows) && queueRows.length > 0) {
-      const { error: queueError } = await supabase.from('linnworks_sync_queue').insert(queueRows)
-
-      if (queueError) {
-        throw new Error(`queue insert failed: ${queueError.message}`)
-      }
-    }
+    const queueResult = Array.isArray(queueRows) && queueRows.length > 0
+      ? await insertQueueRowsIdempotently(supabase, queueRows)
+      : { inserted: 0, skipped: 0 }
 
     if (Array.isArray(lines)) {
-      for (const line of lines.filter((row: any) => row.original_line_id)) {
+      for (const line of lines.filter((line: any) => line.original_line_id)) {
         const { data: originalLine, error: readError } = await supabase
           .from('pos_sale_lines')
           .select('refunded_quantity')
           .eq('id', line.original_line_id)
           .maybeSingle()
 
-        if (readError) {
-          throw new Error(`refund read failed: ${readError.message}`)
-        }
+        if (readError) throw new Error(`refund read failed: ${readError.message}`)
 
         const currentRefunded = Number(originalLine?.refunded_quantity || 0)
 
@@ -92,9 +160,7 @@ export async function POST(request: Request) {
           })
           .eq('id', line.original_line_id)
 
-        if (updateError) {
-          throw new Error(`refund quantity update failed: ${updateError.message}`)
-        }
+        if (updateError) throw new Error(`refund quantity update failed: ${updateError.message}`)
       }
     }
 
@@ -102,7 +168,8 @@ export async function POST(request: Request) {
       ok: true,
       sale_number: sale.sale_number,
       sale_id: sale.id,
-      queue_rows: Array.isArray(queueRows) ? queueRows.length : 0,
+      queue_rows_inserted: queueResult.inserted,
+      queue_rows_skipped: queueResult.skipped,
       lines: Array.isArray(lines) ? lines.length : 0,
     })
   } catch (error: any) {
