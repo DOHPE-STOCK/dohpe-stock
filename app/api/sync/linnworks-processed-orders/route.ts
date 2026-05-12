@@ -358,17 +358,7 @@ async function processProcessedOrders(request: Request) {
         throw new Error(saleError.message)
       }
 
-      const { error: itemError } = await supabase
-        .from('items')
-        .update({
-          status: 'sold',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('sku', sku)
-
-      if (itemError) {
-        throw new Error(itemError.message)
-      }
+      
 
       results.push({
         ok: true,
