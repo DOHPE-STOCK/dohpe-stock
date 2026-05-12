@@ -105,7 +105,9 @@ function getLineTitle(item: ItemRow) {
 
 function CardBadge({ children, className = '' }: { children: string; className?: string }) {
   return (
-    <span className={`inline-flex h-5 min-w-9 items-center justify-center rounded bg-white px-1 text-[9px] font-black shadow-sm ${className}`}>
+    <span
+      className={`inline-flex h-5 min-w-9 items-center justify-center rounded bg-white px-1 text-[9px] font-black shadow-sm ${className}`}
+    >
       {children}
     </span>
   )
@@ -150,12 +152,14 @@ export default function CheckoutPage() {
   const basketPercentDiscountAmount = saleSubtotal * (basketDiscountPercent / 100)
   const totalDiscount = Math.min(saleSubtotal, lineDiscountTotal + basketPercentDiscountAmount)
 
-  const subtotal = mode === 'exchange' ? saleSubtotal - exchangeCredit : saleSubtotal
-  const total = mode === 'refund'
-    ? returnSubtotal
-    : Math.max(0, saleSubtotal - totalDiscount - exchangeCredit)
+  const total =
+    mode === 'refund'
+      ? returnSubtotal
+      : Math.max(0, saleSubtotal - totalDiscount - exchangeCredit)
 
-  const balanceDue = mode === 'exchange' ? saleSubtotal - exchangeCredit - totalDiscount : total
+  const balanceDue =
+    mode === 'exchange' ? saleSubtotal - exchangeCredit - totalDiscount : total
+
   const refundDue = mode === 'exchange' ? Math.max(0, -balanceDue) : 0
   const payableTotal = Math.max(0, balanceDue)
   const displayedTotal = mode === 'exchange' ? payableTotal : total
@@ -179,6 +183,24 @@ export default function CheckoutPage() {
   const inputClass = darkMode
     ? 'w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-xl font-semibold outline-none focus:border-white'
     : 'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-4 text-xl font-semibold outline-none focus:border-black'
+
+  async function writeTransactionOnline(tx: any) {
+    const response = await fetch('/api/pos/save-transaction', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(tx),
+    })
+
+    const data = await response.json().catch(() => null)
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.message || 'POS transaction API failed.')
+    }
+
+    return data
+  }
 
   const retryOfflineTransactions = useCallback(async () => {
     if (retryingRef.current) return
@@ -245,6 +267,7 @@ export default function CheckoutPage() {
       .maybeSingle()
 
     if (saleError) throw new Error(saleError.message)
+
     if (!sale) {
       setMessage(`Receipt not found: ${saleNumber}`)
       return
@@ -390,6 +413,7 @@ export default function CheckoutPage() {
             : line
         )
       )
+
       setMessage(`${percent}% discount applied to ${selectedLine.sku}.`)
       return
     }
@@ -487,7 +511,12 @@ export default function CheckoutPage() {
         payload: {
           sku: line.sku,
           delta: -line.quantity,
-          reason: action === 'exchange' ? 'pos_exchange_sale' : method === 'cash' ? 'pos_cash_sale' : 'pos_card_sale',
+          reason:
+            action === 'exchange'
+              ? 'pos_exchange_sale'
+              : method === 'cash'
+                ? 'pos_cash_sale'
+                : 'pos_card_sale',
           payment_method: method,
           sale_id: saleId,
           sale_number: saleNumber,
@@ -534,52 +563,28 @@ export default function CheckoutPage() {
           unit_price: Number(line.price.toFixed(2)),
           line_total: Number((line.price * line.quantity).toFixed(2)),
           discount_percent: line.lineDiscountPercent,
-          discount_amount: Number(((line.price * line.quantity) * (line.lineDiscountPercent / 100)).toFixed(2)),
+          discount_amount: Number(
+            ((line.price * line.quantity) * (line.lineDiscountPercent / 100)).toFixed(2)
+          ),
           original_line_id: line.originalLineId || null,
-          max_refundable_quantity: line.isReturnLine ? line.maxRefundQuantity || line.quantity : line.quantity,
+          max_refundable_quantity: line.isReturnLine
+            ? line.maxRefundQuantity || line.quantity
+            : line.quantity,
         })),
       queueRows,
-    }
-  }
-
-  async function writeTransactionOnline(tx: any) {
-    const { lines, queueRows, ...sale } = tx
-
-    const { error: saleError } = await supabase.from('pos_sales').insert(sale)
-    if (saleError) throw new Error(saleError.message)
-
-    if (lines.length > 0) {
-      const { error: linesError } = await supabase.from('pos_sale_lines').insert(lines)
-      if (linesError) throw new Error(linesError.message)
-    }
-
-    if (queueRows.length > 0) {
-      const { error: queueError } = await supabase.from('linnworks_sync_queue').insert(queueRows)
-      if (queueError) throw new Error(queueError.message)
-    }
-
-    for (const line of lines.filter((line: any) => line.original_line_id)) {
-      const { data: originalLine } = await supabase
-        .from('pos_sale_lines')
-        .select('refunded_quantity')
-        .eq('id', line.original_line_id)
-        .maybeSingle()
-
-      const currentRefunded = Number(originalLine?.refunded_quantity || 0)
-
-      await supabase
-        .from('pos_sale_lines')
-        .update({ refunded_quantity: currentRefunded + Number(line.quantity || 0) })
-        .eq('id', line.original_line_id)
     }
   }
 
   async function saveTransaction(tx: any) {
     try {
       await writeTransactionOnline(tx)
-    } catch {
+    } catch (error: any) {
+      console.error('POS_TRANSACTION_SAVE_FAILED', error)
+
       const pending = getOfflineTransactions()
       setOfflineTransactions([...pending, tx])
+
+      throw error
     }
   }
 
@@ -628,6 +633,7 @@ export default function CheckoutPage() {
 
   function beginExchange() {
     const selectedReturns = returnLines.filter((line) => line.quantity > 0)
+
     if (selectedReturns.length === 0) {
       setMessage('Select at least one item and quantity to exchange.')
       return
@@ -697,7 +703,11 @@ export default function CheckoutPage() {
           </form>
 
           {message && (
-            <div className={`mt-3 rounded-2xl p-3 text-sm font-semibold ${darkMode ? 'bg-neutral-800' : 'bg-neutral-100'}`}>
+            <div
+              className={`mt-3 rounded-2xl p-3 text-sm font-semibold ${
+                darkMode ? 'bg-neutral-800' : 'bg-neutral-100'
+              }`}
+            >
               {message}
             </div>
           )}
@@ -746,7 +756,11 @@ export default function CheckoutPage() {
                     <div className="flex items-center gap-3">
                       <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-neutral-800">
                         {line.thumbnailUrl ? (
-                          <img src={line.thumbnailUrl} alt={line.sku} className="h-full w-full object-cover" />
+                          <img
+                            src={line.thumbnailUrl}
+                            alt={line.sku}
+                            className="h-full w-full object-cover"
+                          />
                         ) : (
                           <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-neutral-400">
                             NO IMG
@@ -757,9 +771,13 @@ export default function CheckoutPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-black">{line.brand || 'Unknown Brand'}</p>
+                            <p className="truncate text-sm font-black">
+                              {line.brand || 'Unknown Brand'}
+                            </p>
                             <p className={`truncate text-xs ${mutedText}`}>
-                              {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') || line.title}
+                              {[line.category, line.subType, line.colour]
+                                .filter(Boolean)
+                                .join(' · ') || line.title}
                             </p>
                             <p className={`truncate text-[11px] ${mutedText}`}>{line.sku}</p>
                           </div>
@@ -784,7 +802,9 @@ export default function CheckoutPage() {
                             >
                               −
                             </span>
-                            <span className="min-w-8 text-center text-sm font-black">{line.quantity}</span>
+                            <span className="min-w-8 text-center text-sm font-black">
+                              {line.quantity}
+                            </span>
                             <span
                               onClick={(event) => {
                                 event.stopPropagation()
@@ -801,7 +821,9 @@ export default function CheckoutPage() {
                           )}
 
                           {line.lineDiscountPercent > 0 && (
-                            <span className="text-xs font-black text-emerald-400">{line.lineDiscountPercent}% off</span>
+                            <span className="text-xs font-black text-emerald-400">
+                              {line.lineDiscountPercent}% off
+                            </span>
                           )}
                         </div>
                       </div>
@@ -816,10 +838,18 @@ export default function CheckoutPage() {
         <section className={`${panelClass} p-4`}>
           {mode === 'sale' && (
             <div className="mb-3 grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => applyPercentDiscount(5)} className="rounded-2xl border border-current/20 py-3 font-black">
+              <button
+                type="button"
+                onClick={() => applyPercentDiscount(5)}
+                className="rounded-2xl border border-current/20 py-3 font-black"
+              >
                 5% off
               </button>
-              <button type="button" onClick={() => applyPercentDiscount(10)} className="rounded-2xl border border-current/20 py-3 font-black">
+              <button
+                type="button"
+                onClick={() => applyPercentDiscount(10)}
+                className="rounded-2xl border border-current/20 py-3 font-black"
+              >
                 10% off
               </button>
             </div>
@@ -832,28 +862,36 @@ export default function CheckoutPage() {
                 <span className="font-bold">−{money(exchangeCredit)}</span>
               </div>
             )}
+
             <div className="flex justify-between">
               <span className={mutedText}>Subtotal</span>
-              <span className="font-bold">{money(mode === 'refund' ? returnSubtotal : saleSubtotal)}</span>
+              <span className="font-bold">
+                {money(mode === 'refund' ? returnSubtotal : saleSubtotal)}
+              </span>
             </div>
+
             <div className="flex justify-between">
               <span className={mutedText}>Discount</span>
               <span className="font-bold">−{money(totalDiscount)}</span>
             </div>
+
             <div className="flex justify-between">
               <span className={mutedText}>Net</span>
               <span className="font-bold">{money(netAmount)}</span>
             </div>
+
             <div className="flex justify-between">
               <span className={mutedText}>VAT included at 20%</span>
               <span className="font-bold">{money(vatAmount)}</span>
             </div>
+
             {mode === 'exchange' && refundDue > 0 && (
               <div className="flex justify-between text-red-400">
                 <span>Refund due</span>
                 <span className="font-black">{money(refundDue)}</span>
               </div>
             )}
+
             <div className="flex items-end justify-between pt-2">
               <span className="text-lg font-black">
                 {mode === 'refund' ? 'Refund total' : mode === 'exchange' ? 'Balance due' : 'Total'}
@@ -864,13 +902,25 @@ export default function CheckoutPage() {
 
           {mode === 'refund' ? (
             <div className="mt-4 grid grid-cols-3 gap-2">
-              <button type="button" onClick={() => completeSale('cash')} className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black">
+              <button
+                type="button"
+                onClick={() => completeSale('cash')}
+                className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black"
+              >
                 CASH REFUND
               </button>
-              <button type="button" onClick={() => completeSale('card')} className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black">
+              <button
+                type="button"
+                onClick={() => completeSale('card')}
+                className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black"
+              >
                 CARD REFUND
               </button>
-              <button type="button" onClick={beginExchange} className="rounded-3xl bg-amber-100 py-4 text-sm font-black text-black">
+              <button
+                type="button"
+                onClick={beginExchange}
+                className="rounded-3xl bg-amber-100 py-4 text-sm font-black text-black"
+              >
                 EXCHANGE
               </button>
             </div>
@@ -916,8 +966,14 @@ export default function CheckoutPage() {
                     className={inputClass}
                     inputMode="decimal"
                   />
-                  <div className={`rounded-2xl p-3 text-right ${darkMode ? 'bg-neutral-950' : 'bg-neutral-100'}`}>
-                    <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
+                  <div
+                    className={`rounded-2xl p-3 text-right ${
+                      darkMode ? 'bg-neutral-950' : 'bg-neutral-100'
+                    }`}
+                  >
+                    <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>
+                      Change
+                    </p>
                     <p className="text-2xl font-black">{money(changeDue)}</p>
                   </div>
                 </div>
