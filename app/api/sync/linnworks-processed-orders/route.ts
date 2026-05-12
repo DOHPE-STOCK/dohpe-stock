@@ -199,7 +199,6 @@ function getShippingMethod(order: any) {
 
 function processedOrderContainsSku(order: any, sku: string) {
   const wanted = sku.toLowerCase()
-
   const items = getOrderItems(order)
 
   if (items.length === 0) return true
@@ -269,9 +268,7 @@ async function processProcessedOrders(request: Request) {
 
   try {
     const supabase = getSupabaseAdmin()
-
     const url = new URL(request.url)
-
     const debug = url.searchParams.get('debug') === 'true'
 
     const trackedSales = await getTrackedOpenSales(supabase, 200)
@@ -279,8 +276,8 @@ async function processProcessedOrders(request: Request) {
     const { server, token } = await authoriseLinnworks()
 
     const orderIds = trackedSales
-      .map((sale) => normaliseText(sale.linnworks_order_id))
-      .filter((id) => isUuid(id))
+      .map((sale: TrackedSale) => normaliseText(sale.linnworks_order_id))
+      .filter((id: string) => isUuid(id))
 
     const orders = await getOrdersById(server, token, orderIds)
 
@@ -335,9 +332,7 @@ async function processProcessedOrders(request: Request) {
         continue
       }
 
-      const processedAt =
-        getProcessedDate(order) || new Date().toISOString()
-
+      const processedAt = getProcessedDate(order) || new Date().toISOString()
       const trackingNumber = getTrackingNumber(order)
       const shippingVendor = getShippingVendor(order)
       const shippingMethod = getShippingMethod(order)
@@ -358,12 +353,23 @@ async function processProcessedOrders(request: Request) {
         throw new Error(saleError.message)
       }
 
-      
+      const { error: itemError } = await supabase
+        .from('items')
+        .update({
+          status: 'processed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('sku', sku)
+
+      if (itemError) {
+        throw new Error(itemError.message)
+      }
 
       results.push({
         ok: true,
         sku,
         linnworks_order_id: sale.linnworks_order_id,
+        item_status: 'processed',
         current_status: 'processed',
         processed_at: processedAt,
         tracking_number: trackingNumber || null,
@@ -377,8 +383,8 @@ async function processProcessedOrders(request: Request) {
       message: 'Linnworks processed orders checked.',
       started_at: startedAt,
       tracked_sale_count: trackedSales.length,
-      processed: results.filter((x) => x.ok && !x.skipped).length,
-      skipped: results.filter((x) => x.skipped).length,
+      processed: results.filter((x: any) => x.ok && !x.skipped).length,
+      skipped: results.filter((x: any) => x.skipped).length,
       failed: 0,
       debug,
       results,
