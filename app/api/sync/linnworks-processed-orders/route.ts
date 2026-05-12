@@ -1,3 +1,5 @@
+// app/api/sync/linnworks-processed-orders/route.ts
+
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
@@ -74,20 +76,8 @@ function normaliseText(value: any) {
   return String(value).trim()
 }
 
-function normaliseNumber(value: any) {
-  if (value === null || value === undefined || value === '') return null
-  const num = Number(value)
-  return Number.isFinite(num) ? num : null
-}
-
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
-}
-
-function isoDaysAgo(days: number) {
-  const date = new Date()
-  date.setUTCDate(date.getUTCDate() - days)
-  return date.toISOString()
 }
 
 function getArrayFromCandidates(data: any, keys: string[]) {
@@ -157,10 +147,10 @@ function getProcessedDate(order: any) {
     order?.dProcessedOn ||
       order?.ProcessedOn ||
       order?.processedOn ||
-      order?.ProcessDate ||
-      order?.processDate ||
       order?.ProcessedDate ||
-      order?.processedDate
+      order?.processedDate ||
+      order?.ProcessDate ||
+      order?.processDate
   )
 }
 
@@ -253,8 +243,6 @@ async function searchProcessedOrdersBySku(params: {
   server: string
   token: string
   sku: string
-  from: string
-  to: string
   pageNum: number
   entriesPerPage: number
 }) {
@@ -263,9 +251,9 @@ async function searchProcessedOrdersBySku(params: {
     params.token,
     '/api/ProcessedOrders/SearchProcessedOrdersPaged',
     {
-      from: params.from,
-      to: params.to,
-      dateType: 'PROCESSED',
+      from: null,
+      to: null,
+      dateType: 'ALLDATES',
       searchField: 'SKU',
       exactMatch: true,
       searchTerm: params.sku,
@@ -274,18 +262,36 @@ async function searchProcessedOrdersBySku(params: {
     }
   )
 
-  return getProcessedOrderRows(data)
+  return {
+    raw: data,
+    rows: getProcessedOrderRows(data),
+  }
 }
 
 function processedOrderContainsSku(order: any, sku: string) {
   const wanted = sku.toLowerCase()
   const items = getOrderItems(order)
 
-  if (items.length === 0) {
-    return true
-  }
+  if (items.length === 0) return true
 
   return items.some((item) => getItemSku(item).toLowerCase() === wanted)
+}
+
+function makeDebugCandidate(order: any, sku: string) {
+  return {
+    keys: Object.keys(order || {}),
+    order_uuid: getOrderUuid(order),
+    order_number: getOrderNumber(order),
+    order_reference: getOrderReference(order),
+    processed_at: getProcessedDate(order),
+    tracking_number: getTrackingNumber(order) || null,
+    shipping_vendor: getShippingVendor(order) || null,
+    shipping_method: getShippingMethod(order) || null,
+    contains_sku: processedOrderContainsSku(order, sku),
+    item_count: getOrderItems(order).length,
+    item_skus: getOrderItems(order).map(getItemSku).filter(Boolean).slice(0, 20),
+    raw_preview: order,
+  }
 }
 
 async function processProcessedOrders(request: Request) {
@@ -293,14 +299,15 @@ async function processProcessedOrders(request: Request) {
 
   try {
     const supabase = getSupabaseAdmin()
+    const url = new URL(request.url)
     const body = await request.json().catch(() => ({}))
 
-    const limit = Math.min(Number(body.limit || 100), 200)
-    const lookbackDays = Math.min(Number(body.lookbackDays || 30), 90)
-    const entriesPerPage = Math.min(Number(body.entriesPerPage || 200), 200)
+    const debug =
+      url.searchParams.get('debug') === 'true' ||
+      body.debug === true
 
-    const from = normaliseText(body.from) || isoDaysAgo(lookbackDays)
-    const to = normaliseText(body.to) || new Date().toISOString()
+    const limit = Math.min(Number(body.limit || 100), 200)
+    const entriesPerPage = Math.min(Number(body.entriesPerPage || 200), 200)
 
     const trackedSales = await getTrackedOpenSales(supabase, limit)
 
@@ -331,18 +338,18 @@ async function processProcessedOrders(request: Request) {
 
     const results: any[] = []
 
-    for (const [skuKey, sales] of salesBySku.entries()) {
+    for (const [, sales] of salesBySku.entries()) {
       const sku = sales[0].sku
 
-      const processedOrders = await searchProcessedOrdersBySku({
+      const searchResult = await searchProcessedOrdersBySku({
         server,
         token,
         sku,
-        from,
-        to,
         pageNum: 1,
         entriesPerPage,
       })
+
+      const processedOrders = searchResult.rows
 
       for (const sale of sales) {
         const wantedOrderId = normaliseText(sale.linnworks_order_id).toLowerCase()
@@ -360,6 +367,14 @@ async function processProcessedOrders(request: Request) {
             sku,
             linnworks_order_id: sale.linnworks_order_id,
             reason: 'Not processed yet',
+            processed_candidate_count: processedOrders.length,
+            debug_candidates: debug
+              ? processedOrders.slice(0, 10).map((order) => makeDebugCandidate(order, sku))
+              : undefined,
+            debug_raw_keys: debug && searchResult.raw && typeof searchResult.raw === 'object'
+              ? Object.keys(searchResult.raw)
+              : undefined,
+            debug_raw_preview: debug ? searchResult.raw : undefined,
           })
           continue
         }
@@ -408,6 +423,7 @@ async function processProcessedOrders(request: Request) {
           tracking_url: trackingUrl || null,
           shipping_vendor: shippingVendor || null,
           shipping_method: shippingMethod || null,
+          debug_matched_order: debug ? makeDebugCandidate(matchedOrder, sku) : undefined,
         })
       }
     }
@@ -420,6 +436,7 @@ async function processProcessedOrders(request: Request) {
       processed: results.filter((row) => row.ok && !row.skipped).length,
       skipped: results.filter((row) => row.skipped).length,
       failed: 0,
+      debug,
       results,
     })
   } catch (error: any) {
