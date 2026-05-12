@@ -418,7 +418,23 @@ async function updateStockField(
   )
 }
 
-async function sendTelegramMessage(message: string) {
+async function getItemThumbnailUrl(supabase: any, itemId: string | null | undefined) {
+  if (!itemId) return ''
+
+  const { data, error } = await supabase
+    .from('item_images')
+    .select('processed_url, original_url')
+    .eq('item_id', itemId)
+    .order('image_order', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (error || !data) return ''
+
+  return normaliseText(data.processed_url || data.original_url)
+}
+
+async function sendTelegramMessage(message: string, photoUrl?: string) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN
   const chatId = process.env.TELEGRAM_CHAT_ID
 
@@ -426,13 +442,25 @@ async function sendTelegramMessage(message: string) {
     return { skipped: true, reason: 'Telegram env vars missing' }
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+  const url = photoUrl
+    ? `https://api.telegram.org/bot${botToken}/sendPhoto`
+    : `https://api.telegram.org/bot${botToken}/sendMessage`
+
+  const body = photoUrl
+    ? {
+        chat_id: chatId,
+        photo: photoUrl,
+        caption: message,
+      }
+    : {
+        chat_id: chatId,
+        text: message,
+      }
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: message,
-    }),
+    body: JSON.stringify(body),
   })
 
   if (!response.ok) {
@@ -440,7 +468,32 @@ async function sendTelegramMessage(message: string) {
     throw new Error(`Telegram send failed: ${text}`)
   }
 
-  return { ok: true }
+  return { ok: true, with_photo: Boolean(photoUrl) }
+}
+
+function formatTelegramReason(payload: any) {
+  const rawReason = normaliseText(payload.reason)
+
+  if (!rawReason) return 'Stock update'
+
+  const value = rawReason.toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ')
+
+  if (value.includes('online') && value.includes('sale')) return 'Online sale'
+  if (value.includes('stock update')) return 'Stock update'
+  if (value.includes('manual')) return 'Manual adjustment'
+  if (value.includes('loan')) return 'Loan'
+
+  return rawReason
+}
+
+function shouldSendTelegramForUpdateStock(payload: any) {
+  const reason = normaliseText(payload.reason).toLowerCase()
+
+  if (reason.includes('loan')) return false
+  if (reason.includes('manual')) return false
+  if (reason.includes('adjust')) return false
+
+  return true
 }
 
 function isShopLocation(locationName: string) {
@@ -780,16 +833,6 @@ async function processAdjustStockQueueRow(params: {
     return sum + (normaliseNumber(row.stockLevel) ?? 0)
   }, 0)
 
-  if (isShopLocation(selected.locationName) || isShopLocation(normaliseText(payload.sale_location))) {
-    try {
-      results.telegram = await sendTelegramMessage(
-        `Stock adjusted: ${sku}\nDelta: ${delta}\nLocation: ${selected.locationName}\nBin: ${binRack}\nLocation stock: ${selected.stockLevel} → ${selected.newStockLevel}\nTotal stock: ${totalStockLevel}\nReason: ${payload.reason || 'adjust_stock'}`
-      )
-    } catch (error: any) {
-      results.telegram = { ok: false, error: error.message }
-    }
-  }
-
   await supabase
     .from('items')
     .update({
@@ -817,6 +860,7 @@ async function processAdjustStockQueueRow(params: {
     locationId: selected.locationId,
     binRack,
     selectionReason: selected.selectionReason,
+    telegram: { skipped: true, reason: 'No Telegram notification for adjust_stock/manual/loan actions' },
     stockRowsUsed: stockData.mappedRows,
     results,
   }
@@ -903,13 +947,26 @@ async function processUpdateStockQueueRow(params: {
     })
   }
 
-  if (isShopLocation(locationName)) {
+  if (shouldSendTelegramForUpdateStock(payload)) {
     try {
+      const thumbnailUrl = await getItemThumbnailUrl(supabase, item?.id)
+      const reason = formatTelegramReason(payload)
+
       results.telegram = await sendTelegramMessage(
-        `Stock set: ${sku}\nLocation: ${locationName}\nBin: ${binRack}\nStock level: ${stockLevel}\nReason: ${payload.reason || 'update_stock'}`
+        `SKU: ${sku}
+Reason: ${reason}
+Stock Level: ${stockLevel}
+Location: ${locationName}
+Bin: ${binRack}`,
+        thumbnailUrl
       )
     } catch (error: any) {
       results.telegram = { ok: false, error: error.message }
+    }
+  } else {
+    results.telegram = {
+      skipped: true,
+      reason: 'Telegram disabled for manual adjustment or loan reason',
     }
   }
 
