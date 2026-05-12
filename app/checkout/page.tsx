@@ -6,14 +6,20 @@ import { supabase } from '@/lib/supabase'
 type ItemRow = {
   id: string
   sku: string
-  brand: string | null
-  reporting_category: string | null
-  final_title: string | null
-  basic_title: string | null
-  selling_price: number | null
-  stock_level: number | null
-  current_location: string | null
-  current_bin: string | null
+  brand?: string | null
+  reporting_category?: string | null
+  sub_type?: string | null
+  subtype?: string | null
+  item_sub_type?: string | null
+  colour?: string | null
+  color?: string | null
+  main_colour?: string | null
+  final_title?: string | null
+  basic_title?: string | null
+  selling_price?: number | null
+  stock_level?: number | null
+  current_location?: string | null
+  current_bin?: string | null
 }
 
 type BasketLine = {
@@ -21,6 +27,9 @@ type BasketLine = {
   title: string
   brand: string
   category: string
+  subType: string
+  colour: string
+  thumbnailUrl: string
   price: number
   quantity: number
   location: string
@@ -45,13 +54,21 @@ function normaliseSku(value: string) {
   return value.trim()
 }
 
+function text(value: any) {
+  if (value === null || value === undefined) return ''
+  return String(value).trim()
+}
+
 function getLineTitle(item: ItemRow) {
-  return (
-    item.final_title ||
-    item.basic_title ||
-    [item.brand, item.reporting_category].filter(Boolean).join(' ') ||
-    item.sku
-  )
+  return item.final_title || item.basic_title || item.sku
+}
+
+function getSubType(item: ItemRow) {
+  return text(item.sub_type || item.subtype || item.item_sub_type)
+}
+
+function getColour(item: ItemRow) {
+  return text(item.colour || item.color || item.main_colour)
 }
 
 function getOfflineRows(): any[] {
@@ -77,6 +94,16 @@ function setOfflineRows(rows: any[]) {
   }
 
   localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(rows))
+}
+
+function CardLogo({ children, className = '' }: { children: string; className?: string }) {
+  return (
+    <span
+      className={`inline-flex h-5 min-w-9 items-center justify-center rounded-[4px] bg-white px-1 text-[9px] font-black leading-none shadow-sm ${className}`}
+    >
+      {children}
+    </span>
+  )
 }
 
 export default function CheckoutPage() {
@@ -140,10 +167,9 @@ export default function CheckoutPage() {
     try {
       const { error } = await supabase.from('linnworks_sync_queue').insert(rows)
       if (error) throw new Error(error.message)
-
       setOfflineRows([])
     } catch {
-      // silent by design: staff should not need to know unless we later build an admin health panel
+      // Silent local-first retry.
     } finally {
       retryingRef.current = false
     }
@@ -184,6 +210,18 @@ export default function CheckoutPage() {
     setMessage(`${percent}% discount applied to ${discountTargetText()}.`)
   }
 
+  async function getThumbnailUrl(itemId: string) {
+    const { data } = await supabase
+      .from('item_images')
+      .select('processed_url, original_url')
+      .eq('item_id', itemId)
+      .order('image_order', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    return text(data?.processed_url || data?.original_url)
+  }
+
   async function addScannedSku(rawSku?: string) {
     const sku = normaliseSku(rawSku || scanValue)
     if (!sku) return
@@ -192,13 +230,7 @@ export default function CheckoutPage() {
     setMessage('')
 
     try {
-      const { data, error } = await supabase
-        .from('items')
-        .select(
-          'id, sku, brand, reporting_category, final_title, basic_title, selling_price, stock_level, current_location, current_bin'
-        )
-        .eq('sku', sku)
-        .maybeSingle()
+      const { data, error } = await supabase.from('items').select('*').eq('sku', sku).maybeSingle()
 
       if (error) throw new Error(error.message)
 
@@ -225,6 +257,7 @@ export default function CheckoutPage() {
 
       const item = data as ItemRow
       const price = Number(item.selling_price || 0)
+      const thumbnailUrl = item.id ? await getThumbnailUrl(item.id) : ''
 
       setBasket((current) => {
         const existing = current.find((line) => line.sku.toLowerCase() === sku.toLowerCase())
@@ -242,8 +275,11 @@ export default function CheckoutPage() {
           {
             sku: item.sku,
             title: getLineTitle(item),
-            brand: item.brand || '',
-            category: item.reporting_category || '',
+            brand: text(item.brand),
+            category: text(item.reporting_category),
+            subType: getSubType(item),
+            colour: getColour(item),
+            thumbnailUrl,
             price,
             quantity: 1,
             location: item.current_location || 'SHOP-1',
@@ -322,10 +358,7 @@ export default function CheckoutPage() {
         net_amount: Number(netAmount.toFixed(2)),
         location: line.location,
         bin: line.bin,
-        square_status:
-          method === 'card'
-            ? 'manual_terminal_payment_recorded'
-            : 'not_required',
+        square_status: method === 'card' ? 'manual_terminal_payment_recorded' : 'not_required',
         local_first: true,
       },
       status: 'pending',
@@ -388,16 +421,16 @@ export default function CheckoutPage() {
 
   return (
     <main className={pageClass}>
-      <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-4 p-3 sm:p-5">
-        <section className={`${panelClass} p-4 sm:p-5`}>
-          <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 p-3 sm:p-5">
+        <section className={`${panelClass} p-4`}>
+          <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-black tracking-tight sm:text-3xl">
+              <h1 className="text-2xl font-black tracking-tight">
                 {mode === 'refund' ? 'Refund' : 'Checkout'}
               </h1>
               <p className={`text-sm ${mutedText}`}>
                 {selectedLine
-                  ? `Discount target: selected item ${selectedLine.sku}`
+                  ? `Discount target: ${selectedLine.sku}`
                   : 'Discount target: whole basket'}
               </p>
             </div>
@@ -449,10 +482,10 @@ export default function CheckoutPage() {
         </section>
 
         <section className={`${panelClass} flex flex-1 flex-col overflow-hidden`}>
-          <div className="flex items-center justify-between border-b border-current/10 p-4">
+          <div className="flex items-center justify-between border-b border-current/10 px-4 py-3">
             <div>
               <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
-              <p className="text-lg font-black">{totalItems} items</p>
+              <p className="text-base font-black">{totalItems} items</p>
             </div>
             <button
               type="button"
@@ -463,7 +496,7 @@ export default function CheckoutPage() {
             </button>
           </div>
 
-          <div className="flex-1 space-y-2 overflow-auto p-3">
+          <div className="flex-1 space-y-2 overflow-auto p-2">
             {basket.length === 0 ? (
               <div className={`rounded-3xl p-8 text-center ${mutedText}`}>
                 <p className="text-lg font-bold">No items scanned yet</p>
@@ -478,7 +511,7 @@ export default function CheckoutPage() {
                     key={line.sku}
                     type="button"
                     onClick={() => setSelectedSku(isSelected ? '' : line.sku)}
-                    className={`w-full rounded-3xl p-4 text-left ${
+                    className={`w-full rounded-2xl p-2 text-left ${
                       isSelected
                         ? 'bg-emerald-500/20 ring-2 ring-emerald-400'
                         : darkMode
@@ -486,62 +519,78 @@ export default function CheckoutPage() {
                           : 'bg-neutral-100'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-lg font-black">{line.title}</p>
-                        <p className={`text-sm ${mutedText}`}>
-                          {line.sku}
-                          {line.brand ? ` · ${line.brand}` : ''}
-                          {line.category ? ` · ${line.category}` : ''}
-                        </p>
-                        <p className={`text-xs ${mutedText}`}>
-                          {line.location} · {line.bin} · Stock {line.stockLevel}
-                        </p>
-                        {line.lineDiscountPercent > 0 && (
-                          <p className="mt-1 text-xs font-black text-emerald-400">
-                            Line discount: {line.lineDiscountPercent}%
-                          </p>
+                    <div className="flex items-center gap-3">
+                      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-neutral-800">
+                        {line.thumbnailUrl ? (
+                          <img
+                            src={line.thumbnailUrl}
+                            alt={line.sku}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-neutral-400">
+                            NO IMG
+                          </div>
                         )}
                       </div>
 
-                      <div className="text-right">
-                        <p className="text-lg font-black">{money(line.price * line.quantity)}</p>
-                        <p className={`text-sm ${mutedText}`}>{money(line.price)} each</p>
-                      </div>
-                    </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black">{line.brand || 'Unknown Brand'}</p>
+                            <p className={`truncate text-xs ${mutedText}`}>
+                              {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') ||
+                                line.title}
+                            </p>
+                            <p className={`truncate text-[11px] ${mutedText}`}>{line.sku}</p>
+                          </div>
 
-                    <div className="mt-3 flex items-center justify-between gap-2">
-                      <div className="flex items-center rounded-full border border-current/20">
-                        <span
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            updateQty(line.sku, line.quantity - 1)
-                          }}
-                          className="px-4 py-2 text-xl font-black"
-                        >
-                          −
-                        </span>
-                        <span className="min-w-10 text-center font-black">{line.quantity}</span>
-                        <span
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            updateQty(line.sku, line.quantity + 1)
-                          }}
-                          className="px-4 py-2 text-xl font-black"
-                        >
-                          +
-                        </span>
-                      </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-base font-black">{money(line.price * line.quantity)}</p>
+                            <p className={`text-[11px] ${mutedText}`}>{money(line.price)} each</p>
+                          </div>
+                        </div>
 
-                      <span
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          updateQty(line.sku, 0)
-                        }}
-                        className="rounded-full px-4 py-2 text-sm font-bold text-red-500"
-                      >
-                        Remove
-                      </span>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <div className="flex items-center rounded-full border border-current/20">
+                            <span
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                updateQty(line.sku, line.quantity - 1)
+                              }}
+                              className="px-3 py-1 text-lg font-black"
+                            >
+                              −
+                            </span>
+                            <span className="min-w-8 text-center text-sm font-black">{line.quantity}</span>
+                            <span
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                updateQty(line.sku, line.quantity + 1)
+                              }}
+                              className="px-3 py-1 text-lg font-black"
+                            >
+                              +
+                            </span>
+                          </div>
+
+                          {line.lineDiscountPercent > 0 && (
+                            <span className="text-xs font-black text-emerald-400">
+                              {line.lineDiscountPercent}% off
+                            </span>
+                          )}
+
+                          <span
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              updateQty(line.sku, 0)
+                            }}
+                            className="text-xs font-bold text-red-500"
+                          >
+                            Remove
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </button>
                 )
@@ -550,7 +599,7 @@ export default function CheckoutPage() {
           </div>
         </section>
 
-        <section className={`${panelClass} p-4 sm:p-5`}>
+        <section className={`${panelClass} p-4`}>
           <div className="mb-3 grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -613,17 +662,11 @@ export default function CheckoutPage() {
                   : 'bg-sky-100 text-black'
               }`}
             >
-              <span className="inline-flex items-center justify-center gap-2">
+              <span className="inline-flex flex-wrap items-center justify-center gap-1.5">
                 CARD
-                <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-black text-blue-700">
-                  VISA
-                </span>
-                <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-black text-red-600">
-                  MC
-                </span>
-                <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-black text-sky-700">
-                  AMEX
-                </span>
+                <CardLogo className="text-blue-700">VISA</CardLogo>
+                <CardLogo className="text-red-600">MC</CardLogo>
+                <CardLogo className="text-sky-700">AMEX</CardLogo>
               </span>
             </button>
           </div>
