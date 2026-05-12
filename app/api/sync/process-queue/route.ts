@@ -489,16 +489,7 @@ function formatTelegramReason(payload: any) {
 function shouldSendTelegramForUpdateStock(payload: any) {
   const reason = normaliseText(payload.reason).toLowerCase()
 
-  if (reason.includes('loan')) return false
-  if (reason.includes('manual')) return false
-  if (reason.includes('adjust')) return false
-
-  return true
-}
-
-function isShopLocation(locationName: string) {
-  const value = locationName.toLowerCase()
-  return value.startsWith('shop') || value.includes('shop-')
+  return reason === 'online_sale' || reason === 'stock_update'
 }
 
 function getLocationPriority(locationName: string, payload: any, item: any) {
@@ -860,7 +851,10 @@ async function processAdjustStockQueueRow(params: {
     locationId: selected.locationId,
     binRack,
     selectionReason: selected.selectionReason,
-    telegram: { skipped: true, reason: 'No Telegram notification for adjust_stock/manual/loan actions' },
+    telegram: {
+      skipped: true,
+      reason: 'No Telegram notification for adjust_stock/manual/loan actions',
+    },
     stockRowsUsed: stockData.mappedRows,
     results,
   }
@@ -890,13 +884,15 @@ async function processUpdateStockQueueRow(params: {
 
   const itemResult = await supabase
     .from('items')
-    .select('id, sku, cost_price, stock_level, current_location, current_bin')
+    .select('id, sku, brand, reporting_category, cost_price, stock_level, current_location, current_bin')
     .eq('sku', sku)
     .maybeSingle()
 
   if (itemResult.error) throw new Error(itemResult.error.message)
 
   const item = itemResult.data
+
+  const previousStockLevel = normaliseNumber(item?.stock_level) ?? 0
 
   const stockLevel =
     normaliseNumber(payload.stock_level) ??
@@ -954,8 +950,10 @@ async function processUpdateStockQueueRow(params: {
 
       results.telegram = await sendTelegramMessage(
         `SKU: ${sku}
+Brand: ${normaliseText(item?.brand) || 'Unknown'}
+Category: ${normaliseText(item?.reporting_category) || 'Unknown'}
 Reason: ${reason}
-Stock Level: ${stockLevel}
+Stock: ${previousStockLevel} → ${stockLevel}
 Location: ${locationName}
 Bin: ${binRack}`,
         thumbnailUrl
@@ -966,7 +964,7 @@ Bin: ${binRack}`,
   } else {
     results.telegram = {
       skipped: true,
-      reason: 'Telegram disabled for manual adjustment or loan reason',
+      reason: 'Telegram disabled unless reason is online_sale or stock_update',
     }
   }
 
@@ -988,6 +986,7 @@ Bin: ${binRack}`,
     sku,
     stockItemId,
     action: 'update_stock',
+    previousStockLevel,
     stockLevel,
     stockValue,
     locationName,
