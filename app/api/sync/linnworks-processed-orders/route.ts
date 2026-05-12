@@ -1,9 +1,15 @@
-// app/api/sync/linnworks-processed-orders/route.ts
-
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
+
+type TrackedSale = {
+  id: string
+  linnworks_order_id: string | null
+  sku: string | null
+  current_status: string | null
+  stock_deducted: boolean | null
+}
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -91,14 +97,12 @@ function getArrayFromCandidates(data: any, keys: string[]) {
   return []
 }
 
-function getProcessedOrderRows(data: any) {
+function getOrderRows(data: any) {
   return getArrayFromCandidates(data, [
     'Data',
     'data',
     'Orders',
     'orders',
-    'ProcessedOrders',
-    'processedOrders',
     'Items',
     'items',
     'Results',
@@ -115,7 +119,11 @@ function getOrderUuid(order: any) {
       order?.OrderID ||
       order?.orderID ||
       order?.Id ||
-      order?.id
+      order?.id ||
+      order?.GeneralInfo?.OrderId ||
+      order?.generalInfo?.orderId ||
+      order?.GeneralInfo?.pkOrderId ||
+      order?.generalInfo?.pkOrderId
   )
 
   return isUuid(value) ? value : ''
@@ -127,7 +135,11 @@ function getOrderNumber(order: any) {
       order?.NumOrderId ||
       order?.numOrderId ||
       order?.OrderNumber ||
-      order?.orderNumber
+      order?.orderNumber ||
+      order?.GeneralInfo?.OrderNumber ||
+      order?.generalInfo?.orderNumber ||
+      order?.GeneralInfo?.NumOrderId ||
+      order?.generalInfo?.numOrderId
   )
 }
 
@@ -138,7 +150,9 @@ function getOrderReference(order: any) {
       order?.ReferenceNumber ||
       order?.referenceNumber ||
       order?.ExternalReference ||
-      order?.externalReference
+      order?.externalReference ||
+      order?.GeneralInfo?.ReferenceNum ||
+      order?.generalInfo?.referenceNum
   )
 }
 
@@ -150,7 +164,24 @@ function getProcessedDate(order: any) {
       order?.ProcessedDate ||
       order?.processedDate ||
       order?.ProcessDate ||
-      order?.processDate
+      order?.processDate ||
+      order?.GeneralInfo?.ProcessedOn ||
+      order?.generalInfo?.processedOn ||
+      order?.GeneralInfo?.dProcessedOn ||
+      order?.generalInfo?.dProcessedOn
+  )
+}
+
+function getRawStatus(order: any) {
+  return normaliseText(
+    order?.Status ||
+      order?.status ||
+      order?.OrderStatus ||
+      order?.orderStatus ||
+      order?.GeneralInfo?.Status ||
+      order?.generalInfo?.status ||
+      order?.GeneralInfo?.OrderStatus ||
+      order?.generalInfo?.orderStatus
   )
 }
 
@@ -161,7 +192,11 @@ function getTrackingNumber(order: any) {
       order?.TrackingNumber ||
       order?.trackingNumber ||
       order?.TrackingNo ||
-      order?.trackingNo
+      order?.trackingNo ||
+      order?.ShippingInfo?.TrackingNumber ||
+      order?.shippingInfo?.trackingNumber ||
+      order?.ShippingInfo?.PostalTrackingNumber ||
+      order?.shippingInfo?.postalTrackingNumber
   )
 }
 
@@ -170,7 +205,9 @@ function getTrackingUrl(order: any) {
     order?.TrackingUrl ||
       order?.trackingUrl ||
       order?.PostalTrackingUrl ||
-      order?.postalTrackingUrl
+      order?.postalTrackingUrl ||
+      order?.ShippingInfo?.TrackingUrl ||
+      order?.shippingInfo?.trackingUrl
   )
 }
 
@@ -183,7 +220,11 @@ function getShippingVendor(order: any) {
       order?.Vendor ||
       order?.vendor ||
       order?.Courier ||
-      order?.courier
+      order?.courier ||
+      order?.ShippingInfo?.Vendor ||
+      order?.shippingInfo?.vendor ||
+      order?.ShippingInfo?.PostalServiceVendor ||
+      order?.shippingInfo?.postalServiceVendor
   )
 }
 
@@ -194,7 +235,11 @@ function getShippingMethod(order: any) {
       order?.PostalServiceName ||
       order?.postalServiceName ||
       order?.PostalService ||
-      order?.postalService
+      order?.postalService ||
+      order?.ShippingInfo?.PostalServiceName ||
+      order?.shippingInfo?.postalServiceName ||
+      order?.ShippingInfo?.PostalService ||
+      order?.shippingInfo?.postalService
   )
 }
 
@@ -225,7 +270,7 @@ function getItemSku(item: any) {
   )
 }
 
-async function getTrackedOpenSales(supabase: any, limit: number) {
+async function getTrackedOpenSales(supabase: any, limit: number): Promise<TrackedSale[]> {
   const { data, error } = await supabase
     .from('linnworks_processed_sales')
     .select('id, linnworks_order_id, sku, current_status, stock_deducted')
@@ -236,35 +281,21 @@ async function getTrackedOpenSales(supabase: any, limit: number) {
 
   if (error) throw new Error(error.message)
 
-  return data || []
+  return (data || []) as TrackedSale[]
 }
 
-async function searchProcessedOrdersBySku(params: {
-  server: string
-  token: string
-  sku: string
-  pageNum: number
-  entriesPerPage: number
-}) {
-  const data = await linnworksPost(
-    params.server,
-    params.token,
-    '/api/ProcessedOrders/SearchProcessedOrdersPaged',
-    {
-      from: null,
-      to: null,
-      dateType: 'ALLDATES',
-      searchField: 'SKU',
-      exactMatch: true,
-      searchTerm: params.sku,
-      pageNum: params.pageNum,
-      numEntriesPerPage: params.entriesPerPage,
-    }
-  )
+async function getOrdersById(server: string, token: string, orderIds: string[]) {
+  if (orderIds.length === 0) {
+    return { raw: [], rows: [] }
+  }
+
+  const data = await linnworksPost(server, token, '/api/Orders/GetOrdersById', {
+    pkOrderIds: orderIds,
+  })
 
   return {
     raw: data,
-    rows: getProcessedOrderRows(data),
+    rows: getOrderRows(data),
   }
 }
 
@@ -274,7 +305,7 @@ function processedOrderContainsSku(order: any, sku: string) {
 
   if (items.length === 0) return true
 
-  return items.some((item) => getItemSku(item).toLowerCase() === wanted)
+  return items.some((item: any) => getItemSku(item).toLowerCase() === wanted)
 }
 
 function makeDebugCandidate(order: any, sku: string) {
@@ -283,15 +314,32 @@ function makeDebugCandidate(order: any, sku: string) {
     order_uuid: getOrderUuid(order),
     order_number: getOrderNumber(order),
     order_reference: getOrderReference(order),
-    processed_at: getProcessedDate(order),
+    raw_status: getRawStatus(order) || null,
+    processed_at: getProcessedDate(order) || null,
     tracking_number: getTrackingNumber(order) || null,
+    tracking_url: getTrackingUrl(order) || null,
     shipping_vendor: getShippingVendor(order) || null,
     shipping_method: getShippingMethod(order) || null,
     contains_sku: processedOrderContainsSku(order, sku),
     item_count: getOrderItems(order).length,
-    item_skus: getOrderItems(order).map(getItemSku).filter(Boolean).slice(0, 20),
+    item_skus: getOrderItems(order).map((item: any) => getItemSku(item)).filter(Boolean).slice(0, 20),
     raw_preview: order,
   }
+}
+
+function orderLooksProcessed(order: any) {
+  const processedAt = getProcessedDate(order)
+  const rawStatus = getRawStatus(order).toLowerCase()
+
+  return (
+    Boolean(processedAt) ||
+    rawStatus.includes('processed') ||
+    rawStatus.includes('dispatch') ||
+    rawStatus.includes('dispatched') ||
+    rawStatus.includes('shipped') ||
+    rawStatus.includes('complete') ||
+    rawStatus.includes('completed')
+  )
 }
 
 async function processProcessedOrders(request: Request) {
@@ -302,12 +350,8 @@ async function processProcessedOrders(request: Request) {
     const url = new URL(request.url)
     const body = await request.json().catch(() => ({}))
 
-    const debug =
-      url.searchParams.get('debug') === 'true' ||
-      body.debug === true
-
+    const debug = url.searchParams.get('debug') === 'true' || body.debug === true
     const limit = Math.min(Number(body.limit || 100), 200)
-    const entriesPerPage = Math.min(Number(body.entriesPerPage || 200), 200)
 
     const trackedSales = await getTrackedOpenSales(supabase, limit)
 
@@ -317,115 +361,134 @@ async function processProcessedOrders(request: Request) {
         message: 'No tracked open sales waiting for processed status.',
         started_at: startedAt,
         processed: 0,
+        skipped: 0,
         failed: 0,
+        debug,
         results: [],
       })
     }
 
     const { server, token } = await authoriseLinnworks()
 
-    const salesBySku = new Map<string, any[]>()
+    const trackedOrderIds: string[] = [
+      ...new Set(
+        trackedSales
+          .map((sale: TrackedSale): string => normaliseText(sale.linnworks_order_id))
+          .filter((id: string): boolean => isUuid(id))
+      ),
+    ]
 
-    for (const sale of trackedSales) {
-      const sku = normaliseText(sale.sku)
-      if (!sku) continue
-
-      const key = sku.toLowerCase()
-      const existing = salesBySku.get(key) || []
-      existing.push(sale)
-      salesBySku.set(key, existing)
-    }
+    const orderDetailsResult = await getOrdersById(server, token, trackedOrderIds)
+    const orderDetails = orderDetailsResult.rows
 
     const results: any[] = []
 
-    for (const [, sales] of salesBySku.entries()) {
-      const sku = sales[0].sku
+    for (const sale of trackedSales) {
+      const sku = normaliseText(sale.sku)
+      const wantedOrderId = normaliseText(sale.linnworks_order_id).toLowerCase()
 
-      const searchResult = await searchProcessedOrdersBySku({
-        server,
-        token,
-        sku,
-        pageNum: 1,
-        entriesPerPage,
-      })
+      const matchedOrder =
+        orderDetails.find((order: any) => {
+          const orderUuid = getOrderUuid(order).toLowerCase()
+          return orderUuid && orderUuid === wantedOrderId
+        }) || null
 
-      const processedOrders = searchResult.rows
-
-      for (const sale of sales) {
-        const wantedOrderId = normaliseText(sale.linnworks_order_id).toLowerCase()
-
-        const matchedOrder =
-          processedOrders.find((order) => {
-            const orderUuid = getOrderUuid(order).toLowerCase()
-            return orderUuid && orderUuid === wantedOrderId && processedOrderContainsSku(order, sku)
-          }) || null
-
-        if (!matchedOrder) {
-          results.push({
-            ok: true,
-            skipped: true,
-            sku,
-            linnworks_order_id: sale.linnworks_order_id,
-            reason: 'Not processed yet',
-            processed_candidate_count: processedOrders.length,
-            debug_candidates: debug
-              ? processedOrders.slice(0, 10).map((order) => makeDebugCandidate(order, sku))
-              : undefined,
-            debug_raw_keys: debug && searchResult.raw && typeof searchResult.raw === 'object'
-              ? Object.keys(searchResult.raw)
-              : undefined,
-            debug_raw_preview: debug ? searchResult.raw : undefined,
-          })
-          continue
-        }
-
-        const processedAt = getProcessedDate(matchedOrder) || new Date().toISOString()
-        const trackingNumber = getTrackingNumber(matchedOrder)
-        const trackingUrl = getTrackingUrl(matchedOrder)
-        const shippingVendor = getShippingVendor(matchedOrder)
-        const shippingMethod = getShippingMethod(matchedOrder)
-
-        const { error: updateSaleError } = await supabase
-          .from('linnworks_processed_sales')
-          .update({
-            current_status: 'processed',
-            processed_at: processedAt,
-            tracking_number: trackingNumber || null,
-            tracking_url: trackingUrl || null,
-            shipping_vendor: shippingVendor || null,
-            shipping_method: shippingMethod || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', sale.id)
-
-        if (updateSaleError) throw new Error(updateSaleError.message)
-
-        const { error: updateItemError } = await supabase
-          .from('items')
-          .update({
-            status: 'sold',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('sku', sku)
-
-        if (updateItemError) throw new Error(updateItemError.message)
-
+      if (!matchedOrder) {
         results.push({
           ok: true,
+          skipped: true,
           sku,
           linnworks_order_id: sale.linnworks_order_id,
-          order_uuid_found: getOrderUuid(matchedOrder),
-          order_number: getOrderNumber(matchedOrder),
-          order_reference: getOrderReference(matchedOrder),
+          reason: 'Order not returned by Orders/GetOrdersById',
+          order_details_count: orderDetails.length,
+          debug_raw_keys:
+            debug && orderDetailsResult.raw && typeof orderDetailsResult.raw === 'object'
+              ? Object.keys(orderDetailsResult.raw)
+              : undefined,
+          debug_raw_preview: debug ? orderDetailsResult.raw : undefined,
+        })
+        continue
+      }
+
+      const containsSku = processedOrderContainsSku(matchedOrder, sku)
+
+      if (!containsSku) {
+        results.push({
+          ok: true,
+          skipped: true,
+          sku,
+          linnworks_order_id: sale.linnworks_order_id,
+          reason: 'Order returned but SKU not found on order',
+          debug_matched_order: debug ? makeDebugCandidate(matchedOrder, sku) : undefined,
+        })
+        continue
+      }
+
+      const processedAt = getProcessedDate(matchedOrder)
+      const rawStatus = getRawStatus(matchedOrder)
+      const looksProcessed = orderLooksProcessed(matchedOrder)
+
+      if (!looksProcessed) {
+        results.push({
+          ok: true,
+          skipped: true,
+          sku,
+          linnworks_order_id: sale.linnworks_order_id,
+          reason: 'Order returned but does not look processed yet',
+          raw_status: rawStatus || null,
+          processed_at: processedAt || null,
+          debug_matched_order: debug ? makeDebugCandidate(matchedOrder, sku) : undefined,
+        })
+        continue
+      }
+
+      const finalProcessedAt = processedAt || new Date().toISOString()
+      const trackingNumber = getTrackingNumber(matchedOrder)
+      const trackingUrl = getTrackingUrl(matchedOrder)
+      const shippingVendor = getShippingVendor(matchedOrder)
+      const shippingMethod = getShippingMethod(matchedOrder)
+
+      const { error: updateSaleError } = await supabase
+        .from('linnworks_processed_sales')
+        .update({
           current_status: 'processed',
-          processed_at: processedAt,
+          processed_at: finalProcessedAt,
           tracking_number: trackingNumber || null,
           tracking_url: trackingUrl || null,
           shipping_vendor: shippingVendor || null,
           shipping_method: shippingMethod || null,
-          debug_matched_order: debug ? makeDebugCandidate(matchedOrder, sku) : undefined,
+          updated_at: new Date().toISOString(),
         })
-      }
+        .eq('id', sale.id)
+
+      if (updateSaleError) throw new Error(updateSaleError.message)
+
+      const { error: updateItemError } = await supabase
+        .from('items')
+        .update({
+          status: 'sold',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('sku', sku)
+
+      if (updateItemError) throw new Error(updateItemError.message)
+
+      results.push({
+        ok: true,
+        sku,
+        linnworks_order_id: sale.linnworks_order_id,
+        order_uuid_found: getOrderUuid(matchedOrder),
+        order_number: getOrderNumber(matchedOrder),
+        order_reference: getOrderReference(matchedOrder),
+        raw_status: rawStatus || null,
+        current_status: 'processed',
+        processed_at: finalProcessedAt,
+        tracking_number: trackingNumber || null,
+        tracking_url: trackingUrl || null,
+        shipping_vendor: shippingVendor || null,
+        shipping_method: shippingMethod || null,
+        debug_matched_order: debug ? makeDebugCandidate(matchedOrder, sku) : undefined,
+      })
     }
 
     return NextResponse.json({
@@ -433,8 +496,10 @@ async function processProcessedOrders(request: Request) {
       message: 'Linnworks processed orders checked.',
       started_at: startedAt,
       tracked_sale_count: trackedSales.length,
-      processed: results.filter((row) => row.ok && !row.skipped).length,
-      skipped: results.filter((row) => row.skipped).length,
+      tracked_order_id_count: trackedOrderIds.length,
+      order_details_count: orderDetails.length,
+      processed: results.filter((row: any) => row.ok && !row.skipped).length,
+      skipped: results.filter((row: any) => row.skipped).length,
       failed: 0,
       debug,
       results,
