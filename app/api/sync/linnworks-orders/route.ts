@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
+const DEFAULT_LOCATION_ID = '00000000-0000-0000-0000-000000000000'
+
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -80,6 +82,10 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+}
+
 function getArrayFromCandidates(data: any, keys: string[]) {
   if (!data) return []
   if (Array.isArray(data)) return data
@@ -134,6 +140,20 @@ function getOrderId(order: any) {
       order?.referenceNum ||
       order
   )
+}
+
+function getOrderUuid(order: any) {
+  const value = normaliseText(
+    order?.pkOrderId ||
+      order?.PkOrderId ||
+      order?.OrderId ||
+      order?.orderId ||
+      order?.OrderID ||
+      order?.orderID ||
+      order
+  )
+
+  return isUuid(value) ? value : ''
 }
 
 function getOrderSource(order: any) {
@@ -203,20 +223,99 @@ function getItemQuantity(item: any) {
   )
 }
 
+function getStockItemsFromFullResponse(data: any) {
+  if (!data) return []
+  if (Array.isArray(data)) return data
+
+  const candidates = [
+    data.Data,
+    data.data,
+    data.Items,
+    data.items,
+    data.StockItems,
+    data.stockItems,
+    data.Results,
+    data.results,
+  ]
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate
+  }
+
+  return [data]
+}
+
+function getStockLevelsFromFullItem(item: any) {
+  const candidates = [
+    item?.StockLevels,
+    item?.stockLevels,
+    item?.StockItemLevels,
+    item?.stockItemLevels,
+    item?.Levels,
+    item?.levels,
+    item?.Locations,
+    item?.locations,
+    item?.LocationStockLevels,
+    item?.locationStockLevels,
+  ]
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate
+  }
+
+  return []
+}
+
+function getSkuFromFullItem(item: any) {
+  return normaliseText(
+    item?.SKU ||
+      item?.Sku ||
+      item?.sku ||
+      item?.ItemNumber ||
+      item?.itemNumber ||
+      item?.ItemNumberSKU ||
+      item?.itemNumberSKU
+  )
+}
+
+function getStockLevel(row: any) {
+  return (
+    normaliseNumber(row?.StockLevel) ??
+    normaliseNumber(row?.stockLevel) ??
+    normaliseNumber(row?.Level) ??
+    normaliseNumber(row?.level) ??
+    normaliseNumber(row?.Quantity) ??
+    normaliseNumber(row?.quantity) ??
+    normaliseNumber(row?.OnHand) ??
+    normaliseNumber(row?.onHand) ??
+    normaliseNumber(row?.InStock) ??
+    normaliseNumber(row?.inStock) ??
+    0
+  )
+}
+
+function getAvailableStock(row: any) {
+  return (
+    normaliseNumber(row?.Available) ??
+    normaliseNumber(row?.available) ??
+    normaliseNumber(row?.AvailableStock) ??
+    normaliseNumber(row?.availableStock) ??
+    null
+  )
+}
+
 async function getAllOpenOrderIds(server: string, token: string) {
   const data = await linnworksPost(server, token, '/api/Orders/GetAllOpenOrders', {
-  filters: {},
-  sorting: [],
-  fulfilmentCenter: '00000000-0000-0000-0000-000000000000',
-  additionalFilter: '',
-  exactMatch: false,
-})
+    filters: {},
+    sorting: [],
+    fulfilmentCenter: DEFAULT_LOCATION_ID,
+    additionalFilter: '',
+    exactMatch: false,
+  })
 
   const rows = getOpenOrderIdRows(data)
 
-  return rows
-    .map(getOrderId)
-    .filter(Boolean)
+  return [...new Set(rows.map(getOrderUuid).filter(Boolean))]
 }
 
 async function getOpenOrdersDetails(server: string, token: string, orderIds: string[]) {
@@ -228,6 +327,46 @@ async function getOpenOrdersDetails(server: string, token: string, orderIds: str
   })
 
   return getOpenOrderDetailRows(data)
+}
+
+async function getLiveLinnworksStock(server: string, token: string, sku: string) {
+  const data = await linnworksPost(server, token, '/api/Stock/GetStockItemsFull', {
+    keyword: sku,
+    searchTypes: ['SKU'],
+    dataRequirements: ['StockLevels'],
+    entriesPerPage: 1,
+    pageNumber: 1,
+    loadCompositeParents: false,
+    loadVariationParents: false,
+  })
+
+  const fullItems = getStockItemsFromFullResponse(data)
+  const fullItem =
+    fullItems.find((item) => getSkuFromFullItem(item).toLowerCase() === sku.toLowerCase()) ||
+    fullItems[0] ||
+    null
+
+  const stockRows = fullItem ? getStockLevelsFromFullItem(fullItem) : []
+
+  const totalStockLevel = stockRows.reduce((sum, row) => {
+    return sum + getStockLevel(row)
+  }, 0)
+
+  const availableValues = stockRows
+    .map(getAvailableStock)
+    .filter((value) => value !== null) as number[]
+
+  const totalAvailable =
+    availableValues.length > 0
+      ? availableValues.reduce((sum, value) => sum + value, 0)
+      : null
+
+  return {
+    stockFullRaw: data,
+    stockRows,
+    totalStockLevel,
+    totalAvailable,
+  }
 }
 
 async function getWebAppSkus(supabase: any) {
@@ -258,9 +397,56 @@ async function getWebAppSkus(supabase: any) {
   return skus
 }
 
+async function getAlreadyCheckedOrderIds(supabase: any, orderIds: string[]) {
+  if (orderIds.length === 0) return new Set<string>()
+
+  const checked = new Set<string>()
+
+  for (let i = 0; i < orderIds.length; i += 100) {
+    const batch = orderIds.slice(i, i + 100)
+
+    const { data, error } = await supabase
+      .from('linnworks_checked_open_orders')
+      .select('linnworks_order_id')
+      .in('linnworks_order_id', batch)
+
+    if (error) throw new Error(error.message)
+
+    for (const row of data || []) {
+      const id = normaliseText(row.linnworks_order_id)
+      if (id) checked.add(id)
+    }
+  }
+
+  return checked
+}
+
+async function markOrderChecked(params: {
+  supabase: any
+  orderId: string
+  managedSkuFound: boolean
+}) {
+  const { error } = await params.supabase
+    .from('linnworks_checked_open_orders')
+    .upsert(
+      {
+        linnworks_order_id: params.orderId,
+        managed_sku_found: params.managedSkuFound,
+        checked_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: 'linnworks_order_id',
+      }
+    )
+
+  if (error) throw new Error(error.message)
+}
+
 async function createQueueRow(params: {
   supabase: any
   sku: string
+  previousStockLevel: number
   newStockLevel: number
   location: string
   bin: string
@@ -271,6 +457,7 @@ async function createQueueRow(params: {
 }) {
   const payload = {
     sku: params.sku,
+    previous_stock_level: params.previousStockLevel,
     stock_level: params.newStockLevel,
     location: params.location,
     bin: params.bin,
@@ -300,25 +487,25 @@ async function processLinnworksOpenOrders(request: Request) {
     const supabase = getSupabaseAdmin()
     const body = await request.json().catch(() => ({}))
 
-    const entriesPerPage = Math.min(Number(body.entriesPerPage || 50), 100)
-    const pageNumber = Math.max(Number(body.pageNumber || 1), 1)
+    const maxOrdersToCheck = Math.min(Number(body.maxOrders || 200), 200)
+    const entriesPerPage = maxOrdersToCheck
 
     const { server, token } = await authoriseLinnworks()
 
     const webAppSkus = await getWebAppSkus(supabase)
     const allOrderIds = await getAllOpenOrderIds(server, token)
+    const alreadyCheckedOrderIds = await getAlreadyCheckedOrderIds(supabase, allOrderIds)
 
-    const pagedOrderIds = allOrderIds.slice(
-      (pageNumber - 1) * entriesPerPage,
-      pageNumber * entriesPerPage
-    )
+    const uncheckedOrderIds = allOrderIds
+      .filter((orderId) => !alreadyCheckedOrderIds.has(orderId))
+      .slice(0, entriesPerPage)
 
-    const orders = await getOpenOrdersDetails(server, token, pagedOrderIds)
+    const orders = await getOpenOrdersDetails(server, token, uncheckedOrderIds)
 
     const results: any[] = []
 
     for (const order of orders) {
-      const orderId = getOrderId(order)
+      const orderId = getOrderUuid(order) || getOrderId(order)
       const source = getOrderSource(order)
       const subSource = getOrderSubSource(order)
       const items = getOrderItems(order)
@@ -333,6 +520,12 @@ async function processLinnworksOpenOrders(request: Request) {
       }
 
       if (items.length === 0) {
+        await markOrderChecked({
+          supabase,
+          orderId,
+          managedSkuFound: false,
+        })
+
         results.push({
           ok: true,
           skipped: true,
@@ -342,6 +535,7 @@ async function processLinnworksOpenOrders(request: Request) {
         continue
       }
 
+      let managedSkuFoundForOrder = false
       const groupedBySku = new Map<string, any>()
 
       for (const item of items) {
@@ -361,6 +555,8 @@ async function processLinnworksOpenOrders(request: Request) {
           })
           continue
         }
+
+        managedSkuFoundForOrder = true
 
         const existing = groupedBySku.get(sku)
 
@@ -421,8 +617,13 @@ async function processLinnworksOpenOrders(request: Request) {
           continue
         }
 
-        const currentStockLevel = normaliseNumber(localItem.stock_level) ?? 0
-        const newStockLevel = Math.max(0, currentStockLevel - quantity)
+        const liveStock = await getLiveLinnworksStock(server, token, sku)
+
+        const previousStockLevel = liveStock.totalStockLevel
+        const newStockLevel =
+          liveStock.totalAvailable !== null
+            ? liveStock.totalAvailable
+            : Math.max(0, previousStockLevel - quantity)
 
         const location =
           normaliseText(localItem.current_location) ||
@@ -466,6 +667,7 @@ async function processLinnworksOpenOrders(request: Request) {
         await createQueueRow({
           supabase,
           sku,
+          previousStockLevel,
           newStockLevel,
           location,
           bin,
@@ -480,12 +682,20 @@ async function processLinnworksOpenOrders(request: Request) {
           orderId,
           sku,
           quantity,
-          previousStockLevel: currentStockLevel,
+          previousStockLevel,
           newStockLevel,
+          liveLinnworksStockLevel: liveStock.totalStockLevel,
+          liveLinnworksAvailable: liveStock.totalAvailable,
           queueAction: 'update_stock',
           reason: 'online_sale',
         })
       }
+
+      await markOrderChecked({
+        supabase,
+        orderId,
+        managedSkuFound: managedSkuFoundForOrder,
+      })
     }
 
     return NextResponse.json({
@@ -494,7 +704,9 @@ async function processLinnworksOpenOrders(request: Request) {
       started_at: startedAt,
       web_app_sku_count: webAppSkus.size,
       all_open_order_id_count: allOrderIds.length,
-      checked_order_id_count: pagedOrderIds.length,
+      already_checked_order_id_count: alreadyCheckedOrderIds.size,
+      unchecked_order_id_count: allOrderIds.length - alreadyCheckedOrderIds.size,
+      checked_this_run_count: uncheckedOrderIds.length,
       order_count: orders.length,
       created_queue_rows: results.filter((row) => row.queueAction === 'update_stock').length,
       results,
