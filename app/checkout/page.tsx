@@ -45,6 +45,7 @@ type PaymentMethod = 'cash' | 'card' | null
 type CheckoutMode = 'sale' | 'refund' | 'exchange'
 
 const OFFLINE_TX_KEY = 'dohpe_pos_offline_transactions_v1'
+const CHECKOUT_LOCATION_KEY = 'dohpe_checkout_location_v1'
 
 function money(value: number) {
   return new Intl.NumberFormat('en-GB', {
@@ -56,6 +57,11 @@ function money(value: number) {
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
+}
+
+function getSavedCheckoutLocation() {
+  if (typeof window === 'undefined') return 'SHOP-1'
+  return localStorage.getItem(CHECKOUT_LOCATION_KEY) || 'SHOP-1'
 }
 
 function makeSaleNumber() {
@@ -103,12 +109,24 @@ function getLineTitle(item: ItemRow) {
   return item.final_title || item.basic_title || item.sku
 }
 
-function CardBadge({ children, className = '' }: { children: string; className?: string }) {
+function CardLogos() {
   return (
-    <span
-      className={`inline-flex h-5 min-w-9 items-center justify-center rounded bg-white px-1 text-[9px] font-black shadow-sm ${className}`}
-    >
-      {children}
+    <span className="inline-flex items-center gap-0.5">
+      <img
+        src="https://upload.wikimedia.org/wikipedia/commons/5/5e/Visa_Inc._logo.svg"
+        alt="Visa"
+        className="h-4 w-auto rounded bg-white px-1 py-0.5"
+      />
+      <img
+        src="https://upload.wikimedia.org/wikipedia/commons/2/2a/Mastercard-logo.svg"
+        alt="Mastercard"
+        className="h-5 w-auto rounded bg-white px-1 py-0.5"
+      />
+      <img
+        src="https://www.americanexpress.com/content/dam/amex/us/merchant/supplies-uplift/product/images/4_Card_color_horizontal.png"
+        alt="American Express"
+        className="h-5 w-auto rounded bg-white"
+      />
     </span>
   )
 }
@@ -130,6 +148,7 @@ export default function CheckoutPage() {
   const [loadingSku, setLoadingSku] = useState('')
   const [originalSale, setOriginalSale] = useState<any | null>(null)
   const [exchangeCredit, setExchangeCredit] = useState(0)
+  const [checkoutLocation, setCheckoutLocation] = useState('SHOP-1')
 
   const saleLines = basket.filter((line) => !line.isReturnLine)
   const returnLines = basket.filter((line) => line.isReturnLine)
@@ -183,6 +202,10 @@ export default function CheckoutPage() {
   const inputClass = darkMode
     ? 'w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-xl font-semibold outline-none focus:border-white'
     : 'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-4 text-xl font-semibold outline-none focus:border-black'
+
+  useEffect(() => {
+    setCheckoutLocation(getSavedCheckoutLocation())
+  }, [])
 
   async function writeTransactionOnline(tx: any) {
     const response = await fetch('/api/pos/save-transaction', {
@@ -244,6 +267,14 @@ export default function CheckoutPage() {
     }
   }, [retryOfflineTransactions])
 
+  function saveCheckoutLocation(value: string) {
+    const clean = text(value) || 'SHOP-1'
+    setCheckoutLocation(clean)
+    localStorage.setItem(CHECKOUT_LOCATION_KEY, clean)
+    setMessage(`Checkout location set to ${clean}.`)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
   async function getThumbnailUrl(itemId: string) {
     const { data } = await supabase
       .from('item_images')
@@ -281,6 +312,8 @@ export default function CheckoutPage() {
 
     if (linesError) throw new Error(linesError.message)
 
+    const returnLocation = checkoutLocation || 'SHOP-1'
+
     const refundLines: BasketLine[] = (lines || [])
       .map((line: any) => {
         const soldQty = Number(line.quantity || 0)
@@ -297,8 +330,8 @@ export default function CheckoutPage() {
           thumbnailUrl: '',
           price: Number(line.unit_price || 0),
           quantity: 0,
-          location: 'SHOP-1',
-          bin: 'SHOP-1',
+          location: returnLocation,
+          bin: returnLocation,
           stockLevel: 0,
           lineDiscountPercent: Number(line.discount_percent || 0),
           originalLineId: line.id,
@@ -313,7 +346,7 @@ export default function CheckoutPage() {
     setBasket(refundLines)
     setMode('refund')
     setPaymentMethod(null)
-    setMessage('Select items and quantities to refund.')
+    setMessage(`Select items and quantities to refund. Returns will go to ${returnLocation}.`)
   }
 
   async function addScannedSku(rawSku?: string) {
@@ -346,6 +379,7 @@ export default function CheckoutPage() {
       const item = data as ItemRow
       const price = Number(item.selling_price || 0)
       const thumbnailUrl = item.id ? await getThumbnailUrl(item.id) : ''
+      const activeLocation = checkoutLocation || item.current_location || 'SHOP-1'
 
       setBasket((current) => {
         const existing = current.find(
@@ -372,8 +406,8 @@ export default function CheckoutPage() {
             thumbnailUrl,
             price,
             quantity: 1,
-            location: item.current_location || 'SHOP-1',
-            bin: item.current_bin || item.current_location || 'SHOP-1',
+            location: activeLocation,
+            bin: activeLocation,
             stockLevel: Number(item.stock_level || 0),
             lineDiscountPercent: 0,
             isReturnLine: false,
@@ -479,6 +513,7 @@ export default function CheckoutPage() {
 
     const returnValue = returnLines.reduce((sum, line) => sum + line.price * line.quantity, 0)
     const saleValue = saleLines.reduce((sum, line) => sum + line.price * line.quantity, 0)
+    const activeReturnLocation = checkoutLocation || 'SHOP-1'
 
     const queueRows: any[] = []
 
@@ -496,8 +531,8 @@ export default function CheckoutPage() {
           original_sale_id: originalSale?.id || null,
           quantity: line.quantity,
           total: Number(returnValue.toFixed(2)),
-          location: line.location,
-          bin: line.bin,
+          location: line.location || activeReturnLocation,
+          bin: line.bin || activeReturnLocation,
           local_first: true,
         },
         status: 'pending',
@@ -522,8 +557,8 @@ export default function CheckoutPage() {
           sale_number: saleNumber,
           quantity: line.quantity,
           total: Number(displayedTotal.toFixed(2)),
-          location: line.location,
-          bin: line.bin,
+          location: line.location || checkoutLocation || 'SHOP-1',
+          bin: line.bin || checkoutLocation || 'SHOP-1',
           local_first: true,
         },
         status: 'pending',
@@ -547,6 +582,7 @@ export default function CheckoutPage() {
       refund_method: action === 'refund' ? method : null,
       square_status: method === 'card' ? 'manual_terminal_payment_recorded' : 'not_required',
       status: 'completed',
+      checkout_location: checkoutLocation || 'SHOP-1',
       created_at: now,
       updated_at: now,
       lines: basket
@@ -660,10 +696,10 @@ export default function CheckoutPage() {
               </h1>
               <p className={`text-sm ${mutedText}`}>
                 {mode === 'refund'
-                  ? 'Select items and quantities to refund.'
+                  ? `Select items and quantities to refund. Return location: ${checkoutLocation || 'SHOP-1'}`
                   : selectedLine
                     ? `Discount target: ${selectedLine.sku}`
-                    : 'Discount target: whole basket'}
+                    : `Location: ${checkoutLocation || 'SHOP-1'} · Discount target: whole basket`}
               </p>
             </div>
 
@@ -673,6 +709,27 @@ export default function CheckoutPage() {
               className="rounded-full border border-current px-4 py-2 text-sm font-bold"
             >
               {darkMode ? 'Light' : 'Dark'}
+            </button>
+          </div>
+
+          <div className="mb-3 flex gap-2">
+            <input
+              value={checkoutLocation}
+              onChange={(event) => setCheckoutLocation(event.target.value)}
+              onBlur={(event) => saveCheckoutLocation(event.target.value)}
+              placeholder="Checkout location"
+              className={
+                darkMode
+                  ? 'w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm font-bold outline-none focus:border-white'
+                  : 'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm font-bold outline-none focus:border-black'
+              }
+            />
+            <button
+              type="button"
+              onClick={() => saveCheckoutLocation(checkoutLocation)}
+              className="rounded-2xl bg-white px-4 py-3 text-sm font-black text-black"
+            >
+              Save
             </button>
           </div>
 
@@ -771,13 +828,9 @@ export default function CheckoutPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-black">
-                              {line.brand || 'Unknown Brand'}
-                            </p>
+                            <p className="truncate text-sm font-black">{line.brand || 'Unknown Brand'}</p>
                             <p className={`truncate text-xs ${mutedText}`}>
-                              {[line.category, line.subType, line.colour]
-                                .filter(Boolean)
-                                .join(' · ') || line.title}
+                              {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') || line.title}
                             </p>
                             <p className={`truncate text-[11px] ${mutedText}`}>{line.sku}</p>
                           </div>
@@ -802,9 +855,7 @@ export default function CheckoutPage() {
                             >
                               −
                             </span>
-                            <span className="min-w-8 text-center text-sm font-black">
-                              {line.quantity}
-                            </span>
+                            <span className="min-w-8 text-center text-sm font-black">{line.quantity}</span>
                             <span
                               onClick={(event) => {
                                 event.stopPropagation()
@@ -865,9 +916,7 @@ export default function CheckoutPage() {
 
             <div className="flex justify-between">
               <span className={mutedText}>Subtotal</span>
-              <span className="font-bold">
-                {money(mode === 'refund' ? returnSubtotal : saleSubtotal)}
-              </span>
+              <span className="font-bold">{money(mode === 'refund' ? returnSubtotal : saleSubtotal)}</span>
             </div>
 
             <div className="flex justify-between">
@@ -948,11 +997,9 @@ export default function CheckoutPage() {
                       : 'bg-sky-100 text-black'
                   }`}
                 >
-                  <span className="inline-flex flex-wrap items-center justify-center gap-1">
+                  <span className="inline-flex flex-wrap items-center justify-center gap-1.5">
                     CARD
-                    <CardBadge className="text-blue-700">VISA</CardBadge>
-                    <CardBadge className="text-red-600">MC</CardBadge>
-                    <CardBadge className="text-sky-700">AMEX</CardBadge>
+                    <CardLogos />
                   </span>
                 </button>
               </div>
@@ -966,14 +1013,8 @@ export default function CheckoutPage() {
                     className={inputClass}
                     inputMode="decimal"
                   />
-                  <div
-                    className={`rounded-2xl p-3 text-right ${
-                      darkMode ? 'bg-neutral-950' : 'bg-neutral-100'
-                    }`}
-                  >
-                    <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>
-                      Change
-                    </p>
+                  <div className={`rounded-2xl p-3 text-right ${darkMode ? 'bg-neutral-950' : 'bg-neutral-100'}`}>
+                    <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
                     <p className="text-2xl font-black">{money(changeDue)}</p>
                   </div>
                 </div>
