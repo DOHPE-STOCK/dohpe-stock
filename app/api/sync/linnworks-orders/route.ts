@@ -204,7 +204,13 @@ function getItemQuantity(item: any) {
 }
 
 async function getAllOpenOrderIds(server: string, token: string) {
-  const data = await linnworksPost(server, token, '/api/OpenOrders/GetAllOpenOrders', {})
+  const data = await linnworksPost(server, token, '/api/Orders/GetAllOpenOrders', {
+  filters: {},
+  sorting: [],
+  fulfilmentCenter: '00000000-0000-0000-0000-000000000000',
+  additionalFilter: '',
+  exactMatch: false,
+})
 
   const rows = getOpenOrderIdRows(data)
 
