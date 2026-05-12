@@ -3,8 +3,6 @@ import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
-const DEFAULT_LOCATION_ID = '00000000-0000-0000-0000-000000000000'
-
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -71,31 +69,6 @@ async function linnworksPost(server: string, token: string, path: string, body: 
   return data
 }
 
-async function linnworksGet(server: string, token: string, path: string) {
-  const response = await fetch(`${server}${path}`, {
-    method: 'GET',
-    headers: {
-      accept: 'application/json',
-      Authorization: token,
-    },
-  })
-
-  const text = await response.text()
-  let data: any = null
-
-  try {
-    data = text ? JSON.parse(text) : null
-  } catch {
-    data = text
-  }
-
-  if (!response.ok) {
-    throw new Error(`${path} failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`)
-  }
-
-  return data
-}
-
 function normaliseText(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -118,79 +91,18 @@ function getArrayFromCandidates(data: any, keys: string[]) {
   return []
 }
 
-function getOrderViewRows(data: any) {
+function getOpenOrderIdRows(data: any) {
   return getArrayFromCandidates(data, [
     'Data',
     'data',
-    'Views',
-    'views',
-    'OrderViews',
-    'orderViews',
-    'Results',
-    'results',
-  ])
-}
-
-function getViewId(view: any) {
-  const value =
-    view?.pkViewId ??
-    view?.PkViewId ??
-    view?.ViewId ??
-    view?.viewId ??
-    view?.Id ??
-    view?.id ??
-    null
-
-  const num = normaliseNumber(value)
-  return num === null ? null : num
-}
-
-function getViewName(view: any) {
-  return normaliseText(
-    view?.ViewName ||
-      view?.viewName ||
-      view?.Name ||
-      view?.name ||
-      view?.Title ||
-      view?.title
-  )
-}
-
-function chooseOpenOrderViewId(views: any[], wantedViewName: string) {
-  if (views.length === 0) return null
-
-  const wanted = wantedViewName.toLowerCase().trim()
-
-  if (wanted) {
-    const exact = views.find((view) => getViewName(view).toLowerCase().trim() === wanted)
-    const exactId = exact ? getViewId(exact) : null
-    if (exactId !== null) return exactId
-
-    const partial = views.find((view) => getViewName(view).toLowerCase().includes(wanted))
-    const partialId = partial ? getViewId(partial) : null
-    if (partialId !== null) return partialId
-  }
-
-  const likelyOpenOrdersView =
-    views.find((view) => getViewName(view).toLowerCase().includes('open')) ||
-    views.find((view) => getViewName(view).toLowerCase().includes('ready')) ||
-    views[0]
-
-  return getViewId(likelyOpenOrdersView)
-}
-
-function getOpenOrderRows(data: any) {
-  return getArrayFromCandidates(data, [
-    'Data',
-    'data',
+    'OrderIds',
+    'orderIds',
     'Orders',
     'orders',
     'Items',
     'items',
     'Results',
     'results',
-    'OpenOrders',
-    'openOrders',
   ])
 }
 
@@ -219,7 +131,8 @@ function getOrderId(order: any) {
       order?.NumOrderId ||
       order?.numOrderId ||
       order?.ReferenceNum ||
-      order?.referenceNum
+      order?.referenceNum ||
+      order
   )
 }
 
@@ -290,26 +203,14 @@ function getItemQuantity(item: any) {
   )
 }
 
-async function getOpenOrderViews(server: string, token: string) {
-  const data = await linnworksGet(server, token, '/api/Orders/GetOrderViews')
-  return getOrderViewRows(data)
-}
+async function getAllOpenOrderIds(server: string, token: string) {
+  const data = await linnworksPost(server, token, '/api/OpenOrders/GetAllOpenOrders', {})
 
-async function getOpenOrders(params: {
-  server: string
-  token: string
-  viewId: number
-  entriesPerPage: number
-  pageNumber: number
-  locationId: string
-}) {
-  return await linnworksPost(params.server, params.token, '/api/OpenOrders/GetOpenOrders', {
-    ViewId: params.viewId,
-    LocationId: params.locationId,
-    EntriesPerPage: params.entriesPerPage,
-    PageNumber: params.pageNumber,
-    OrderIds: [],
-  })
+  const rows = getOpenOrderIdRows(data)
+
+  return rows
+    .map(getOrderId)
+    .filter(Boolean)
 }
 
 async function getOpenOrdersDetails(server: string, token: string, orderIds: string[]) {
@@ -317,7 +218,7 @@ async function getOpenOrdersDetails(server: string, token: string, orderIds: str
 
   const data = await linnworksPost(server, token, '/api/OpenOrders/GetOpenOrdersDetails', {
     OrderIds: orderIds,
-    DetailLevel: [],
+    DetailLevel: ['Items'],
   })
 
   return getOpenOrderDetailRows(data)
@@ -395,36 +296,18 @@ async function processLinnworksOpenOrders(request: Request) {
 
     const entriesPerPage = Math.min(Number(body.entriesPerPage || 50), 100)
     const pageNumber = Math.max(Number(body.pageNumber || 1), 1)
-    const locationId = normaliseText(body.locationId) || DEFAULT_LOCATION_ID
-    const wantedViewName = normaliseText(body.viewName || process.env.LINNWORKS_OPEN_ORDERS_VIEW_NAME)
 
     const { server, token } = await authoriseLinnworks()
 
     const webAppSkus = await getWebAppSkus(supabase)
-    const views = await getOpenOrderViews(server, token)
-    const viewId = chooseOpenOrderViewId(views, wantedViewName)
+    const allOrderIds = await getAllOpenOrderIds(server, token)
 
-    if (viewId === null) {
-      throw new Error('Could not find a Linnworks open orders ViewId from Orders/GetOrderViews.')
-    }
+    const pagedOrderIds = allOrderIds.slice(
+      (pageNumber - 1) * entriesPerPage,
+      pageNumber * entriesPerPage
+    )
 
-    const openOrdersRaw = await getOpenOrders({
-      server,
-      token,
-      viewId,
-      entriesPerPage,
-      pageNumber,
-      locationId,
-    })
-
-    const openOrderRows = getOpenOrderRows(openOrdersRaw)
-
-    const orderIds = openOrderRows
-      .map(getOrderId)
-      .filter(Boolean)
-
-    const detailedOrders = await getOpenOrdersDetails(server, token, orderIds)
-    const orders = detailedOrders.length > 0 ? detailedOrders : openOrderRows
+    const orders = await getOpenOrdersDetails(server, token, pagedOrderIds)
 
     const results: any[] = []
 
@@ -603,11 +486,9 @@ async function processLinnworksOpenOrders(request: Request) {
       ok: true,
       message: 'Linnworks open orders checked.',
       started_at: startedAt,
-      view_id_used: viewId,
-      view_name_filter: wantedViewName || null,
       web_app_sku_count: webAppSkus.size,
-      raw_open_order_count: openOrderRows.length,
-      detailed_order_count: detailedOrders.length,
+      all_open_order_id_count: allOrderIds.length,
+      checked_order_id_count: pagedOrderIds.length,
       order_count: orders.length,
       created_queue_rows: results.filter((row) => row.queueAction === 'update_stock').length,
       results,
