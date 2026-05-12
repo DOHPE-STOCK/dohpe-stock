@@ -274,66 +274,76 @@ export default function CheckoutPage() {
     return text(data?.processed_url || data?.original_url)
   }
 
-  async function loadSaleForRefund(saleNumber: string) {
-    const confirmed = window.confirm(`Enter refund mode for receipt ${saleNumber}?`)
-    if (!confirmed) return
+  async function lookupSaleForRefund(saleNumber: string) {
+    const response = await fetch(
+      `/api/pos/lookup-sale?sale_number=${encodeURIComponent(saleNumber)}`
+    )
 
-    const { data: sale, error: saleError } = await supabase
-      .from('pos_sales')
-      .select('*')
-      .eq('sale_number', saleNumber)
-      .maybeSingle()
+    const data = await response.json().catch(() => null)
 
-    if (saleError) throw new Error(saleError.message)
-
-    if (!sale) {
-      setMessage(`Receipt not found: ${saleNumber}`)
-      return
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.message || `Receipt not found: ${saleNumber}`)
     }
 
-    const { data: lines, error: linesError } = await supabase
-      .from('pos_sale_lines')
-      .select('*')
-      .eq('sale_id', sale.id)
-      .order('created_at', { ascending: true })
+    return {
+      sale: data.sale,
+      lines: Array.isArray(data.lines) ? data.lines : [],
+    }
+  }
 
-    if (linesError) throw new Error(linesError.message)
+  async function loadSaleForRefund(saleNumber: string) {
+    const cleanSaleNumber = text(saleNumber).toUpperCase()
 
-    const returnLocation = checkoutLocation || 'SHOP-1'
+    if (!cleanSaleNumber) return
 
-    const refundLines: BasketLine[] = (lines || [])
-      .map((line: any) => {
-        const soldQty = Number(line.quantity || 0)
-        const alreadyRefunded = Number(line.refunded_quantity || 0)
-        const maxRefundQty = Math.max(0, soldQty - alreadyRefunded)
+    const confirmed = window.confirm(`Enter refund mode for receipt ${cleanSaleNumber}?`)
+    if (!confirmed) return
 
-        return {
-          sku: line.sku,
-          title: line.title || line.sku,
-          brand: line.brand || '',
-          category: line.reporting_category || '',
-          subType: line.sub_type || '',
-          colour: line.colour || '',
-          thumbnailUrl: '',
-          price: Number(line.unit_price || 0),
-          quantity: 0,
-          location: returnLocation,
-          bin: returnLocation,
-          stockLevel: 0,
-          lineDiscountPercent: Number(line.discount_percent || 0),
-          originalLineId: line.id,
-          maxRefundQuantity: maxRefundQty,
-          isReturnLine: true,
-        }
-      })
-      .filter((line: BasketLine) => Number(line.maxRefundQuantity || 0) > 0)
+    try {
+      const { sale, lines } = await lookupSaleForRefund(cleanSaleNumber)
+      const returnLocation = checkoutLocation || 'SHOP-1'
 
-    clearSale(false)
-    setOriginalSale(sale)
-    setBasket(refundLines)
-    setMode('refund')
-    setPaymentMethod(null)
-    setMessage('Select items and quantities to refund.')
+      const refundLines: BasketLine[] = lines
+        .map((line: any) => {
+          const soldQty = Number(line.quantity || 0)
+          const alreadyRefunded = Number(line.refunded_quantity || 0)
+          const maxRefundQty = Math.max(0, soldQty - alreadyRefunded)
+
+          return {
+            sku: line.sku,
+            title: line.title || line.sku,
+            brand: line.brand || '',
+            category: line.reporting_category || '',
+            subType: line.sub_type || '',
+            colour: line.colour || '',
+            thumbnailUrl: '',
+            price: Number(line.unit_price || 0),
+            quantity: 0,
+            location: returnLocation,
+            bin: returnLocation,
+            stockLevel: 0,
+            lineDiscountPercent: Number(line.discount_percent || 0),
+            originalLineId: line.id,
+            maxRefundQuantity: maxRefundQty,
+            isReturnLine: true,
+          }
+        })
+        .filter((line: BasketLine) => Number(line.maxRefundQuantity || 0) > 0)
+
+      clearSale(false)
+      setOriginalSale(sale)
+      setBasket(refundLines)
+      setMode('refund')
+      setPaymentMethod(null)
+
+      if (refundLines.length === 0) {
+        setMessage('This receipt has no refundable items left.')
+      } else {
+        setMessage('Select items and quantities to refund.')
+      }
+    } catch (error: any) {
+      setMessage(error.message || `Receipt not found: ${cleanSaleNumber}`)
+    }
   }
 
   async function addScannedSku(rawSku?: string) {
@@ -635,6 +645,8 @@ export default function CheckoutPage() {
 
       await saveTransaction(tx)
 
+      clearSale()
+
       if (method === 'card' && (mode === 'refund' || refundDue > 0)) {
         setMessage('Card refund recorded. Square refund API still needs connecting.')
       } else if (mode === 'exchange') {
@@ -645,7 +657,6 @@ export default function CheckoutPage() {
         setMessage(`Sale recorded. Receipt: ${tx.sale_number}`)
       }
 
-      clearSale()
       retryOfflineTransactions()
     } catch (error: any) {
       setMessage(error.message || 'Could not complete transaction.')
