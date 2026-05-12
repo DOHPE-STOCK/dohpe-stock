@@ -89,12 +89,18 @@ function getOfflineTransactions(): any[] {
 function setOfflineTransactions(rows: any[]) {
   if (typeof window === 'undefined') return
 
-  if (rows.length === 0) {
+  const deduped = rows.filter((tx, index, all) => {
+    const key = tx?.id || tx?.sale_number
+    if (!key) return true
+    return all.findIndex((row) => (row?.id || row?.sale_number) === key) === index
+  })
+
+  if (deduped.length === 0) {
     localStorage.removeItem(OFFLINE_TX_KEY)
     return
   }
 
-  localStorage.setItem(OFFLINE_TX_KEY, JSON.stringify(rows))
+  localStorage.setItem(OFFLINE_TX_KEY, JSON.stringify(deduped))
 }
 
 function getSubType(item: ItemRow) {
@@ -123,7 +129,6 @@ export default function CheckoutPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const retryingRef = useRef(false)
 
-  const [darkMode, setDarkMode] = useState(true)
   const [mode, setMode] = useState<CheckoutMode>('sale')
   const [scanValue, setScanValue] = useState('')
   const [basket, setBasket] = useState<BasketLine[]>([])
@@ -177,19 +182,11 @@ export default function CheckoutPage() {
   const changeDue = Math.max(0, (Number(cashTendered) || 0) - displayedTotal)
   const selectedLine = basket.find((line) => line.sku === selectedSku)
 
-  const pageClass = darkMode
-    ? 'min-h-screen bg-neutral-950 text-white'
-    : 'min-h-screen bg-neutral-100 text-neutral-950'
-
-  const panelClass = darkMode
-    ? 'rounded-3xl border border-neutral-800 bg-neutral-900 shadow-2xl'
-    : 'rounded-3xl border border-neutral-200 bg-white shadow-xl'
-
-  const mutedText = darkMode ? 'text-neutral-400' : 'text-neutral-500'
-
-  const inputClass = darkMode
-    ? 'w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-xl font-semibold outline-none focus:border-white'
-    : 'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-4 text-xl font-semibold outline-none focus:border-black'
+  const pageClass = 'min-h-screen bg-neutral-100 text-neutral-950'
+  const panelClass = 'rounded-3xl border border-neutral-200 bg-white shadow-xl'
+  const mutedText = 'text-neutral-500'
+  const inputClass =
+    'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-4 text-xl font-semibold outline-none focus:border-black'
 
   useEffect(() => {
     setCheckoutLocation(getSavedCheckoutLocation())
@@ -223,10 +220,24 @@ export default function CheckoutPage() {
 
     try {
       const stillPending: any[] = []
+      const completedKeys = new Set<string>()
 
       for (const tx of pending) {
+        const key = text(tx?.id || tx?.sale_number)
+
+        if (key && completedKeys.has(key)) {
+          continue
+        }
+
         try {
-          await writeTransactionOnline(tx)
+          const result = await writeTransactionOnline(tx)
+
+          if (result?.ok) {
+            if (key) completedKeys.add(key)
+            continue
+          }
+
+          stillPending.push(tx)
         } catch {
           stillPending.push(tx)
         }
@@ -615,7 +626,14 @@ export default function CheckoutPage() {
       console.error('POS_TRANSACTION_SAVE_FAILED', error)
 
       const pending = getOfflineTransactions()
-      setOfflineTransactions([...pending, tx])
+      const key = text(tx?.id || tx?.sale_number)
+      const alreadyPending = key
+        ? pending.some((row) => text(row?.id || row?.sale_number) === key)
+        : false
+
+      if (!alreadyPending) {
+        setOfflineTransactions([...pending, tx])
+      }
 
       throw error
     }
@@ -701,35 +719,21 @@ export default function CheckoutPage() {
               </p>
             </div>
 
-            <div className="flex flex-col items-end gap-2">
-              <div className="flex items-center justify-end gap-2">
-                <input
-                  value={checkoutLocation}
-                  onChange={(event) => setCheckoutLocation(event.target.value)}
-                  onBlur={(event) => saveCheckoutLocation(event.target.value)}
-                  placeholder="Location"
-                  className={
-                    darkMode
-                      ? 'w-24 rounded-xl border border-neutral-700 bg-neutral-950 px-2 py-2 text-xs font-bold uppercase outline-none focus:border-white'
-                      : 'w-24 rounded-xl border border-neutral-300 bg-white px-2 py-2 text-xs font-bold uppercase outline-none focus:border-black'
-                  }
-                />
-
-                <button
-                  type="button"
-                  onClick={() => saveCheckoutLocation(checkoutLocation)}
-                  className="rounded-xl bg-white px-3 py-2 text-xs font-black text-black"
-                >
-                  Save
-                </button>
-              </div>
+            <div className="flex items-center justify-end gap-2">
+              <input
+                value={checkoutLocation}
+                onChange={(event) => setCheckoutLocation(event.target.value)}
+                onBlur={(event) => saveCheckoutLocation(event.target.value)}
+                placeholder="Location"
+                className="w-24 rounded-xl border border-neutral-300 bg-white px-2 py-2 text-xs font-bold uppercase outline-none focus:border-black"
+              />
 
               <button
                 type="button"
-                onClick={() => setDarkMode((value) => !value)}
-                className="rounded-full border border-current px-4 py-2 text-xs font-bold"
+                onClick={() => saveCheckoutLocation(checkoutLocation)}
+                className="rounded-xl bg-black px-3 py-2 text-xs font-black text-white"
               >
-                {darkMode ? 'Light' : 'Dark'}
+                Save
               </button>
             </div>
           </div>
@@ -754,25 +758,21 @@ export default function CheckoutPage() {
             <button
               type="submit"
               disabled={!scanValue.trim() || Boolean(loadingSku)}
-              className="rounded-2xl bg-white px-5 py-3 font-black text-black disabled:opacity-40"
+              className="rounded-2xl bg-black px-5 py-3 font-black text-white disabled:opacity-40"
             >
               Add
             </button>
           </form>
 
           {message && (
-            <div
-              className={`mt-3 rounded-2xl p-3 text-sm font-semibold ${
-                darkMode ? 'bg-neutral-800' : 'bg-neutral-100'
-              }`}
-            >
+            <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-semibold">
               {message}
             </div>
           )}
         </section>
 
         <section className={`${panelClass} flex flex-1 flex-col overflow-hidden`}>
-          <div className="flex items-center justify-between border-b border-current/10 px-4 py-3">
+          <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
             <div>
               <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
               <p className="text-base font-black">{totalItems} items</p>
@@ -805,14 +805,12 @@ export default function CheckoutPage() {
                     onClick={() => setSelectedSku(isSelected ? '' : key)}
                     className={`w-full rounded-2xl p-2 text-left ${
                       isSelected
-                        ? 'bg-emerald-500/20 ring-2 ring-emerald-400'
-                        : darkMode
-                          ? 'bg-neutral-950'
-                          : 'bg-neutral-100'
+                        ? 'bg-emerald-100 ring-2 ring-emerald-400'
+                        : 'bg-neutral-100'
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-neutral-800">
+                      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-neutral-200">
                         {line.thumbnailUrl ? (
                           <img
                             src={line.thumbnailUrl}
@@ -829,7 +827,9 @@ export default function CheckoutPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-black">{line.brand || 'Unknown Brand'}</p>
+                            <p className="truncate text-sm font-black">
+                              {line.brand || 'Unknown Brand'}
+                            </p>
                             <p className={`truncate text-xs ${mutedText}`}>
                               {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') || line.title}
                             </p>
@@ -846,7 +846,7 @@ export default function CheckoutPage() {
                         </div>
 
                         <div className="mt-2 flex items-center justify-between gap-2">
-                          <div className="flex items-center rounded-full border border-current/20">
+                          <div className="flex items-center rounded-full border border-neutral-300">
                             <span
                               onClick={(event) => {
                                 event.stopPropagation()
@@ -873,7 +873,7 @@ export default function CheckoutPage() {
                           )}
 
                           {line.lineDiscountPercent > 0 && (
-                            <span className="text-xs font-black text-emerald-400">
+                            <span className="text-xs font-black text-emerald-600">
                               {line.lineDiscountPercent}% off
                             </span>
                           )}
@@ -893,14 +893,14 @@ export default function CheckoutPage() {
               <button
                 type="button"
                 onClick={() => applyPercentDiscount(5)}
-                className="rounded-2xl border border-current/20 py-3 font-black"
+                className="rounded-2xl border border-neutral-300 py-3 font-black"
               >
                 5% off
               </button>
               <button
                 type="button"
                 onClick={() => applyPercentDiscount(10)}
-                className="rounded-2xl border border-current/20 py-3 font-black"
+                className="rounded-2xl border border-neutral-300 py-3 font-black"
               >
                 10% off
               </button>
@@ -936,7 +936,7 @@ export default function CheckoutPage() {
             </div>
 
             {mode === 'exchange' && refundDue > 0 && (
-              <div className="flex justify-between text-red-400">
+              <div className="flex justify-between text-red-500">
                 <span>Refund due</span>
                 <span className="font-black">{money(refundDue)}</span>
               </div>
@@ -1014,7 +1014,7 @@ export default function CheckoutPage() {
                     className={inputClass}
                     inputMode="decimal"
                   />
-                  <div className={`rounded-2xl p-3 text-right ${darkMode ? 'bg-neutral-950' : 'bg-neutral-100'}`}>
+                  <div className="rounded-2xl bg-neutral-100 p-3 text-right">
                     <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
                     <p className="text-2xl font-black">{money(changeDue)}</p>
                   </div>
