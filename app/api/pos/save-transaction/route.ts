@@ -28,37 +28,60 @@ export async function POST(request: Request) {
       )
     }
 
-    const { error: saleError } = await supabase
+    const { data: existingSale, error: existingSaleError } = await supabase
       .from('pos_sales')
-      .insert(sale)
+      .select('id, sale_number')
+      .eq('id', sale.id)
+      .maybeSingle()
 
-    if (saleError) throw new Error(`pos_sales insert failed: ${saleError.message}`)
+    if (existingSaleError) {
+      throw new Error(`existing sale check failed: ${existingSaleError.message}`)
+    }
+
+    if (existingSale) {
+      return NextResponse.json({
+        ok: true,
+        duplicate: true,
+        sale_number: existingSale.sale_number,
+        sale_id: existingSale.id,
+        queue_rows: 0,
+        lines: 0,
+      })
+    }
+
+    const { error: saleError } = await supabase.from('pos_sales').insert(sale)
+
+    if (saleError) {
+      throw new Error(`pos_sales insert failed: ${saleError.message}`)
+    }
 
     if (Array.isArray(lines) && lines.length > 0) {
-      const { error: linesError } = await supabase
-        .from('pos_sale_lines')
-        .insert(lines)
+      const { error: linesError } = await supabase.from('pos_sale_lines').insert(lines)
 
-      if (linesError) throw new Error(`pos_sale_lines insert failed: ${linesError.message}`)
+      if (linesError) {
+        throw new Error(`pos_sale_lines insert failed: ${linesError.message}`)
+      }
     }
 
     if (Array.isArray(queueRows) && queueRows.length > 0) {
-      const { error: queueError } = await supabase
-        .from('linnworks_sync_queue')
-        .insert(queueRows)
+      const { error: queueError } = await supabase.from('linnworks_sync_queue').insert(queueRows)
 
-      if (queueError) throw new Error(`queue insert failed: ${queueError.message}`)
+      if (queueError) {
+        throw new Error(`queue insert failed: ${queueError.message}`)
+      }
     }
 
     if (Array.isArray(lines)) {
-      for (const line of lines.filter((line: any) => line.original_line_id)) {
+      for (const line of lines.filter((row: any) => row.original_line_id)) {
         const { data: originalLine, error: readError } = await supabase
           .from('pos_sale_lines')
           .select('refunded_quantity')
           .eq('id', line.original_line_id)
           .maybeSingle()
 
-        if (readError) throw new Error(`refund read failed: ${readError.message}`)
+        if (readError) {
+          throw new Error(`refund read failed: ${readError.message}`)
+        }
 
         const currentRefunded = Number(originalLine?.refunded_quantity || 0)
 
@@ -69,7 +92,9 @@ export async function POST(request: Request) {
           })
           .eq('id', line.original_line_id)
 
-        if (updateError) throw new Error(`refund quantity update failed: ${updateError.message}`)
+        if (updateError) {
+          throw new Error(`refund quantity update failed: ${updateError.message}`)
+        }
       }
     }
 
