@@ -111,23 +111,11 @@ function getLineTitle(item: ItemRow) {
 
 function CardLogos() {
   return (
-    <span className="inline-flex items-center gap-0.5">
-      <img
-        src="https://upload.wikimedia.org/wikipedia/commons/5/5e/Visa_Inc._logo.svg"
-        alt="Visa"
-        className="h-4 w-auto rounded bg-white px-1 py-0.5"
-      />
-      <img
-        src="https://upload.wikimedia.org/wikipedia/commons/2/2a/Mastercard-logo.svg"
-        alt="Mastercard"
-        className="h-5 w-auto rounded bg-white px-1 py-0.5"
-      />
-      <img
-        src="https://www.americanexpress.com/content/dam/amex/us/merchant/supplies-uplift/product/images/4_Card_color_horizontal.png"
-        alt="American Express"
-        className="h-5 w-auto rounded bg-white"
-      />
-    </span>
+    <img
+      src="https://www.americanexpress.com/content/dam/amex/us/merchant/supplies-uplift/product/images/4_Card_color_horizontal.png"
+      alt="Card payments"
+      className="h-7 w-auto rounded-md bg-white"
+    />
   )
 }
 
@@ -271,7 +259,6 @@ export default function CheckoutPage() {
     const clean = text(value) || 'SHOP-1'
     setCheckoutLocation(clean)
     localStorage.setItem(CHECKOUT_LOCATION_KEY, clean)
-    setMessage(`Checkout location set to ${clean}.`)
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
@@ -346,7 +333,7 @@ export default function CheckoutPage() {
     setBasket(refundLines)
     setMode('refund')
     setPaymentMethod(null)
-    setMessage(`Select items and quantities to refund. Returns will go to ${returnLocation}.`)
+    setMessage('Select items and quantities to refund.')
   }
 
   async function addScannedSku(rawSku?: string) {
@@ -689,48 +676,51 @@ export default function CheckoutPage() {
     <main className={pageClass}>
       <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 p-3 sm:p-5">
         <section className={`${panelClass} p-4`}>
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h1 className="text-2xl font-black tracking-tight">
                 {mode === 'refund' ? 'Refund' : mode === 'exchange' ? 'Exchange' : 'Checkout'}
               </h1>
               <p className={`text-sm ${mutedText}`}>
                 {mode === 'refund'
-                  ? `Select items and quantities to refund. Return location: ${checkoutLocation || 'SHOP-1'}`
+                  ? 'Select items and quantities to refund.'
                   : selectedLine
                     ? `Discount target: ${selectedLine.sku}`
-                    : `Location: ${checkoutLocation || 'SHOP-1'} · Discount target: whole basket`}
+                    : 'Discount target: whole basket'}
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setDarkMode((value) => !value)}
-              className="rounded-full border border-current px-4 py-2 text-sm font-bold"
-            >
-              {darkMode ? 'Light' : 'Dark'}
-            </button>
-          </div>
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center justify-end gap-2">
+                <input
+                  value={checkoutLocation}
+                  onChange={(event) => setCheckoutLocation(event.target.value)}
+                  onBlur={(event) => saveCheckoutLocation(event.target.value)}
+                  placeholder="Location"
+                  className={
+                    darkMode
+                      ? 'w-24 rounded-xl border border-neutral-700 bg-neutral-950 px-2 py-2 text-xs font-bold uppercase outline-none focus:border-white'
+                      : 'w-24 rounded-xl border border-neutral-300 bg-white px-2 py-2 text-xs font-bold uppercase outline-none focus:border-black'
+                  }
+                />
 
-          <div className="mb-3 flex gap-2">
-            <input
-              value={checkoutLocation}
-              onChange={(event) => setCheckoutLocation(event.target.value)}
-              onBlur={(event) => saveCheckoutLocation(event.target.value)}
-              placeholder="Checkout location"
-              className={
-                darkMode
-                  ? 'w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm font-bold outline-none focus:border-white'
-                  : 'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm font-bold outline-none focus:border-black'
-              }
-            />
-            <button
-              type="button"
-              onClick={() => saveCheckoutLocation(checkoutLocation)}
-              className="rounded-2xl bg-white px-4 py-3 text-sm font-black text-black"
-            >
-              Save
-            </button>
+                <button
+                  type="button"
+                  onClick={() => saveCheckoutLocation(checkoutLocation)}
+                  className="rounded-xl bg-white px-3 py-2 text-xs font-black text-black"
+                >
+                  Save
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDarkMode((value) => !value)}
+                className="rounded-full border border-current px-4 py-2 text-xs font-bold"
+              >
+                {darkMode ? 'Light' : 'Dark'}
+              </button>
+            </div>
           </div>
 
           <form
@@ -997,7 +987,7 @@ export default function CheckoutPage() {
                       : 'bg-sky-100 text-black'
                   }`}
                 >
-                  <span className="inline-flex flex-wrap items-center justify-center gap-1.5">
+                  <span className="inline-flex items-center justify-center gap-2">
                     CARD
                     <CardLogos />
                   </span>
