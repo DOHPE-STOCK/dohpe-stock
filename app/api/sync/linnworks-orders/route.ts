@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
+const DEFAULT_LOCATION_ID = '00000000-0000-0000-0000-000000000000'
+
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -80,29 +82,45 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
-function getOrderRows(data: any) {
+function getArrayFromCandidates(data: any, keys: string[]) {
   if (!data) return []
-
   if (Array.isArray(data)) return data
 
-  const candidates = [
-    data.Data,
-    data.data,
-    data.Orders,
-    data.orders,
-    data.Items,
-    data.items,
-    data.Results,
-    data.results,
-    data.OpenOrders,
-    data.openOrders,
-  ]
-
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) return candidate
+  for (const key of keys) {
+    if (Array.isArray(data?.[key])) return data[key]
   }
 
   return []
+}
+
+function getOpenOrderRows(data: any) {
+  return getArrayFromCandidates(data, [
+    'Data',
+    'data',
+    'Orders',
+    'orders',
+    'Items',
+    'items',
+    'Results',
+    'results',
+    'OpenOrders',
+    'openOrders',
+  ])
+}
+
+function getOpenOrderDetailRows(data: any) {
+  return getArrayFromCandidates(data, [
+    'Data',
+    'data',
+    'Orders',
+    'orders',
+    'Items',
+    'items',
+    'Results',
+    'results',
+    'OpenOrders',
+    'openOrders',
+  ])
 }
 
 function getOrderId(order: any) {
@@ -138,22 +156,16 @@ function getOrderSubSource(order: any) {
 }
 
 function getOrderItems(order: any) {
-  const candidates = [
-    order?.Items,
-    order?.items,
-    order?.OrderItems,
-    order?.orderItems,
-    order?.OrderLines,
-    order?.orderLines,
-    order?.Rows,
-    order?.rows,
-  ]
-
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) return candidate
-  }
-
-  return []
+  return getArrayFromCandidates(order, [
+    'Items',
+    'items',
+    'OrderItems',
+    'orderItems',
+    'OrderLines',
+    'orderLines',
+    'Rows',
+    'rows',
+  ])
 }
 
 function getOrderItemId(item: any) {
@@ -193,34 +205,24 @@ function getItemQuantity(item: any) {
 }
 
 async function getOpenOrders(server: string, token: string, entriesPerPage: number, pageNumber: number) {
-  const payloads = [
-    {
-      entriesPerPage,
-      pageNumber,
-      filters: [],
-      sorting: [],
-    },
-    {
-      request: {
-        entriesPerPage,
-        pageNumber,
-        filters: [],
-        sorting: [],
-      },
-    },
-  ]
+  return await linnworksPost(server, token, '/api/OpenOrders/GetOpenOrders', {
+    ViewId: 0,
+    LocationId: DEFAULT_LOCATION_ID,
+    EntriesPerPage: entriesPerPage,
+    PageNumber: pageNumber,
+    OrderIds: [],
+  })
+}
 
-  let lastError: any = null
+async function getOpenOrdersDetails(server: string, token: string, orderIds: string[]) {
+  if (orderIds.length === 0) return []
 
-  for (const payload of payloads) {
-    try {
-      return await linnworksPost(server, token, '/api/Orders/GetOpenOrders', payload)
-    } catch (error: any) {
-      lastError = error
-    }
-  }
+  const data = await linnworksPost(server, token, '/api/OpenOrders/GetOpenOrdersDetails', {
+    OrderIds: orderIds,
+    DetailLevel: [],
+  })
 
-  throw lastError
+  return getOpenOrderDetailRows(data)
 }
 
 async function createQueueRow(params: {
@@ -271,7 +273,15 @@ async function processLinnworksOpenOrders(request: Request) {
     const { server, token } = await authoriseLinnworks()
 
     const openOrdersRaw = await getOpenOrders(server, token, entriesPerPage, pageNumber)
-    const orders = getOrderRows(openOrdersRaw)
+    const openOrderRows = getOpenOrderRows(openOrdersRaw)
+
+    const orderIds = openOrderRows
+      .map(getOrderId)
+      .filter(Boolean)
+
+    const detailedOrders = await getOpenOrdersDetails(server, token, orderIds)
+
+    const orders = detailedOrders.length > 0 ? detailedOrders : openOrderRows
 
     const results: any[] = []
 
@@ -440,6 +450,8 @@ async function processLinnworksOpenOrders(request: Request) {
       ok: true,
       message: 'Linnworks open orders checked.',
       started_at: startedAt,
+      raw_open_order_count: openOrderRows.length,
+      detailed_order_count: detailedOrders.length,
       order_count: orders.length,
       created_queue_rows: results.filter((row) => row.queueAction === 'update_stock').length,
       results,
