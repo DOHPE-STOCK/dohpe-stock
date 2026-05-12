@@ -357,8 +357,7 @@ async function getLinnworksStockRows(params: {
     const matchingLocationRow = locationId
       ? locationRows.find(
           (row) =>
-            String(getLocationId(row) || '').toLowerCase() ===
-            String(locationId).toLowerCase()
+            String(getLocationId(row) || '').toLowerCase() === String(locationId).toLowerCase()
         )
       : null
 
@@ -410,12 +409,7 @@ async function updateStockField(
     payload.locationId = params.locationId
   }
 
-  return await linnworksPost(
-    server,
-    token,
-    '/api/Inventory/UpdateInventoryItemStockField',
-    payload
-  )
+  return await linnworksPost(server, token, '/api/Inventory/UpdateInventoryItemStockField', payload)
 }
 
 async function getItemThumbnailUrl(supabase: any, itemId: string | null | undefined) {
@@ -482,6 +476,11 @@ function formatTelegramReason(payload: any) {
   if (value.includes('stock update')) return 'Stock update'
   if (value.includes('manual')) return 'Manual adjustment'
   if (value.includes('loan')) return 'Loan'
+  if (value.includes('pos cash sale')) return 'POS cash sale'
+  if (value.includes('pos card sale')) return 'POS card sale'
+  if (value.includes('pos exchange sale')) return 'POS exchange sale'
+  if (value.includes('pos refund')) return 'POS refund'
+  if (value.includes('pos exchange return')) return 'POS exchange return'
 
   return rawReason
 }
@@ -492,8 +491,25 @@ function shouldSendTelegramForUpdateStock(payload: any) {
   return reason === 'online_sale' || reason === 'stock_update'
 }
 
+function isPosSaleDeductionReason(reason: string) {
+  return ['pos_cash_sale', 'pos_card_sale', 'pos_exchange_sale'].includes(reason)
+}
+
+function isPosReturnIncrementReason(reason: string) {
+  return ['pos_refund', 'pos_exchange_return', 'pos_cash_refund', 'pos_card_refund'].includes(reason)
+}
+
+function getPreferredReturnLocation(payload: any, item: any) {
+  return (
+    normaliseText(payload.location) ||
+    normaliseText(item?.current_location) ||
+    'SHOP-1'
+  )
+}
+
 function getLocationPriority(locationName: string, payload: any, item: any) {
   const value = locationName.toLowerCase()
+  const reason = normaliseText(payload.reason).toLowerCase()
   const payloadLocation = normaliseText(payload.location).toLowerCase()
   const itemLocation = normaliseText(item?.current_location).toLowerCase()
   const saleLocation = normaliseText(payload.sale_location).toLowerCase()
@@ -501,6 +517,14 @@ function getLocationPriority(locationName: string, payload: any, item: any) {
   if (saleLocation && value === saleLocation) return 0
   if (payloadLocation && value === payloadLocation) return 1
   if (itemLocation && value === itemLocation) return 2
+
+  if (isPosSaleDeductionReason(reason)) {
+    if (value === 'default') return 3
+    if (value.startsWith('shop') || value.includes('shop-')) return 4
+    if (value.includes('warehouse')) return 5
+    if (value.includes('transit')) return 9
+    return 6
+  }
 
   if (value.startsWith('shop') || value.includes('shop-')) return 3
   if (value.includes('warehouse')) return 4
@@ -517,6 +541,8 @@ function chooseLocationForAdjustment(params: {
   delta: number
 }) {
   const { stockRows, payload, item, delta } = params
+
+  const reason = normaliseText(payload.reason).toLowerCase()
 
   const wantedLocation =
     normaliseText(payload.location) ||
@@ -571,7 +597,9 @@ function chooseLocationForAdjustment(params: {
       return {
         ...selected,
         newStockLevel: Math.max(0, selected.stockLevel + delta),
-        selectionReason: 'best_location_with_stock',
+        selectionReason: isPosSaleDeductionReason(reason)
+          ? 'best_pos_sale_location_with_stock'
+          : 'best_location_with_stock',
       }
     }
 
@@ -579,16 +607,36 @@ function chooseLocationForAdjustment(params: {
   }
 
   if (delta > 0) {
-    if (wantedLocationLower) {
+    const preferredReturnLocation = isPosReturnIncrementReason(reason)
+      ? getPreferredReturnLocation(payload, item)
+      : wantedLocation
+
+    const preferredReturnLocationLower = preferredReturnLocation.toLowerCase()
+
+    if (preferredReturnLocationLower) {
       const exactWanted = stockRows.find(
-        (row) => row.locationName.toLowerCase() === wantedLocationLower
+        (row) => row.locationName.toLowerCase() === preferredReturnLocationLower
       )
 
       if (exactWanted) {
         return {
           ...exactWanted,
           newStockLevel: exactWanted.stockLevel + delta,
-          selectionReason: 'wanted_location_for_increment',
+          selectionReason: isPosReturnIncrementReason(reason)
+            ? 'pos_return_to_current_shop_location'
+            : 'wanted_location_for_increment',
+        }
+      }
+    }
+
+    if (isPosReturnIncrementReason(reason)) {
+      const shopOneRow = stockRows.find((row) => row.locationName.toLowerCase() === 'shop-1')
+
+      if (shopOneRow) {
+        return {
+          ...shopOneRow,
+          newStockLevel: shopOneRow.stockLevel + delta,
+          selectionReason: 'pos_return_fallback_to_shop_1',
         }
       }
     }
@@ -743,7 +791,7 @@ async function processAdjustStockQueueRow(params: {
 
   const itemResult = await supabase
     .from('items')
-    .select('id, sku, cost_price, stock_level, current_location, current_bin')
+    .select('id, sku, brand, reporting_category, cost_price, stock_level, current_location, current_bin')
     .eq('sku', sku)
     .maybeSingle()
 
@@ -769,6 +817,19 @@ async function processAdjustStockQueueRow(params: {
     item,
     delta,
   })
+
+  const reason = normaliseText(payload.reason).toLowerCase()
+  const expectedLocation =
+    normaliseText(payload.location) ||
+    normaliseText(payload.sale_location) ||
+    normaliseText(item?.current_location) ||
+    ''
+
+  const usedFallbackLocation =
+    delta < 0 &&
+    isPosSaleDeductionReason(reason) &&
+    expectedLocation &&
+    selected.locationName.toLowerCase() !== expectedLocation.toLowerCase()
 
   const costPrice = normaliseNumber(item?.cost_price) ?? 0
   const stockValue = Number((selected.newStockLevel * costPrice).toFixed(2))
@@ -803,6 +864,30 @@ async function processAdjustStockQueueRow(params: {
       fieldValue: binRack,
       locationId: selected.locationId,
     })
+  }
+
+  if (usedFallbackLocation) {
+    try {
+      const thumbnailUrl = await getItemThumbnailUrl(supabase, item?.id)
+
+      results.location_mismatch_telegram = await sendTelegramMessage(
+        `⚠️ POS stock location mismatch
+
+SKU: ${sku}
+Brand: ${normaliseText(item?.brand) || 'Unknown'}
+Category: ${normaliseText(item?.reporting_category) || 'Unknown'}
+Sale: ${normaliseText(payload.sale_number) || normaliseText(payload.sale_id) || 'Unknown'}
+Reason: ${formatTelegramReason(payload)}
+Expected location: ${expectedLocation}
+Deducted from: ${selected.locationName}
+Stock at selected location: ${selected.stockLevel} → ${selected.newStockLevel}
+
+This usually means the item was physically sold in the shop, but Linnworks stock was not allocated to the shop location.`,
+        thumbnailUrl
+      )
+    } catch (error: any) {
+      results.location_mismatch_telegram = { ok: false, error: error.message }
+    }
   }
 
   const updatedStockRows = stockData.mappedRows.map((row) => {
@@ -851,10 +936,14 @@ async function processAdjustStockQueueRow(params: {
     locationId: selected.locationId,
     binRack,
     selectionReason: selected.selectionReason,
-    telegram: {
-      skipped: true,
-      reason: 'No Telegram notification for adjust_stock/manual/loan actions',
-    },
+    expectedLocation,
+    usedFallbackLocation,
+    telegram: usedFallbackLocation
+      ? results.location_mismatch_telegram
+      : {
+          skipped: true,
+          reason: 'No Telegram notification needed for this adjust_stock action',
+        },
     stockRowsUsed: stockData.mappedRows,
     results,
   }
