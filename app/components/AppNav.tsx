@@ -3,6 +3,7 @@ import Link from 'next/link'
 type NavKey =
   | 'settings'
   | 'sku'
+  | 'checkout'
   | 'working'
   | 'review'
   | 'finalised'
@@ -25,6 +26,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { key: 'sku', label: 'SKU Search', href: '/' },
+  { key: 'checkout', label: 'Checkout', href: '/checkout' },
   { key: 'working', label: 'Working', href: '/working' },
   { key: 'review', label: 'Review', href: '/review' },
   { key: 'finalised', label: 'Finalised', href: '/finalised' },
