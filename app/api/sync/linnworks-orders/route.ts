@@ -224,7 +224,7 @@ async function getOpenOrdersDetails(server: string, token: string, orderIds: str
 
   const data = await linnworksPost(server, token, '/api/OpenOrders/GetOpenOrdersDetails', {
     OrderIds: orderIds,
-    DetailLevel: ['Items'],
+    DetailLevel: [],
   })
 
   return getOpenOrderDetailRows(data)
