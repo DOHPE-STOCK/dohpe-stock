@@ -1,7 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import AppNav from '@/app/components/AppNav'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
 type ItemRow = {
@@ -28,7 +27,6 @@ type BasketLine = {
   bin: string
   stockLevel: number
   lineDiscountPercent: number
-  lineDiscountAmount: number
 }
 
 type PaymentMethod = 'cash' | 'card' | null
@@ -56,8 +54,34 @@ function getLineTitle(item: ItemRow) {
   )
 }
 
+function getOfflineRows(): any[] {
+  if (typeof window === 'undefined') return []
+
+  const saved = localStorage.getItem(OFFLINE_QUEUE_KEY)
+  if (!saved) return []
+
+  try {
+    const parsed = JSON.parse(saved)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function setOfflineRows(rows: any[]) {
+  if (typeof window === 'undefined') return
+
+  if (rows.length === 0) {
+    localStorage.removeItem(OFFLINE_QUEUE_KEY)
+    return
+  }
+
+  localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(rows))
+}
+
 export default function CheckoutPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const retryingRef = useRef(false)
 
   const [darkMode, setDarkMode] = useState(true)
   const [mode, setMode] = useState<Mode>('sale')
@@ -68,26 +92,8 @@ export default function CheckoutPage() {
   const [message, setMessage] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(null)
   const [basketDiscountPercent, setBasketDiscountPercent] = useState(0)
-  const [basketDiscountAmount, setBasketDiscountAmount] = useState(0)
-  const [manualPercent, setManualPercent] = useState('')
-  const [manualAmount, setManualAmount] = useState('')
   const [cashTendered, setCashTendered] = useState('')
   const [saleBusy, setSaleBusy] = useState(false)
-  const [offlineCount, setOfflineCount] = useState(0)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-
-    const saved = localStorage.getItem(OFFLINE_QUEUE_KEY)
-    if (saved) {
-      try {
-        const rows = JSON.parse(saved)
-        setOfflineCount(Array.isArray(rows) ? rows.length : 0)
-      } catch {
-        setOfflineCount(0)
-      }
-    }
-  }, [])
 
   const subtotal = useMemo(() => {
     return basket.reduce((sum, line) => sum + line.price * line.quantity, 0)
@@ -96,22 +102,15 @@ export default function CheckoutPage() {
   const lineDiscountTotal = useMemo(() => {
     return basket.reduce((sum, line) => {
       const lineSubtotal = line.price * line.quantity
-      const percentDiscount = lineSubtotal * ((line.lineDiscountPercent || 0) / 100)
-      const amountDiscount = line.lineDiscountAmount || 0
-      return sum + Math.min(lineSubtotal, percentDiscount + amountDiscount)
+      return sum + lineSubtotal * ((line.lineDiscountPercent || 0) / 100)
     }, 0)
   }, [basket])
 
   const basketPercentDiscountAmount = subtotal * (basketDiscountPercent / 100)
-  const totalDiscount = Math.min(
-    subtotal,
-    lineDiscountTotal + basketPercentDiscountAmount + basketDiscountAmount
-  )
-
+  const totalDiscount = Math.min(subtotal, lineDiscountTotal + basketPercentDiscountAmount)
   const total = Math.max(0, subtotal - totalDiscount)
   const vatAmount = total / 6
   const netAmount = total - vatAmount
-
   const totalItems = basket.reduce((sum, line) => sum + line.quantity, 0)
   const changeDue = Math.max(0, (Number(cashTendered) || 0) - total)
   const selectedLine = basket.find((line) => line.sku === selectedSku)
@@ -125,16 +124,50 @@ export default function CheckoutPage() {
     : 'rounded-3xl border border-neutral-200 bg-white shadow-xl'
 
   const mutedText = darkMode ? 'text-neutral-400' : 'text-neutral-500'
+
   const inputClass = darkMode
     ? 'w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-xl font-semibold outline-none focus:border-white'
     : 'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-4 text-xl font-semibold outline-none focus:border-black'
 
+  const retryOfflineQueue = useCallback(async () => {
+    if (retryingRef.current) return
+
+    const rows = getOfflineRows()
+    if (rows.length === 0) return
+
+    retryingRef.current = true
+
+    try {
+      const { error } = await supabase.from('linnworks_sync_queue').insert(rows)
+      if (error) throw new Error(error.message)
+
+      setOfflineRows([])
+    } catch {
+      // silent by design: staff should not need to know unless we later build an admin health panel
+    } finally {
+      retryingRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    retryOfflineQueue()
+
+    const handleOnline = () => retryOfflineQueue()
+    window.addEventListener('online', handleOnline)
+
+    const interval = window.setInterval(() => {
+      if (navigator.onLine) retryOfflineQueue()
+    }, 30000)
+
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.clearInterval(interval)
+    }
+  }, [retryOfflineQueue])
+
   function discountTargetText() {
     return selectedLine ? `selected item: ${selectedLine.sku}` : 'whole basket'
-  }
-
-  function warnDiscount(label: string) {
-    setMessage(`${label} discount applied to ${discountTargetText()}.`)
   }
 
   function applyPercentDiscount(percent: number) {
@@ -148,44 +181,11 @@ export default function CheckoutPage() {
       setBasketDiscountPercent(percent)
     }
 
-    warnDiscount(`${percent}%`)
-  }
-
-  function applyManualPercent() {
-    const percent = Number(manualPercent)
-
-    if (!Number.isFinite(percent) || percent <= 0) {
-      setMessage('Enter a valid manual percentage.')
-      return
-    }
-
-    applyPercentDiscount(percent)
-  }
-
-  function applyManualAmount() {
-    const amount = Number(manualAmount)
-
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setMessage('Enter a valid manual discount amount.')
-      return
-    }
-
-    if (selectedLine) {
-      setBasket((current) =>
-        current.map((line) =>
-          line.sku === selectedLine.sku ? { ...line, lineDiscountAmount: amount } : line
-        )
-      )
-    } else {
-      setBasketDiscountAmount(amount)
-    }
-
-    warnDiscount(`${money(amount)}`)
+    setMessage(`${percent}% discount applied to ${discountTargetText()}.`)
   }
 
   async function addScannedSku(rawSku?: string) {
     const sku = normaliseSku(rawSku || scanValue)
-
     if (!sku) return
 
     setLoadingSku(sku)
@@ -250,7 +250,6 @@ export default function CheckoutPage() {
             bin: item.current_bin || item.current_location || 'SHOP-1',
             stockLevel: Number(item.stock_level || 0),
             lineDiscountPercent: 0,
-            lineDiscountAmount: 0,
           },
         ]
       })
@@ -281,30 +280,14 @@ export default function CheckoutPage() {
     setSelectedSku('')
     setPaymentMethod(null)
     setBasketDiscountPercent(0)
-    setBasketDiscountAmount(0)
-    setManualPercent('')
-    setManualAmount('')
     setCashTendered('')
     setMessage('')
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
   function saveOfflineQueue(rows: any[]) {
-    const saved = localStorage.getItem(OFFLINE_QUEUE_KEY)
-    let current: any[] = []
-
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved)
-        current = Array.isArray(parsed) ? parsed : []
-      } catch {
-        current = []
-      }
-    }
-
-    const next = [...current, ...rows]
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(next))
-    setOfflineCount(next.length)
+    const current = getOfflineRows()
+    setOfflineRows([...current, ...rows])
   }
 
   async function createQueueRows(method: 'cash' | 'card') {
@@ -339,6 +322,11 @@ export default function CheckoutPage() {
         net_amount: Number(netAmount.toFixed(2)),
         location: line.location,
         bin: line.bin,
+        square_status:
+          method === 'card'
+            ? 'manual_terminal_payment_recorded'
+            : 'not_required',
+        local_first: true,
       },
       status: 'pending',
     }))
@@ -347,7 +335,7 @@ export default function CheckoutPage() {
 
     if (error) {
       saveOfflineQueue(rows)
-      throw new Error(`Saved offline because queue insert failed: ${error.message}`)
+      return saleId
     }
 
     return saleId
@@ -362,8 +350,8 @@ export default function CheckoutPage() {
     if (mode === 'refund') {
       const confirmed = window.confirm(
         method === 'card'
-          ? 'Enter CARD REFUND mode? This will queue stock back in and prepare the sale for Square refund handling later.'
-          : 'Enter CASH REFUND mode? This will queue stock back in.'
+          ? 'Enter CARD REFUND mode? Only sold SKUs should be refunded. Continue?'
+          : 'Enter CASH REFUND mode? Only sold SKUs should be refunded. Continue?'
       )
 
       if (!confirmed) return
@@ -378,22 +366,19 @@ export default function CheckoutPage() {
     setMessage('')
 
     try {
-      const saleId = await createQueueRows(method)
+      await createQueueRows(method)
 
       if (mode === 'refund') {
-        setMessage(
-          method === 'card'
-            ? `Card refund queued. Sale ID: ${saleId}. Square refund connection still needs wiring.`
-            : `Cash refund queued. Sale ID: ${saleId}.`
-        )
+        setMessage(method === 'card' ? 'Card refund recorded.' : 'Cash refund recorded.')
       } else if (method === 'card') {
-        setMessage(`Card sale queued. Sale ID: ${saleId}. Square Terminal push not connected yet.`)
+        setMessage('Card sale recorded. Take payment on Square Terminal.')
       } else {
-        setMessage(`Cash sale queued. Change due: ${money(changeDue)}.`)
+        setMessage(`Cash sale recorded. Change due: ${money(changeDue)}.`)
       }
 
       clearSale()
       setMode('sale')
+      retryOfflineQueue()
     } catch (error: any) {
       setMessage(error.message || 'Could not complete.')
     } finally {
@@ -403,9 +388,7 @@ export default function CheckoutPage() {
 
   return (
     <main className={pageClass}>
-      <AppNav current="checkout" />
-
-      <div className="mx-auto flex min-h-[calc(100vh-70px)] max-w-5xl flex-col gap-4 p-3 sm:p-5">
+      <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-4 p-3 sm:p-5">
         <section className={`${panelClass} p-4 sm:p-5`}>
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -455,7 +438,11 @@ export default function CheckoutPage() {
           </form>
 
           {message && (
-            <div className={`mt-3 rounded-2xl p-3 text-sm font-semibold ${darkMode ? 'bg-neutral-800' : 'bg-neutral-100'}`}>
+            <div
+              className={`mt-3 rounded-2xl p-3 text-sm font-semibold ${
+                darkMode ? 'bg-neutral-800' : 'bg-neutral-100'
+              }`}
+            >
               {message}
             </div>
           )}
@@ -467,7 +454,11 @@ export default function CheckoutPage() {
               <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
               <p className="text-lg font-black">{totalItems} items</p>
             </div>
-            <button type="button" onClick={clearSale} className="rounded-full bg-red-500 px-4 py-2 text-sm font-black text-white">
+            <button
+              type="button"
+              onClick={clearSale}
+              className="rounded-full bg-red-500 px-4 py-2 text-sm font-black text-white"
+            >
               Clear
             </button>
           </div>
@@ -506,9 +497,9 @@ export default function CheckoutPage() {
                         <p className={`text-xs ${mutedText}`}>
                           {line.location} · {line.bin} · Stock {line.stockLevel}
                         </p>
-                        {(line.lineDiscountPercent > 0 || line.lineDiscountAmount > 0) && (
+                        {line.lineDiscountPercent > 0 && (
                           <p className="mt-1 text-xs font-black text-emerald-400">
-                            Line discount: {line.lineDiscountPercent || 0}% {line.lineDiscountAmount ? `+ ${money(line.lineDiscountAmount)}` : ''}
+                            Line discount: {line.lineDiscountPercent}%
                           </p>
                         )}
                       </div>
@@ -521,12 +512,34 @@ export default function CheckoutPage() {
 
                     <div className="mt-3 flex items-center justify-between gap-2">
                       <div className="flex items-center rounded-full border border-current/20">
-                        <span onClick={(e) => { e.stopPropagation(); updateQty(line.sku, line.quantity - 1) }} className="px-4 py-2 text-xl font-black">−</span>
+                        <span
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            updateQty(line.sku, line.quantity - 1)
+                          }}
+                          className="px-4 py-2 text-xl font-black"
+                        >
+                          −
+                        </span>
                         <span className="min-w-10 text-center font-black">{line.quantity}</span>
-                        <span onClick={(e) => { e.stopPropagation(); updateQty(line.sku, line.quantity + 1) }} className="px-4 py-2 text-xl font-black">+</span>
+                        <span
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            updateQty(line.sku, line.quantity + 1)
+                          }}
+                          className="px-4 py-2 text-xl font-black"
+                        >
+                          +
+                        </span>
                       </div>
 
-                      <span onClick={(e) => { e.stopPropagation(); updateQty(line.sku, 0) }} className="rounded-full px-4 py-2 text-sm font-bold text-red-500">
+                      <span
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          updateQty(line.sku, 0)
+                        }}
+                        className="rounded-full px-4 py-2 text-sm font-bold text-red-500"
+                      >
                         Remove
                       </span>
                     </div>
@@ -538,33 +551,40 @@ export default function CheckoutPage() {
         </section>
 
         <section className={`${panelClass} p-4 sm:p-5`}>
-          <div className="mb-3 grid grid-cols-3 gap-2">
-            <button type="button" onClick={() => applyPercentDiscount(5)} className="rounded-2xl border border-current/20 py-3 font-black">
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => applyPercentDiscount(5)}
+              className="rounded-2xl border border-current/20 py-3 font-black"
+            >
               5% off
             </button>
-            <button type="button" onClick={() => applyPercentDiscount(10)} className="rounded-2xl border border-current/20 py-3 font-black">
+            <button
+              type="button"
+              onClick={() => applyPercentDiscount(10)}
+              className="rounded-2xl border border-current/20 py-3 font-black"
+            >
               10% off
             </button>
-            <button type="button" onClick={applyManualPercent} className="rounded-2xl border border-current/20 py-3 font-black">
-              Manual %
-            </button>
-          </div>
-
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            <input value={manualPercent} onChange={(e) => setManualPercent(e.target.value)} placeholder="Manual %" className={inputClass} inputMode="decimal" />
-            <div className="flex gap-2">
-              <input value={manualAmount} onChange={(e) => setManualAmount(e.target.value)} placeholder="Manual £" className={inputClass} inputMode="decimal" />
-              <button type="button" onClick={applyManualAmount} className="rounded-2xl border border-current/20 px-4 font-black">
-                Apply
-              </button>
-            </div>
           </div>
 
           <div className="space-y-1 text-sm">
-            <div className="flex justify-between"><span className={mutedText}>Subtotal</span><span className="font-bold">{money(subtotal)}</span></div>
-            <div className="flex justify-between"><span className={mutedText}>Discount before VAT</span><span className="font-bold">−{money(totalDiscount)}</span></div>
-            <div className="flex justify-between"><span className={mutedText}>Net</span><span className="font-bold">{money(netAmount)}</span></div>
-            <div className="flex justify-between"><span className={mutedText}>VAT included at 20%</span><span className="font-bold">{money(vatAmount)}</span></div>
+            <div className="flex justify-between">
+              <span className={mutedText}>Subtotal</span>
+              <span className="font-bold">{money(subtotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className={mutedText}>Discount</span>
+              <span className="font-bold">−{money(totalDiscount)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className={mutedText}>Net</span>
+              <span className="font-bold">{money(netAmount)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className={mutedText}>VAT included at 20%</span>
+              <span className="font-bold">{money(vatAmount)}</span>
+            </div>
             <div className="flex items-end justify-between pt-2">
               <span className="text-lg font-black">{mode === 'refund' ? 'Refund total' : 'Total'}</span>
               <span className="text-4xl font-black tracking-tight">{money(total)}</span>
@@ -572,17 +592,51 @@ export default function CheckoutPage() {
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <button type="button" onClick={() => setPaymentMethod('cash')} className={`rounded-3xl py-4 text-xl font-black ${paymentMethod === 'cash' ? 'bg-green-300 text-black ring-4 ring-green-500/40' : 'bg-green-100 text-black'}`}>
-              💷 Cash
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('cash')}
+              className={`rounded-3xl py-4 text-xl font-black ${
+                paymentMethod === 'cash'
+                  ? 'bg-green-300 text-black ring-4 ring-green-500/40'
+                  : 'bg-green-100 text-black'
+              }`}
+            >
+              CASH <span className="text-2xl">💷</span>
             </button>
-            <button type="button" onClick={() => setPaymentMethod('card')} className={`rounded-3xl py-4 text-xl font-black ${paymentMethod === 'card' ? 'bg-sky-300 text-black ring-4 ring-sky-500/40' : 'bg-sky-100 text-black'}`}>
-              💳 Card<br /><span className="text-xs">VISA · MC · AMEX</span>
+
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('card')}
+              className={`rounded-3xl py-4 text-xl font-black ${
+                paymentMethod === 'card'
+                  ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
+                  : 'bg-sky-100 text-black'
+              }`}
+            >
+              <span className="inline-flex items-center justify-center gap-2">
+                CARD
+                <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-black text-blue-700">
+                  VISA
+                </span>
+                <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-black text-red-600">
+                  MC
+                </span>
+                <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-black text-sky-700">
+                  AMEX
+                </span>
+              </span>
             </button>
           </div>
 
           {paymentMethod === 'cash' && mode === 'sale' && (
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <input value={cashTendered} onChange={(e) => setCashTendered(e.target.value)} placeholder="Cash tendered" className={inputClass} inputMode="decimal" />
+              <input
+                value={cashTendered}
+                onChange={(event) => setCashTendered(event.target.value)}
+                placeholder="Cash tendered"
+                className={inputClass}
+                inputMode="decimal"
+              />
               <div className={`rounded-2xl p-3 text-right ${darkMode ? 'bg-neutral-950' : 'bg-neutral-100'}`}>
                 <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
                 <p className="text-2xl font-black">{money(changeDue)}</p>
@@ -590,15 +644,30 @@ export default function CheckoutPage() {
             </div>
           )}
 
-          <button type="button" disabled={!paymentMethod || basket.length === 0 || saleBusy} onClick={() => paymentMethod && completeSale(paymentMethod)} className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-2xl font-black text-black disabled:opacity-40">
-            {saleBusy ? 'Saving…' : mode === 'refund' ? 'Complete Refund' : paymentMethod === 'cash' ? 'Complete Cash Sale' : paymentMethod === 'card' ? 'Complete Card Sale' : 'Select Payment'}
+          <button
+            type="button"
+            disabled={!paymentMethod || basket.length === 0 || saleBusy}
+            onClick={() => paymentMethod && completeSale(paymentMethod)}
+            className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-2xl font-black text-black disabled:opacity-40"
+          >
+            {saleBusy
+              ? 'Saving…'
+              : mode === 'refund'
+                ? 'Complete Refund'
+                : paymentMethod === 'cash'
+                  ? 'Complete Cash Sale'
+                  : paymentMethod === 'card'
+                    ? 'Record Card Sale'
+                    : 'Select Payment'}
           </button>
 
           <div className="mt-4 flex justify-center">
             <button
               type="button"
               onClick={() => {
-                const confirmed = window.confirm('Enter refund mode? Only SKUs with sold records can be refunded.')
+                const confirmed = window.confirm(
+                  'Enter refund mode? Only SKUs with sold records can be refunded.'
+                )
                 if (!confirmed) return
                 clearSale()
                 setMode('refund')
