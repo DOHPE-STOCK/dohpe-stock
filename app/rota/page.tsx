@@ -150,9 +150,17 @@ function emptyDefault(): DefaultRota {
   return { dohpe: {}, dlretail: {} }
 }
 
+function GoogleLogo() {
+  return (
+    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-sm font-black text-blue-600">
+      G
+    </span>
+  )
+}
+
 export default function RotaPage() {
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff)
-  const [selectedWeekStart, setSelectedWeekStart] = useState(startOfWeek(new Date()))
+  const [currentWeekStart] = useState(startOfWeek(new Date()))
   const [rota, setRota] = useState<RotaData>({ dohpe: {}, dlretail: {} })
   const [defaultRota, setDefaultRota] = useState<DefaultRota>(emptyDefault())
   const [editedWeeks, setEditedWeeks] = useState<EditedWeeks>({ dohpe: {}, dlretail: {} })
@@ -174,8 +182,8 @@ export default function RotaPage() {
   })
 
   const futureWeekStarts = useMemo(() => {
-    return [1, 2, 3].map((offset) => addWeeks(selectedWeekStart, offset))
-  }, [selectedWeekStart])
+    return [1, 2, 3, 4].map((offset) => addWeeks(currentWeekStart, offset))
+  }, [currentWeekStart])
 
   function getDayId(week: Date, dayIndex: number) {
     return dateKey(addDays(week, dayIndex))
@@ -183,6 +191,10 @@ export default function RotaPage() {
 
   function getWeekId(week: Date) {
     return dateKey(week)
+  }
+
+  function isCurrentWeek(week: Date) {
+    return getWeekId(week) === getWeekId(currentWeekStart)
   }
 
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
@@ -293,7 +305,7 @@ export default function RotaPage() {
       template[String(i)] = (weekRows[getDayId(week, i)] || []).map(cloneShift)
     }
 
-    const futureWeeks = [1, 2, 3].map((offset) => addWeeks(week, offset))
+    const futureWeeks = [1, 2, 3, 4].map((offset) => addWeeks(week, offset))
     const editedFutureWeeks = futureWeeks.filter(
       (futureWeek) => editedWeeks[company]?.[getWeekId(futureWeek)]
     )
@@ -326,7 +338,7 @@ export default function RotaPage() {
     })
 
     setStatusMessage(
-      `${companies.find((c) => c.key === company)?.name} default rota set and applied to next 3 weeks.`
+      `${companies.find((c) => c.key === company)?.name} default rota set and applied to next 4 weeks.`
     )
   }
 
@@ -418,7 +430,7 @@ export default function RotaPage() {
     const week = startOfWeek(new Date())
     const demoEvents: CalendarData = {}
 
-    for (let i = 0; i < 28; i += 1) {
+    for (let i = 0; i < 35; i += 1) {
       const day = addDays(week, i)
       const key = dateKey(day)
 
@@ -447,9 +459,7 @@ export default function RotaPage() {
     }
 
     setCalendarEvents(demoEvents)
-    setStatusMessage(
-      'Google Calendar synced for logged-in user. Real API sync can refresh every 15–30 minutes later.'
-    )
+    setStatusMessage('Google Calendar auto sync placeholder is enabled.')
   }
 
   function openMonthlyCalendar() {
@@ -661,39 +671,14 @@ export default function RotaPage() {
         className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2"
         onMouseEnter={() => setExpandedDay(expandKey)}
       >
-        <div className="mb-2 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-black">{dayNames[dayIndex]}</p>
-            <p className="text-xs font-bold text-neutral-400">
-              {actualDate.toLocaleDateString('en-GB', {
-                day: '2-digit',
-                month: 'short',
-              })}
-            </p>
-          </div>
-
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation()
-                addShift(company, week, dayIndex, 'work')
-              }}
-              className="rounded-full bg-black px-2 py-1 text-xs font-black text-white"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation()
-                addShift(company, week, dayIndex, 'holiday')
-              }}
-              className="rounded-full bg-amber-300 px-2 py-1 text-[10px] font-black text-black"
-            >
-              H
-            </button>
-          </div>
+        <div className="mb-2">
+          <p className="text-sm font-black">{dayNames[dayIndex]}</p>
+          <p className="text-xs font-bold text-neutral-400">
+            {actualDate.toLocaleDateString('en-GB', {
+              day: '2-digit',
+              month: 'short',
+            })}
+          </p>
         </div>
 
         <div className="space-y-1">
@@ -731,37 +716,53 @@ export default function RotaPage() {
             onMouseLeave={() => setExpandedDay(null)}
             className="absolute left-0 top-0 z-50 w-[min(440px,90vw)] rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl"
           >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-lg font-black">{dayNames[dayIndex]}</p>
-                <p className="text-sm font-bold text-neutral-500">
-                  {actualDate.toLocaleDateString('en-GB', {
-                    weekday: 'long',
-                    day: '2-digit',
-                    month: 'long',
-                  })}
-                </p>
-              </div>
+            <div className="mb-3">
+              <p className="text-lg font-black">{dayNames[dayIndex]}</p>
+              <p className="text-sm font-bold text-neutral-500">
+                {actualDate.toLocaleDateString('en-GB', {
+                  weekday: 'long',
+                  day: '2-digit',
+                  month: 'long',
+                })}
+              </p>
 
-              <div className="flex gap-1">
+              <div className="mt-3 flex gap-2">
                 <button
                   type="button"
                   onClick={() => addShift(company, week, dayIndex, 'work')}
-                  className="rounded-full bg-black px-3 py-2 text-xs font-black text-white"
+                  className="rounded-xl bg-black px-4 py-2 text-xs font-black text-white"
                 >
-                  +
+                  + Shift
                 </button>
                 <button
                   type="button"
                   onClick={() => addShift(company, week, dayIndex, 'holiday')}
-                  className="rounded-full bg-amber-300 px-3 py-2 text-xs font-black text-black"
+                  className="rounded-xl bg-amber-300 px-4 py-2 text-xs font-black text-black"
                 >
                   HOLS
                 </button>
               </div>
             </div>
 
-            <div className="mb-3 rounded-2xl bg-blue-50 p-3">
+            <div className="max-h-[48vh] space-y-2 overflow-auto pr-1">
+              {shifts.length === 0 ? (
+                <p className="rounded-2xl bg-neutral-100 p-4 text-center text-sm font-bold text-neutral-400">
+                  No shifts or holidays added yet.
+                </p>
+              ) : (
+                shifts.map((shift) => (
+                  <ShiftEditor
+                    key={shift.id}
+                    company={company}
+                    week={week}
+                    dayIndex={dayIndex}
+                    shift={shift}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="mt-3 rounded-2xl bg-blue-50 p-3">
               <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-500">
                 Google Calendar
               </p>
@@ -787,24 +788,6 @@ export default function RotaPage() {
                 </div>
               )}
             </div>
-
-            <div className="max-h-[65vh] space-y-2 overflow-auto pr-1">
-              {shifts.length === 0 ? (
-                <p className="rounded-2xl bg-neutral-100 p-4 text-center text-sm font-bold text-neutral-400">
-                  No shifts or holidays added yet.
-                </p>
-              ) : (
-                shifts.map((shift) => (
-                  <ShiftEditor
-                    key={shift.id}
-                    company={company}
-                    week={week}
-                    dayIndex={dayIndex}
-                    shift={shift}
-                  />
-                ))
-              )}
-            </div>
           </div>
         )}
       </div>
@@ -815,15 +798,27 @@ export default function RotaPage() {
     const total = companyWeekTotal(company.key, week)
     const staffTotals = totalsForCompanyWeek(company.key, week)
     const isEdited = editedWeeks[company.key]?.[getWeekId(week)]
+    const current = isCurrentWeek(week)
 
     return (
-      <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
+      <section
+        className={`rounded-3xl border bg-white p-4 shadow-xl ${
+          current ? 'border-emerald-400 ring-4 ring-emerald-100' : 'border-neutral-200'
+        }`}
+      >
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">
               {company.name}
             </p>
-            <h2 className="text-xl font-black">{formatWeekLabel(week)}</h2>
+            <h2 className="text-xl font-black">
+              {formatWeekLabel(week)}
+              {current && (
+                <span className="ml-2 rounded-full bg-emerald-100 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-emerald-700">
+                  Current
+                </span>
+              )}
+            </h2>
             <p className="text-sm font-semibold text-neutral-500">
               {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hols hrs · {money(total.wage)}
               {isEdited ? ' · edited' : ''}
@@ -916,7 +911,7 @@ export default function RotaPage() {
               </p>
               <h1 className="text-3xl font-black tracking-tight">Weekly Planner</h1>
               <p className="mt-1 text-sm font-semibold text-white/60">
-                Two-company rota · current week + next 3 weeks · staff hours · holiday hours · wage totals
+                Two-company rota · current week + next 4 weeks · staff hours · holiday hours · wage totals
               </p>
             </div>
 
@@ -924,40 +919,25 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={openMonthlyCalendar}
-                className="rounded-2xl bg-purple-500 px-4 py-3 text-sm font-black text-white"
+                className="flex items-center gap-2 rounded-2xl bg-purple-500 px-4 py-3 text-sm font-black text-white"
               >
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white text-xs font-black text-purple-600">
+                  Cal
+                </span>
                 Calendar
               </button>
+
               <button
                 type="button"
                 onClick={syncGoogleCalendar}
-                className={`rounded-2xl px-4 py-3 text-sm font-black ${
+                className={`flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${
                   googleCalendarSynced ? 'bg-white text-black' : 'bg-blue-500 text-white'
                 }`}
               >
-                {googleCalendarSynced ? 'Google Calendar ✓' : 'Sync Google Calendar'}
+                <GoogleLogo />
+                {googleCalendarSynced ? '✓' : 'Sync'}
               </button>
-              <button
-                type="button"
-                onClick={() => setSelectedWeekStart(addWeeks(selectedWeekStart, -1))}
-                className="rounded-2xl bg-white/10 px-4 py-3 text-sm font-black hover:bg-white/20"
-              >
-                Previous
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedWeekStart(startOfWeek(new Date()))}
-                className="rounded-2xl bg-white px-4 py-3 text-sm font-black text-black"
-              >
-                Current
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedWeekStart(addWeeks(selectedWeekStart, 1))}
-                className="rounded-2xl bg-white/10 px-4 py-3 text-sm font-black hover:bg-white/20"
-              >
-                Next
-              </button>
+
               <button
                 type="button"
                 onClick={() => setSettingsOpen((value) => !value)}
@@ -1040,15 +1020,15 @@ export default function RotaPage() {
         <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
           {companies.map((company) => (
             <WeekPlanner
-              key={`${company.key}-${dateKey(selectedWeekStart)}`}
+              key={`${company.key}-${dateKey(currentWeekStart)}`}
               company={company}
-              week={selectedWeekStart}
+              week={currentWeekStart}
             />
           ))}
         </section>
 
         <section className="space-y-5">
-          <h2 className="px-1 text-xl font-black">Next 3 weeks</h2>
+          <h2 className="px-1 text-xl font-black">Next 4 weeks</h2>
 
           {futureWeekStarts.map((week) => (
             <div key={dateKey(week)} className="grid grid-cols-1 gap-5 xl:grid-cols-2">
