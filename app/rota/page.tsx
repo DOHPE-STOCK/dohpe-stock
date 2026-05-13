@@ -452,6 +452,15 @@ export default function RotaPage() {
     )
   }
 
+  function openMonthlyCalendar() {
+    setStatusMessage('Monthly Google Calendar placeholder. This can open a full month calendar modal later.')
+  }
+
+  function saveStaffSettings() {
+    setSettingsOpen(false)
+    setStatusMessage('Staff settings saved.')
+  }
+
   function sendTelegram(company: CompanyKey, week: Date) {
     const companyName = companies.find((c) => c.key === company)?.name
 
@@ -469,7 +478,7 @@ export default function RotaPage() {
         for (const shift of shifts) {
           const person = staff.find((x) => x.id === shift.staffId)
           if (shift.type === 'holiday') {
-            rotaLines.push(`🌴 ${person?.name || 'Staff'} holiday`)
+            rotaLines.push(`HOLS ${person?.name || 'Staff'}`)
           } else {
             rotaLines.push(`${person?.name || 'Staff'} ${shift.start}–${shift.end}`)
           }
@@ -520,10 +529,18 @@ export default function RotaPage() {
 
     return (
       <div
-        className={`rounded-xl border p-2 shadow-sm ${
+        className={`relative rounded-xl border p-2 pr-9 shadow-sm ${
           shift.type === 'holiday' ? 'border-amber-200 bg-amber-50' : 'border-neutral-200 bg-white'
         }`}
       >
+        <button
+          type="button"
+          onClick={() => deleteShift(company, week, dayIndex, shift.id)}
+          className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-red-100 text-xs font-black text-red-600"
+        >
+          ×
+        </button>
+
         <div className="mb-2 flex items-center gap-2">
           <select
             value={shift.staffId}
@@ -554,7 +571,7 @@ export default function RotaPage() {
                 shift.type === 'holiday' ? 'bg-amber-300 text-black' : 'bg-neutral-100 text-neutral-300'
               }`}
             >
-              🌴
+              HOLS
             </span>
           </div>
         </div>
@@ -562,7 +579,7 @@ export default function RotaPage() {
         {shift.type === 'holiday' ? (
           <div className="rounded-xl bg-amber-100 p-2">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-lg">🌴☀️🏖️</span>
+              <span className="text-sm font-black text-amber-700">HOLS</span>
               <input
                 type="number"
                 value={shift.holidayHours}
@@ -614,17 +631,10 @@ export default function RotaPage() {
           className="mt-2 w-full rounded-lg border border-neutral-200 px-2 py-2 text-xs"
         />
 
-        <div className="mt-2 flex items-center justify-between text-xs">
+        <div className="mt-2 text-xs">
           <span className="font-black text-neutral-500">
             {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
           </span>
-          <button
-            type="button"
-            onClick={() => deleteShift(company, week, dayIndex, shift.id)}
-            className="font-black text-red-500"
-          >
-            Remove
-          </button>
         </div>
       </div>
     )
@@ -679,9 +689,9 @@ export default function RotaPage() {
                 event.stopPropagation()
                 addShift(company, week, dayIndex, 'holiday')
               }}
-              className="rounded-full bg-amber-300 px-2 py-1 text-xs font-black text-black"
+              className="rounded-full bg-amber-300 px-2 py-1 text-[10px] font-black text-black"
             >
-              🌴
+              H
             </button>
           </div>
         </div>
@@ -692,25 +702,27 @@ export default function RotaPage() {
               No rota entries
             </p>
           ) : (
-            shifts.slice(0, 4).map((shift) => {
+            shifts.slice(0, 5).map((shift) => {
               const person = staff.find((x) => x.id === shift.staffId)
               return (
                 <div
                   key={shift.id}
-                  className={`truncate rounded-lg px-2 py-1 text-xs font-black ${
+                  className={`flex min-h-7 items-center rounded-lg px-2 py-1 text-[11px] font-black leading-tight ${
                     shift.type === 'holiday' ? 'bg-amber-100 text-amber-700' : 'bg-white text-neutral-800'
                   }`}
                 >
-                  {shift.type === 'holiday'
-                    ? `🌴 ${person?.name || 'Staff'}`
-                    : `${person?.name || 'Staff'} ${shift.start}–${shift.end}`}
+                  <span className="w-full truncate">
+                    {shift.type === 'holiday'
+                      ? `HOLS ${person?.name || 'Staff'}`
+                      : `${person?.name || 'Staff'} ${shift.start}–${shift.end}`}
+                  </span>
                 </div>
               )
             })
           )}
 
-          {shifts.length > 4 && (
-            <p className="text-xs font-black text-neutral-400">+{shifts.length - 4} more</p>
+          {shifts.length > 5 && (
+            <p className="text-xs font-black text-neutral-400">+{shifts.length - 5} more</p>
           )}
         </div>
 
@@ -744,32 +756,37 @@ export default function RotaPage() {
                   onClick={() => addShift(company, week, dayIndex, 'holiday')}
                   className="rounded-full bg-amber-300 px-3 py-2 text-xs font-black text-black"
                 >
-                  🌴
+                  HOLS
                 </button>
               </div>
             </div>
 
-            {googleCalendarSynced && (
-              <div className="mb-3 rounded-2xl bg-blue-50 p-3">
-                <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-500">
-                  Google Calendar
+            <div className="mb-3 rounded-2xl bg-blue-50 p-3">
+              <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-500">
+                Google Calendar
+              </p>
+
+              {!googleCalendarSynced ? (
+                <p className="text-xs font-bold text-blue-400">
+                  Calendar entries will be displayed here once Google Calendar is synced.
                 </p>
-                {events.length === 0 ? (
-                  <p className="text-xs font-bold text-blue-300">No synced events</p>
-                ) : (
-                  <div className="space-y-1">
-                    {events.map((event) => (
-                      <div
-                        key={event.id}
-                        className="rounded-lg bg-white px-2 py-1 text-xs font-bold text-blue-700"
-                      >
-                        {event.start}–{event.end} · {event.title}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+              ) : events.length === 0 ? (
+                <p className="text-xs font-bold text-blue-400">
+                  Calendar entries will be displayed here.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {events.map((event) => (
+                    <div
+                      key={event.id}
+                      className="rounded-lg bg-white px-2 py-1 text-xs font-bold text-blue-700"
+                    >
+                      {event.start}–{event.end} · {event.title}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="max-h-[65vh] space-y-2 overflow-auto pr-1">
               {shifts.length === 0 ? (
@@ -808,7 +825,7 @@ export default function RotaPage() {
             </p>
             <h2 className="text-xl font-black">{formatWeekLabel(week)}</h2>
             <p className="text-sm font-semibold text-neutral-500">
-              {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hol hrs · {money(total.wage)}
+              {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hols hrs · {money(total.wage)}
               {isEdited ? ' · edited' : ''}
             </p>
           </div>
@@ -853,7 +870,7 @@ export default function RotaPage() {
           <div className="mb-2 flex items-center justify-between">
             <p className="text-sm font-black">Weekly totals</p>
             <p className="text-sm font-black">
-              {total.workHours.toFixed(2)} work · {total.holidayHours.toFixed(2)} hol · {money(total.wage)}
+              {total.workHours.toFixed(2)} work · {total.holidayHours.toFixed(2)} hols · {money(total.wage)}
             </p>
           </div>
 
@@ -876,7 +893,7 @@ export default function RotaPage() {
                   <div className="mt-1 grid grid-cols-2 gap-1 text-white/60">
                     <span>Work {row.workHours.toFixed(2)}h</span>
                     <span className="text-right">{money(row.workWage)}</span>
-                    <span>🌴 Hol {row.holidayHours.toFixed(2)}h</span>
+                    <span>Hols {row.holidayHours.toFixed(2)}h</span>
                     <span className="text-right">{money(row.holidayWage)}</span>
                   </div>
                 </div>
@@ -904,6 +921,13 @@ export default function RotaPage() {
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={openMonthlyCalendar}
+                className="rounded-2xl bg-purple-500 px-4 py-3 text-sm font-black text-white"
+              >
+                Calendar
+              </button>
               <button
                 type="button"
                 onClick={syncGoogleCalendar}
@@ -939,7 +963,7 @@ export default function RotaPage() {
                 onClick={() => setSettingsOpen((value) => !value)}
                 className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
               >
-                Staff settings
+                {settingsOpen ? 'Close settings' : 'Staff settings'}
               </button>
             </div>
           </div>
@@ -953,7 +977,7 @@ export default function RotaPage() {
 
         {settingsOpen && (
           <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
+            <div className="mb-4 flex items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-black">Rota staff</h2>
                 <p className="text-sm font-semibold text-neutral-500">
@@ -961,13 +985,22 @@ export default function RotaPage() {
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={addStaffMember}
-                className="rounded-2xl bg-black px-4 py-3 text-sm font-black text-white"
-              >
-                Add staff
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={addStaffMember}
+                  className="rounded-2xl bg-black px-4 py-3 text-sm font-black text-white"
+                >
+                  Add staff
+                </button>
+                <button
+                  type="button"
+                  onClick={saveStaffSettings}
+                  className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
+                >
+                  Save
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
