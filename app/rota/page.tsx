@@ -35,6 +35,8 @@ type Company = {
 }
 
 type RotaData = Record<CompanyKey, Record<string, Record<string, Shift[]>>>
+type DefaultRota = Record<CompanyKey, Record<string, Shift[]>>
+type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
 type CalendarData = Record<string, CalendarEvent[]>
 
 const companies: Company[] = [
@@ -106,19 +108,18 @@ function shiftHours(shift: Shift) {
   return (end - start) / 60
 }
 
-function workHours(shift: Shift) {
-  return shift.type === 'work' ? shiftHours(shift) : 0
-}
-
-function holidayHours(shift: Shift) {
-  return shift.type === 'holiday' ? shiftHours(shift) : 0
-}
-
 function money(value: number) {
   return new Intl.NumberFormat('en-GB', {
     style: 'currency',
     currency: 'GBP',
   }).format(value || 0)
+}
+
+function cloneShift(shift: Shift): Shift {
+  return {
+    ...shift,
+    id: crypto.randomUUID(),
+  }
 }
 
 function makeWorkShift(staffId: string): Shift {
@@ -145,10 +146,16 @@ function makeHolidayShift(staffId: string): Shift {
   }
 }
 
+function emptyDefault(): DefaultRota {
+  return { dohpe: {}, dlretail: {} }
+}
+
 export default function RotaPage() {
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff)
   const [selectedWeekStart, setSelectedWeekStart] = useState(startOfWeek(new Date()))
   const [rota, setRota] = useState<RotaData>({ dohpe: {}, dlretail: {} })
+  const [defaultRota, setDefaultRota] = useState<DefaultRota>(emptyDefault())
+  const [editedWeeks, setEditedWeeks] = useState<EditedWeeks>({ dohpe: {}, dlretail: {} })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
   const [googleCalendarSynced, setGoogleCalendarSynced] = useState(false)
@@ -166,19 +173,45 @@ export default function RotaPage() {
     }
   })
 
-  const weekStarts = useMemo(() => {
-    return [0, 1, 2, 3].map((offset) => addWeeks(selectedWeekStart, offset))
+  const futureWeekStarts = useMemo(() => {
+    return [1, 2, 3].map((offset) => addWeeks(selectedWeekStart, offset))
   }, [selectedWeekStart])
 
+  function getDayId(week: Date, dayIndex: number) {
+    return dateKey(addDays(week, dayIndex))
+  }
+
+  function getWeekId(week: Date) {
+    return dateKey(week)
+  }
+
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
-    const weekId = dateKey(week)
-    const dayId = dateKey(addDays(week, dayIndex))
+    const weekId = getWeekId(week)
+    const dayId = getDayId(week, dayIndex)
     return rota[company]?.[weekId]?.[dayId] || []
   }
 
-  function setDayShifts(company: CompanyKey, week: Date, dayIndex: number, shifts: Shift[]) {
-    const weekId = dateKey(week)
-    const dayId = dateKey(addDays(week, dayIndex))
+  function markWeekEdited(company: CompanyKey, week: Date) {
+    const weekId = getWeekId(week)
+
+    setEditedWeeks((current) => ({
+      ...current,
+      [company]: {
+        ...current[company],
+        [weekId]: true,
+      },
+    }))
+  }
+
+  function setDayShifts(
+    company: CompanyKey,
+    week: Date,
+    dayIndex: number,
+    shifts: Shift[],
+    markEdited = true
+  ) {
+    const weekId = getWeekId(week)
+    const dayId = getDayId(week, dayIndex)
 
     setRota((current) => ({
       ...current,
@@ -190,15 +223,17 @@ export default function RotaPage() {
         },
       },
     }))
+
+    if (markEdited) markWeekEdited(company, week)
   }
 
-  function addShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType = 'work') {
+  function addShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType) {
     const current = getDayShifts(company, week, dayIndex)
     const staffId = staff[0]?.id || ''
     const shift = type === 'holiday' ? makeHolidayShift(staffId) : makeWorkShift(staffId)
 
     setDayShifts(company, week, dayIndex, [...current, shift])
-    setExpandedDay(`${company}-${dateKey(addDays(week, dayIndex))}`)
+    setExpandedDay(`${company}-${getDayId(week, dayIndex)}`)
   }
 
   function updateShift(
@@ -209,6 +244,7 @@ export default function RotaPage() {
     patch: Partial<Shift>
   ) {
     const current = getDayShifts(company, week, dayIndex)
+
     setDayShifts(
       company,
       week,
@@ -227,22 +263,86 @@ export default function RotaPage() {
     )
   }
 
+  function applyDefaultToWeek(company: CompanyKey, week: Date, template: Record<string, Shift[]>) {
+    const weekId = getWeekId(week)
+    const copied: Record<string, Shift[]> = {}
+
+    for (let i = 0; i < 7; i += 1) {
+      const sourceKey = String(i)
+      const targetDay = getDayId(week, i)
+
+      copied[targetDay] = (template[sourceKey] || []).map(cloneShift)
+    }
+
+    setRota((current) => ({
+      ...current,
+      [company]: {
+        ...current[company],
+        [weekId]: copied,
+      },
+    }))
+  }
+
+  function setWeekAsDefault(company: CompanyKey, week: Date) {
+    const weekId = getWeekId(week)
+    const weekRows = rota[company]?.[weekId] || {}
+
+    const template: Record<string, Shift[]> = {}
+
+    for (let i = 0; i < 7; i += 1) {
+      template[String(i)] = (weekRows[getDayId(week, i)] || []).map(cloneShift)
+    }
+
+    const futureWeeks = [1, 2, 3].map((offset) => addWeeks(week, offset))
+    const editedFutureWeeks = futureWeeks.filter(
+      (futureWeek) => editedWeeks[company]?.[getWeekId(futureWeek)]
+    )
+
+    if (editedFutureWeeks.length > 0) {
+      const confirmed = window.confirm(
+        'Some future weeks have been edited differently. Setting this as default will overwrite those calendar entries. Continue?'
+      )
+
+      if (!confirmed) return
+    }
+
+    setDefaultRota((current) => ({
+      ...current,
+      [company]: template,
+    }))
+
+    for (const futureWeek of futureWeeks) {
+      applyDefaultToWeek(company, futureWeek, template)
+    }
+
+    setEditedWeeks((current) => {
+      const next = { ...current, [company]: { ...current[company] } }
+
+      for (const futureWeek of futureWeeks) {
+        delete next[company][getWeekId(futureWeek)]
+      }
+
+      return next
+    })
+
+    setStatusMessage(
+      `${companies.find((c) => c.key === company)?.name} default rota set and applied to next 3 weeks.`
+    )
+  }
+
   function copyWeekToNext(company: CompanyKey, week: Date) {
-    const sourceWeekId = dateKey(week)
+    const sourceWeekId = getWeekId(week)
     const targetWeek = addWeeks(week, 1)
-    const targetWeekId = dateKey(targetWeek)
+    const targetWeekId = getWeekId(targetWeek)
     const source = rota[company]?.[sourceWeekId] || {}
 
     const copied: Record<string, Shift[]> = {}
 
     for (let i = 0; i < 7; i += 1) {
-      const sourceDay = dateKey(addDays(week, i))
-      const targetDay = dateKey(addDays(targetWeek, i))
+      const sourceDay = getDayId(week, i)
+      const targetDay = getDayId(targetWeek, i)
 
-      copied[targetDay] = (source[sourceDay] || []).map((shift) => ({
-        ...shift,
-        id: crypto.randomUUID(),
-      }))
+      copied[targetDay] = (source[sourceDay] || []).map(cloneShift)
     }
 
     setRota((current) => ({
@@ -253,40 +353,8 @@ export default function RotaPage() {
       },
     }))
 
+    markWeekEdited(company, targetWeek)
     setStatusMessage(`${companies.find((c) => c.key === company)?.name} copied to next week.`)
-  }
-
-  function loadDefaultWeek(company: CompanyKey, week: Date) {
-    const weekId = dateKey(week)
-    const template: Record<string, Shift[]> = {}
-
-    for (let i = 0; i < 7; i += 1) {
-      const day = dateKey(addDays(week, i))
-      template[day] =
-        i < 5
-          ? [
-              {
-                id: crypto.randomUUID(),
-                staffId: staff[0]?.id || '',
-                type: 'work',
-                start: '10:00',
-                end: '17:00',
-                holidayHours: 0,
-                note: '',
-              },
-            ]
-          : []
-    }
-
-    setRota((current) => ({
-      ...current,
-      [company]: {
-        ...current[company],
-        [weekId]: template,
-      },
-    }))
-
-    setStatusMessage(`Default rota loaded for ${companies.find((c) => c.key === company)?.name}.`)
   }
 
   function totalsForCompanyWeek(company: CompanyKey, week: Date) {
@@ -379,7 +447,9 @@ export default function RotaPage() {
     }
 
     setCalendarEvents(demoEvents)
-    setStatusMessage('Google Calendar synced for logged-in user. Real API sync can refresh every 15–30 minutes later.')
+    setStatusMessage(
+      'Google Calendar synced for logged-in user. Real API sync can refresh every 15–30 minutes later.'
+    )
   }
 
   function sendTelegram(company: CompanyKey, week: Date) {
@@ -399,7 +469,7 @@ export default function RotaPage() {
         for (const shift of shifts) {
           const person = staff.find((x) => x.id === shift.staffId)
           if (shift.type === 'holiday') {
-            rotaLines.push(`🌴 ${person?.name || 'Staff'} holiday (${shift.holidayHours} hrs)`)
+            rotaLines.push(`🌴 ${person?.name || 'Staff'} holiday`)
           } else {
             rotaLines.push(`${person?.name || 'Staff'} ${shift.start}–${shift.end}`)
           }
@@ -434,9 +504,300 @@ export default function RotaPage() {
     setStaff((current) => current.filter((person) => person.id !== id))
   }
 
-  function WeekPlanner({ company, week, compact = false }: { company: Company; week: Date; compact?: boolean }) {
+  function ShiftEditor({
+    company,
+    week,
+    dayIndex,
+    shift,
+  }: {
+    company: CompanyKey
+    week: Date
+    dayIndex: number
+    shift: Shift
+  }) {
+    const person = staff.find((x) => x.id === shift.staffId)
+    const hours = shiftHours(shift)
+
+    return (
+      <div
+        className={`rounded-xl border p-2 shadow-sm ${
+          shift.type === 'holiday' ? 'border-amber-200 bg-amber-50' : 'border-neutral-200 bg-white'
+        }`}
+      >
+        <div className="mb-2 flex items-center gap-2">
+          <select
+            value={shift.staffId}
+            onChange={(event) =>
+              updateShift(company, week, dayIndex, shift.id, {
+                staffId: event.target.value,
+              })
+            }
+            className="min-w-0 flex-1 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+          >
+            {staff.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+          </select>
+
+          <div className="flex shrink-0 overflow-hidden rounded-lg border border-neutral-200 bg-white">
+            <span
+              className={`px-2 py-2 text-xs font-black ${
+                shift.type === 'work' ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-300'
+              }`}
+            >
+              Shift
+            </span>
+            <span
+              className={`px-2 py-2 text-xs font-black ${
+                shift.type === 'holiday' ? 'bg-amber-300 text-black' : 'bg-neutral-100 text-neutral-300'
+              }`}
+            >
+              🌴
+            </span>
+          </div>
+        </div>
+
+        {shift.type === 'holiday' ? (
+          <div className="rounded-xl bg-amber-100 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-lg">🌴☀️🏖️</span>
+              <input
+                type="number"
+                value={shift.holidayHours}
+                onChange={(event) =>
+                  updateShift(company, week, dayIndex, shift.id, {
+                    holidayHours: Number(event.target.value),
+                  })
+                }
+                className="w-20 rounded-lg border border-amber-200 px-2 py-2 text-xs font-black"
+              />
+            </div>
+            <p className="mt-1 text-xs font-black text-amber-700">
+              Holiday · {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="time"
+              value={shift.start}
+              onChange={(event) =>
+                updateShift(company, week, dayIndex, shift.id, {
+                  start: event.target.value,
+                })
+              }
+              className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+            />
+            <input
+              type="time"
+              value={shift.end}
+              onChange={(event) =>
+                updateShift(company, week, dayIndex, shift.id, {
+                  end: event.target.value,
+                })
+              }
+              className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+            />
+          </div>
+        )}
+
+        <input
+          value={shift.note || ''}
+          onChange={(event) =>
+            updateShift(company, week, dayIndex, shift.id, {
+              note: event.target.value,
+            })
+          }
+          placeholder="Note"
+          className="mt-2 w-full rounded-lg border border-neutral-200 px-2 py-2 text-xs"
+        />
+
+        <div className="mt-2 flex items-center justify-between text-xs">
+          <span className="font-black text-neutral-500">
+            {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
+          </span>
+          <button
+            type="button"
+            onClick={() => deleteShift(company, week, dayIndex, shift.id)}
+            className="font-black text-red-500"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  function DayCard({
+    company,
+    week,
+    dayIndex,
+  }: {
+    company: CompanyKey
+    week: Date
+    dayIndex: number
+  }) {
+    const actualDate = addDays(week, dayIndex)
+    const dayId = dateKey(actualDate)
+    const expandKey = `${company}-${dayId}`
+    const isExpanded = expandedDay === expandKey
+    const shifts = getDayShifts(company, week, dayIndex)
+    const events = calendarEvents[dayId] || []
+
+    return (
+      <div
+        className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2"
+        onMouseEnter={() => setExpandedDay(expandKey)}
+      >
+        <div className="mb-2 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-black">{dayNames[dayIndex]}</p>
+            <p className="text-xs font-bold text-neutral-400">
+              {actualDate.toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+              })}
+            </p>
+          </div>
+
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                addShift(company, week, dayIndex, 'work')
+              }}
+              className="rounded-full bg-black px-2 py-1 text-xs font-black text-white"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                addShift(company, week, dayIndex, 'holiday')
+              }}
+              className="rounded-full bg-amber-300 px-2 py-1 text-xs font-black text-black"
+            >
+              🌴
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          {shifts.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-neutral-300 p-3 text-center text-xs font-bold text-neutral-400">
+              No rota entries
+            </p>
+          ) : (
+            shifts.slice(0, 4).map((shift) => {
+              const person = staff.find((x) => x.id === shift.staffId)
+              return (
+                <div
+                  key={shift.id}
+                  className={`truncate rounded-lg px-2 py-1 text-xs font-black ${
+                    shift.type === 'holiday' ? 'bg-amber-100 text-amber-700' : 'bg-white text-neutral-800'
+                  }`}
+                >
+                  {shift.type === 'holiday'
+                    ? `🌴 ${person?.name || 'Staff'}`
+                    : `${person?.name || 'Staff'} ${shift.start}–${shift.end}`}
+                </div>
+              )
+            })
+          )}
+
+          {shifts.length > 4 && (
+            <p className="text-xs font-black text-neutral-400">+{shifts.length - 4} more</p>
+          )}
+        </div>
+
+        {isExpanded && (
+          <div
+            onMouseLeave={() => setExpandedDay(null)}
+            className="absolute left-0 top-0 z-50 w-[min(440px,90vw)] rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl"
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-lg font-black">{dayNames[dayIndex]}</p>
+                <p className="text-sm font-bold text-neutral-500">
+                  {actualDate.toLocaleDateString('en-GB', {
+                    weekday: 'long',
+                    day: '2-digit',
+                    month: 'long',
+                  })}
+                </p>
+              </div>
+
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => addShift(company, week, dayIndex, 'work')}
+                  className="rounded-full bg-black px-3 py-2 text-xs font-black text-white"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addShift(company, week, dayIndex, 'holiday')}
+                  className="rounded-full bg-amber-300 px-3 py-2 text-xs font-black text-black"
+                >
+                  🌴
+                </button>
+              </div>
+            </div>
+
+            {googleCalendarSynced && (
+              <div className="mb-3 rounded-2xl bg-blue-50 p-3">
+                <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-500">
+                  Google Calendar
+                </p>
+                {events.length === 0 ? (
+                  <p className="text-xs font-bold text-blue-300">No synced events</p>
+                ) : (
+                  <div className="space-y-1">
+                    {events.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-lg bg-white px-2 py-1 text-xs font-bold text-blue-700"
+                      >
+                        {event.start}–{event.end} · {event.title}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="max-h-[65vh] space-y-2 overflow-auto pr-1">
+              {shifts.length === 0 ? (
+                <p className="rounded-2xl bg-neutral-100 p-4 text-center text-sm font-bold text-neutral-400">
+                  No shifts or holidays added yet.
+                </p>
+              ) : (
+                shifts.map((shift) => (
+                  <ShiftEditor
+                    key={shift.id}
+                    company={company}
+                    week={week}
+                    dayIndex={dayIndex}
+                    shift={shift}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  function WeekPlanner({ company, week }: { company: Company; week: Date }) {
     const total = companyWeekTotal(company.key, week)
     const staffTotals = totalsForCompanyWeek(company.key, week)
+    const isEdited = editedWeeks[company.key]?.[getWeekId(week)]
 
     return (
       <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
@@ -448,16 +809,17 @@ export default function RotaPage() {
             <h2 className="text-xl font-black">{formatWeekLabel(week)}</h2>
             <p className="text-sm font-semibold text-neutral-500">
               {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hol hrs · {money(total.wage)}
+              {isEdited ? ' · edited' : ''}
             </p>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => loadDefaultWeek(company.key, week)}
-              className="rounded-xl bg-neutral-100 px-3 py-2 text-xs font-black hover:bg-neutral-200"
+              onClick={() => setWeekAsDefault(company.key, week)}
+              className="rounded-xl bg-emerald-400 px-3 py-2 text-xs font-black text-black"
             >
-              Load default
+              Set default
             </button>
             <button
               type="button"
@@ -477,225 +839,14 @@ export default function RotaPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
-          {dayNames.map((day, dayIndex) => {
-            const actualDate = addDays(week, dayIndex)
-            const dayId = dateKey(actualDate)
-            const expandKey = `${company.key}-${dayId}`
-            const isExpanded = expandedDay === expandKey
-            const shifts = getDayShifts(company.key, week, dayIndex)
-            const events = calendarEvents[dayId] || []
-
-            return (
-              <div
-                key={day}
-                onMouseEnter={() => setExpandedDay(expandKey)}
-                onClick={() => setExpandedDay(isExpanded ? null : expandKey)}
-                className={`rounded-2xl border border-neutral-200 bg-neutral-50 p-2 transition-all ${
-                  isExpanded ? 'md:col-span-2 min-h-80 ring-2 ring-black/10' : 'min-h-44'
-                }`}
-              >
-                <div className="mb-2 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-black">{day}</p>
-                    <p className="text-xs font-bold text-neutral-400">
-                      {actualDate.toLocaleDateString('en-GB', {
-                        day: '2-digit',
-                        month: 'short',
-                      })}
-                    </p>
-                  </div>
-
-                  <div className="flex gap-1">
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        addShift(company.key, week, dayIndex, 'work')
-                      }}
-                      className="rounded-full bg-black px-2 py-1 text-xs font-black text-white"
-                    >
-                      +
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        addShift(company.key, week, dayIndex, 'holiday')
-                      }}
-                      className="rounded-full bg-amber-300 px-2 py-1 text-xs font-black text-black"
-                    >
-                      🌴
-                    </button>
-                  </div>
-                </div>
-
-                {googleCalendarSynced && (
-                  <div className="mb-2 rounded-xl bg-blue-50 p-2">
-                    <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-500">
-                      Google Calendar
-                    </p>
-                    {events.length === 0 ? (
-                      <p className="text-xs font-bold text-blue-300">No synced events</p>
-                    ) : (
-                      <div className="space-y-1">
-                        {events.map((event) => (
-                          <div key={event.id} className="rounded-lg bg-white px-2 py-1 text-xs font-bold text-blue-700">
-                            {event.start}–{event.end} · {event.title}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  {shifts.length === 0 ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          addShift(company.key, week, dayIndex, 'work')
-                        }}
-                        className="rounded-xl border border-dashed border-neutral-300 p-3 text-xs font-bold text-neutral-400"
-                      >
-                        Add shift
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          addShift(company.key, week, dayIndex, 'holiday')
-                        }}
-                        className="rounded-xl border border-dashed border-amber-300 bg-amber-50 p-3 text-xs font-bold text-amber-600"
-                      >
-                        Holiday
-                      </button>
-                    </div>
-                  ) : (
-                    shifts.map((shift) => {
-                      const person = staff.find((x) => x.id === shift.staffId)
-                      const hours = shiftHours(shift)
-
-                      return (
-                        <div
-                          key={shift.id}
-                          onClick={(event) => event.stopPropagation()}
-                          className={`rounded-xl border p-2 shadow-sm ${
-                            shift.type === 'holiday'
-                              ? 'border-amber-200 bg-amber-50'
-                              : 'border-neutral-200 bg-white'
-                          }`}
-                        >
-                          <div className="mb-2 flex items-center gap-2">
-                            <select
-                              value={shift.staffId}
-                              onChange={(event) =>
-                                updateShift(company.key, week, dayIndex, shift.id, {
-                                  staffId: event.target.value,
-                                })
-                              }
-                              className="min-w-0 flex-1 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
-                            >
-                              {staff.map((person) => (
-                                <option key={person.id} value={person.id}>
-                                  {person.name}
-                                </option>
-                              ))}
-                            </select>
-
-                            <select
-                              value={shift.type}
-                              onChange={(event) =>
-                                updateShift(company.key, week, dayIndex, shift.id, {
-                                  type: event.target.value as ShiftType,
-                                  holidayHours: event.target.value === 'holiday' ? 7 : 0,
-                                  start: event.target.value === 'holiday' ? '' : shift.start || '10:00',
-                                  end: event.target.value === 'holiday' ? '' : shift.end || '17:00',
-                                })
-                              }
-                              className="w-24 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
-                            >
-                              <option value="work">Work</option>
-                              <option value="holiday">🌴 Holiday</option>
-                            </select>
-                          </div>
-
-                          {shift.type === 'holiday' ? (
-                            <div className="rounded-xl bg-amber-100 p-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-lg">🌴☀️🏖️</span>
-                                <input
-                                  type="number"
-                                  value={shift.holidayHours}
-                                  onChange={(event) =>
-                                    updateShift(company.key, week, dayIndex, shift.id, {
-                                      holidayHours: Number(event.target.value),
-                                    })
-                                  }
-                                  className="w-20 rounded-lg border border-amber-200 px-2 py-2 text-xs font-black"
-                                />
-                              </div>
-                              <p className="mt-1 text-xs font-black text-amber-700">
-                                Holiday · {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
-                              </p>
-                            </div>
-                          ) : (
-                            <div className="grid grid-cols-2 gap-2">
-                              <input
-                                type="time"
-                                value={shift.start}
-                                onChange={(event) =>
-                                  updateShift(company.key, week, dayIndex, shift.id, {
-                                    start: event.target.value,
-                                  })
-                                }
-                                className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
-                              />
-                              <input
-                                type="time"
-                                value={shift.end}
-                                onChange={(event) =>
-                                  updateShift(company.key, week, dayIndex, shift.id, {
-                                    end: event.target.value,
-                                  })
-                                }
-                                className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
-                              />
-                            </div>
-                          )}
-
-                          <input
-                            value={shift.note || ''}
-                            onChange={(event) =>
-                              updateShift(company.key, week, dayIndex, shift.id, {
-                                note: event.target.value,
-                              })
-                            }
-                            placeholder="Note"
-                            className="mt-2 w-full rounded-lg border border-neutral-200 px-2 py-2 text-xs"
-                          />
-
-                          <div className="mt-2 flex items-center justify-between text-xs">
-                            <span className="font-black text-neutral-500">
-                              {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => deleteShift(company.key, week, dayIndex, shift.id)}
-                              className="font-black text-red-500"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              </div>
-            )
-          })}
+          {dayNames.map((_, dayIndex) => (
+            <DayCard
+              key={`${company.key}-${getDayId(week, dayIndex)}`}
+              company={company.key}
+              week={week}
+              dayIndex={dayIndex}
+            />
+          ))}
         </div>
 
         <div className="mt-4 rounded-2xl bg-neutral-950 p-3 text-white">
@@ -716,10 +867,7 @@ export default function RotaPage() {
               }
 
               return (
-                <div
-                  key={person.id}
-                  className="rounded-xl bg-white/10 p-2 text-xs font-bold"
-                >
+                <div key={person.id} className="rounded-xl bg-white/10 p-2 text-xs font-bold">
                   <div className="flex items-center justify-between gap-2">
                     <span>{person.name}</span>
                     <span>{(row.workHours + row.holidayHours).toFixed(2)} hrs</span>
@@ -749,11 +897,9 @@ export default function RotaPage() {
               <p className="text-xs font-black uppercase tracking-[0.25em] text-white/50">
                 Staff rota
               </p>
-              <h1 className="text-3xl font-black tracking-tight">
-                Weekly Planner
-              </h1>
+              <h1 className="text-3xl font-black tracking-tight">Weekly Planner</h1>
               <p className="mt-1 text-sm font-semibold text-white/60">
-                Two-company rota · 4-week view · staff hours · holiday hours · wage totals
+                Two-company rota · current week + next 3 weeks · staff hours · holiday hours · wage totals
               </p>
             </div>
 
@@ -762,9 +908,7 @@ export default function RotaPage() {
                 type="button"
                 onClick={syncGoogleCalendar}
                 className={`rounded-2xl px-4 py-3 text-sm font-black ${
-                  googleCalendarSynced
-                    ? 'bg-white text-black'
-                    : 'bg-blue-500 text-white'
+                  googleCalendarSynced ? 'bg-white text-black' : 'bg-blue-500 text-white'
                 }`}
               >
                 {googleCalendarSynced ? 'Google Calendar ✓' : 'Sync Google Calendar'}
@@ -828,10 +972,7 @@ export default function RotaPage() {
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
               {staff.map((person) => (
-                <div
-                  key={person.id}
-                  className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3"
-                >
+                <div key={person.id} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       value={person.name}
@@ -874,16 +1015,15 @@ export default function RotaPage() {
         </section>
 
         <section className="space-y-5">
-          <h2 className="px-1 text-xl font-black">Current + next 3 weeks</h2>
+          <h2 className="px-1 text-xl font-black">Next 3 weeks</h2>
 
-          {weekStarts.map((week) => (
+          {futureWeekStarts.map((week) => (
             <div key={dateKey(week)} className="grid grid-cols-1 gap-5 xl:grid-cols-2">
               {companies.map((company) => (
                 <WeekPlanner
                   key={`${company.key}-${dateKey(week)}-future`}
                   company={company}
                   week={week}
-                  compact
                 />
               ))}
             </div>
