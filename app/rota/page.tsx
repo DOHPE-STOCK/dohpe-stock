@@ -8,6 +8,12 @@ type ShiftType = 'work' | 'holiday'
 
 type StaffMember = { id: string; name: string; hourlyRate: number }
 
+type OpeningTime = {
+  open: string
+  close: string
+  closed?: boolean
+}
+
 type Shift = {
   id: string
   staffId: string
@@ -27,7 +33,16 @@ type WeeklyReport = {
   company: CompanyKey
   weekId: string
   companyName: string
-  staffTotals: Record<string, { name: string; workHours: number; holidayHours: number; workWage: number; holidayWage: number }>
+  staffTotals: Record<
+    string,
+    {
+      name: string
+      workHours: number
+      holidayHours: number
+      workWage: number
+      holidayWage: number
+    }
+  >
   createdAt: string
 }
 
@@ -35,6 +50,7 @@ type RotaData = Record<CompanyKey, Record<string, Record<string, Shift[]>>>
 type DefaultRota = Record<CompanyKey, Record<string, Shift[]>>
 type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
 type CalendarData = Record<string, CalendarEvent[]>
+type OpeningTimes = Record<CompanyKey, OpeningTime[]>
 
 type ActiveEditor = {
   company: CompanyKey
@@ -60,6 +76,27 @@ const defaultStaff: StaffMember[] = [
   { id: 'staff-3', name: 'Staff 2', hourlyRate: 12.21 },
   { id: 'staff-4', name: 'Staff 3', hourlyRate: 12.21 },
 ]
+
+const defaultOpeningTimes: OpeningTimes = {
+  dohpe: [
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '16:00' },
+  ],
+  dlretail: [
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '17:00' },
+    { open: '10:00', close: '16:00' },
+  ],
+}
 
 function pad(n: number) {
   return String(n).padStart(2, '0')
@@ -101,12 +138,46 @@ function timeToMinutes(value: string) {
   return h * 60 + m
 }
 
-function shiftHours(shift: Shift) {
+function shortTime(value: string) {
+  if (!value || !value.includes(':')) return value || ''
+  const [h, m] = value.split(':')
+  if (m === '00') return String(Number(h))
+  return `${Number(h)}:${m}`
+}
+
+function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
+  if (shift.type === 'holiday') return `HOLIDAY ${formatHours(shiftHours(shift))}h`
+
+  if (
+    opening &&
+    !opening.closed &&
+    shift.start === opening.open &&
+    shift.end === opening.close
+  ) {
+    return 'FULL DAY'
+  }
+
+  return `${shortTime(shift.start)}-${shortTime(shift.end)}`
+}
+
+function rawShiftHours(shift: Shift) {
   if (shift.type === 'holiday') return Number(shift.holidayHours || 0)
   const start = timeToMinutes(shift.start)
   const end = timeToMinutes(shift.end)
   if (!start || !end || end <= start) return 0
   return (end - start) / 60
+}
+
+function shiftHours(shift: Shift) {
+  const raw = rawShiftHours(shift)
+
+  if (shift.type === 'holiday') return raw
+
+  if (raw >= 6) {
+    return Math.max(0, raw - 20 / 60)
+  }
+
+  return raw
 }
 
 function formatHours(value: number) {
@@ -121,12 +192,30 @@ function cloneShift(shift: Shift): Shift {
   return { ...shift, id: crypto.randomUUID(), saved: true }
 }
 
-function makeWorkShift(staffId: string): Shift {
-  return { id: crypto.randomUUID(), staffId, type: 'work', start: '10:00', end: '17:00', holidayHours: 0, note: '', saved: true }
+function makeWorkShift(staffId: string, opening?: OpeningTime): Shift {
+  return {
+    id: crypto.randomUUID(),
+    staffId,
+    type: 'work',
+    start: opening?.closed ? '10:00' : opening?.open || '10:00',
+    end: opening?.closed ? '17:00' : opening?.close || '17:00',
+    holidayHours: 0,
+    note: '',
+    saved: true,
+  }
 }
 
 function makeHolidayShift(staffId: string): Shift {
-  return { id: crypto.randomUUID(), staffId, type: 'holiday', start: '', end: '', holidayHours: 7, note: 'Holiday', saved: true }
+  return {
+    id: crypto.randomUUID(),
+    staffId,
+    type: 'holiday',
+    start: '',
+    end: '',
+    holidayHours: 7,
+    note: 'Holiday',
+    saved: true,
+  }
 }
 
 function emptyDefault(): DefaultRota {
@@ -145,17 +234,29 @@ function normaliseShiftForCompare(shift: Shift) {
 }
 
 function GoogleLogo() {
-  return <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-black text-blue-600 sm:h-6 sm:w-6 sm:text-sm">G</span>
+  return (
+    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-black text-blue-600 sm:h-6 sm:w-6 sm:text-sm">
+      G
+    </span>
+  )
 }
 
 function CalendarIcon() {
-  return <span className="flex h-5 w-5 items-center justify-center rounded-md bg-white text-[9px] font-black text-purple-600 sm:h-6 sm:w-6 sm:text-xs">Cal</span>
+  return (
+    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-white text-[9px] font-black text-purple-600 sm:h-6 sm:w-6 sm:text-xs">
+      Cal
+    </span>
+  )
 }
 
 function CompanyLogo({ company }: { company: Company }) {
   return (
     <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-200 text-[10px] font-black text-neutral-600">
-      {company.logoUrl ? <img src={company.logoUrl} alt={company.name} className="h-full w-full object-cover" /> : company.name.slice(0, 1).toUpperCase()}
+      {company.logoUrl ? (
+        <img src={company.logoUrl} alt={company.name} className="h-full w-full object-cover" />
+      ) : (
+        company.name.slice(0, 1).toUpperCase()
+      )}
     </span>
   )
 }
@@ -167,6 +268,7 @@ export default function RotaPage() {
   const [companies, setCompanies] = useState<Company[]>(defaultCompanies)
   const [mobileCompany, setMobileCompany] = useState<CompanyKey>('dohpe')
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff)
+  const [openingTimes, setOpeningTimes] = useState<OpeningTimes>(defaultOpeningTimes)
   const [currentWeekStart] = useState(startOfWeek(new Date()))
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historySearch, setHistorySearch] = useState('')
@@ -186,8 +288,12 @@ export default function RotaPage() {
   const [calendarEvents, setCalendarEvents] = useState<CalendarData>(() => {
     const todayWeek = startOfWeek(new Date())
     return {
-      [dateKey(addDays(todayWeek, 0))]: [{ id: 'cal-1', title: 'Calendar sync preview', start: '09:30', end: '10:00' }],
-      [dateKey(addDays(todayWeek, 4))]: [{ id: 'cal-2', title: 'Busy / unavailable', start: '15:00', end: '16:00' }],
+      [dateKey(addDays(todayWeek, 0))]: [
+        { id: 'cal-1', title: 'Calendar sync preview', start: '09:30', end: '10:00' },
+      ],
+      [dateKey(addDays(todayWeek, 4))]: [
+        { id: 'cal-2', title: 'Busy / unavailable', start: '15:00', end: '16:00' },
+      ],
     }
   })
 
@@ -220,6 +326,7 @@ export default function RotaPage() {
           const parsed = JSON.parse(local)
           if (Array.isArray(parsed.companies)) setCompanies(parsed.companies)
           if (Array.isArray(parsed.staff)) setStaff(parsed.staff)
+          if (parsed.openingTimes) setOpeningTimes(parsed.openingTimes)
           if (parsed.rota) setRota(parsed.rota)
           if (parsed.defaultRota) setDefaultRota(parsed.defaultRota)
           if (parsed.editedWeeks) setEditedWeeks(parsed.editedWeeks)
@@ -237,6 +344,7 @@ export default function RotaPage() {
         const saved = data?.data || {}
         if (Array.isArray(saved.companies)) setCompanies(saved.companies)
         if (Array.isArray(saved.staff)) setStaff(saved.staff)
+        if (saved.openingTimes) setOpeningTimes(saved.openingTimes)
         if (saved.rota) setRota(saved.rota)
         if (saved.defaultRota) setDefaultRota(saved.defaultRota)
         if (saved.editedWeeks) setEditedWeeks(saved.editedWeeks)
@@ -256,7 +364,7 @@ export default function RotaPage() {
   useEffect(() => {
     if (!cloudLoaded) return
 
-    const payload = { companies, staff, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced }
+    const payload = { companies, staff, openingTimes, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced }
     localStorage.setItem(LOCAL_ROTA_KEY, JSON.stringify(payload))
 
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
@@ -276,7 +384,7 @@ export default function RotaPage() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
     }
-  }, [cloudLoaded, cloudUserKey, companies, staff, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced])
+  }, [cloudLoaded, cloudUserKey, companies, staff, openingTimes, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced])
 
   function getDayId(week: Date, dayIndex: number) {
     return dateKey(addDays(week, dayIndex))
@@ -299,8 +407,19 @@ export default function RotaPage() {
     return companies.find((company) => company.key === companyKey)?.name || companyKey
   }
 
+  function getOpening(company: CompanyKey, dayIndex: number) {
+    return openingTimes[company]?.[dayIndex] || { open: '10:00', close: '17:00' }
+  }
+
   function updateCompany(companyKey: CompanyKey, patch: Partial<Company>) {
     setCompanies((current) => current.map((company) => (company.key === companyKey ? { ...company, ...patch } : company)))
+  }
+
+  function updateOpening(company: CompanyKey, dayIndex: number, patch: Partial<OpeningTime>) {
+    setOpeningTimes((current) => ({
+      ...current,
+      [company]: current[company].map((row, index) => (index === dayIndex ? { ...row, ...patch } : row)),
+    }))
   }
 
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
@@ -354,7 +473,22 @@ export default function RotaPage() {
   }
 
   function openNewShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType) {
-    const shift = type === 'holiday' ? makeHolidayShift(staff[0]?.id || '') : makeWorkShift(staff[0]?.id || '')
+    const opening = getOpening(company, dayIndex)
+    const shift = type === 'holiday' ? makeHolidayShift(staff[0]?.id || '') : makeWorkShift(staff[0]?.id || '', opening)
+    setDraftShift(shift)
+    setDraftDirty(true)
+    setActiveEditor({ company, weekId: getWeekId(week), dayIndex, shiftId: shift.id, isNew: true })
+  }
+
+  function openFullDayShift(company: CompanyKey, week: Date, dayIndex: number) {
+    const opening = getOpening(company, dayIndex)
+
+    if (opening.closed) {
+      showStatus('This day is marked closed in opening times.')
+      return
+    }
+
+    const shift = makeWorkShift(staff[0]?.id || '', opening)
     setDraftShift(shift)
     setDraftDirty(true)
     setActiveEditor({ company, weekId: getWeekId(week), dayIndex, shiftId: shift.id, isNew: true })
@@ -610,7 +744,7 @@ export default function RotaPage() {
       } else {
         for (const shift of shifts) {
           const person = staff.find((x) => x.id === shift.staffId)
-          rotaLines.push(shift.type === 'holiday' ? `HOLS ${person?.name || 'Staff'}` : `${person?.name || 'Staff'} ${shift.start}–${shift.end}`)
+          rotaLines.push(shift.type === 'holiday' ? `HOLS ${person?.name || 'Staff'}` : `${person?.name || 'Staff'} ${shiftTimeLabel(shift, getOpening(company, i))}`)
         }
       }
 
@@ -640,7 +774,9 @@ export default function RotaPage() {
     const actualDate = addDays(week, activeEditor.dayIndex)
     const person = staff.find((x) => x.id === draftShift.staffId)
     const hours = shiftHours(draftShift)
+    const rawHours = rawShiftHours(draftShift)
     const events = calendarEvents[getDayId(week, activeEditor.dayIndex)] || []
+    const opening = getOpening(activeEditor.company, activeEditor.dayIndex)
 
     return (
       <div
@@ -653,10 +789,10 @@ export default function RotaPage() {
             {actualDate.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' })}
           </p>
 
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => updateDraftShift({ type: 'work', start: draftShift.start || '10:00', end: draftShift.end || '17:00' })}
+              onClick={() => updateDraftShift({ type: 'work', start: draftShift.start || opening.open, end: draftShift.end || opening.close })}
               className={`rounded-xl px-4 py-2 text-xs font-black ${draftShift.type === 'work' ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-400'}`}
             >
               SHIFT
@@ -667,6 +803,14 @@ export default function RotaPage() {
               className={`rounded-xl px-4 py-2 text-xs font-black ${draftShift.type === 'holiday' ? 'bg-amber-300 text-black' : 'bg-neutral-100 text-neutral-400'}`}
             >
               HOLIDAY
+            </button>
+            <button
+              type="button"
+              onClick={() => updateDraftShift({ type: 'work', start: opening.open, end: opening.close })}
+              disabled={opening.closed}
+              className="rounded-xl bg-cyan-100 px-4 py-2 text-xs font-black text-cyan-800 disabled:opacity-40"
+            >
+              FULL DAY
             </button>
           </div>
         </div>
@@ -736,7 +880,11 @@ export default function RotaPage() {
 
           <div className="mt-2 text-xs">
             <span className="font-black text-neutral-500">
-              {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
+              {draftShift.type === 'work' && rawHours >= 6
+                ? `${rawHours.toFixed(2)} hrs minus 20 min break = ${hours.toFixed(2)} paid hrs`
+                : `${hours.toFixed(2)} hrs`}
+              {' · '}
+              {money(hours * Number(person?.hourlyRate || 0))}
               {draftDirty ? ' · unsaved' : ''}
             </span>
           </div>
@@ -765,23 +913,37 @@ export default function RotaPage() {
   function DayCard({ company, week, dayIndex }: { company: CompanyKey; week: Date; dayIndex: number }) {
     const actualDate = addDays(week, dayIndex)
     const shifts = getDayShifts(company, week, dayIndex)
+    const opening = getOpening(company, dayIndex)
+    const openingLabel = opening.closed ? 'Closed' : `${shortTime(opening.open)}-${shortTime(opening.close)}`
     const editorOpenHere = activeEditor?.company === company && activeEditor.weekId === getWeekId(week) && activeEditor.dayIndex === dayIndex
 
     return (
       <div className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2">
         <div className="mb-2 flex items-start justify-between gap-2">
-          <div>
-            <p className="text-sm font-black">{dayNames[dayIndex]}</p>
+          <div className="min-w-0 pr-1">
+            <div className="flex min-w-0 items-center gap-1">
+              <p className="text-sm font-black">{dayNames[dayIndex]}</p>
+              <span className="truncate text-[10px] font-black text-cyan-700">{openingLabel}</span>
+            </div>
             <p className="text-xs font-bold text-neutral-400">{actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => openNewShift(company, week, dayIndex, 'work')}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-black text-sm font-black text-white"
-          >
-            +
-          </button>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => openFullDayShift(company, week, dayIndex)}
+              className="flex h-7 items-center justify-center rounded-full bg-cyan-100 px-2 text-[10px] font-black text-cyan-800"
+            >
+              FD
+            </button>
+            <button
+              type="button"
+              onClick={() => openNewShift(company, week, dayIndex, 'work')}
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-black text-sm font-black text-white"
+            >
+              +
+            </button>
+          </div>
         </div>
 
         <div className="space-y-1">
@@ -790,13 +952,12 @@ export default function RotaPage() {
           ) : (
             shifts.slice(0, 5).map((shift) => {
               const person = staff.find((x) => x.id === shift.staffId)
-              const shiftHourText = formatHours(shiftHours(shift))
 
               return (
                 <div
                   key={shift.id}
                   onClick={() => openExistingShift(company, week, dayIndex, shift)}
-                  className={`relative flex min-h-9 cursor-pointer flex-col justify-center rounded-lg px-1.5 py-1 pr-6 text-[10px] font-black leading-tight ${
+                  className={`relative flex min-h-9 cursor-pointer flex-col justify-center rounded-lg px-1.5 py-1 pr-4 text-[10px] font-black leading-tight ${
                     shift.type === 'holiday' ? 'bg-amber-100 text-amber-700' : 'bg-white text-neutral-800'
                   }`}
                 >
@@ -810,10 +971,8 @@ export default function RotaPage() {
                   >
                     ×
                   </button>
-                  <span className="truncate">{person?.name || 'Staff'}</span>
-                  <span className="truncate text-[9px] opacity-80">
-                    {shift.type === 'holiday' ? `HOLIDAY ${shiftHourText}h` : `${shift.start}–${shift.end}`}
-                  </span>
+                  <span className="truncate pr-1">{person?.name || 'Staff'}</span>
+                  <span className="truncate pr-0 text-[9px] opacity-80">{shiftTimeLabel(shift, opening)}</span>
                 </div>
               )
             })
@@ -834,7 +993,7 @@ export default function RotaPage() {
     const current = isCurrentWeek(week)
 
     return (
-      <section className={`rounded-3xl border bg-white p-4 shadow-xl ${current ? 'border-emerald-400 ring-4 ring-emerald-100' : 'border-neutral-200'}`}>
+      <section className={`rounded-3xl border bg-white p-4 shadow-xl ${current ? 'border-emerald-600 ring-4 ring-emerald-300' : 'border-neutral-200'}`}>
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <CompanyLogo company={company} />
@@ -842,7 +1001,7 @@ export default function RotaPage() {
               <p className="truncate text-xs font-black uppercase tracking-[0.2em] text-neutral-400">{company.name}</p>
               <h2 className="text-xl font-black">
                 {formatWeekLabel(week)}
-                {current && <span className="ml-2 rounded-full bg-emerald-100 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-emerald-700">Current</span>}
+                {current && <span className="ml-2 rounded-full bg-emerald-600 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-white">Current</span>}
               </h2>
               <p className="text-sm font-semibold text-neutral-500">
                 {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hols hrs · {money(total.wage)}
@@ -1017,7 +1176,7 @@ export default function RotaPage() {
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-black">Settings</h2>
-                <p className="text-sm font-semibold text-neutral-500">Edit company names, logo URLs, staff names, and hourly rates.</p>
+                <p className="text-sm font-semibold text-neutral-500">Edit company names, logo URLs, opening times, staff names, and hourly rates.</p>
               </div>
 
               <div className="flex gap-2">
@@ -1036,6 +1195,41 @@ export default function RotaPage() {
                       <input value={company.name} onChange={(event) => updateCompany(company.key, { name: event.target.value })} placeholder="Company name" className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold" />
                       <input value={company.logoUrl || ''} onChange={(event) => updateCompany(company.key, { logoUrl: event.target.value })} placeholder="Logo image URL" className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-xs font-bold" />
                     </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    <p className="text-xs font-black uppercase tracking-widest text-neutral-400">Opening times</p>
+                    {dayNames.map((day, dayIndex) => {
+                      const opening = getOpening(company.key, dayIndex)
+
+                      return (
+                        <div key={`${company.key}-${day}`} className="grid grid-cols-[44px_1fr_1fr_70px] items-center gap-2">
+                          <span className="text-xs font-black text-neutral-500">{day}</span>
+                          <input
+                            type="time"
+                            value={opening.open}
+                            disabled={opening.closed}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { open: event.target.value })}
+                            className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
+                          />
+                          <input
+                            type="time"
+                            value={opening.close}
+                            disabled={opening.closed}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { close: event.target.value })}
+                            className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
+                          />
+                          <label className="flex items-center gap-1 text-[10px] font-black text-neutral-500">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(opening.closed)}
+                              onChange={(event) => updateOpening(company.key, dayIndex, { closed: event.target.checked })}
+                            />
+                            Closed
+                          </label>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               ))}
