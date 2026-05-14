@@ -175,21 +175,37 @@ function TimePickerField({
   onChange: (value: string) => void
   disabled?: boolean
 }) {
+  const [view, setView] = useState<'hours' | 'minutes'>('hours')
+
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <MobileTimePicker
-  ampm={false}
-  closeOnSelect={false}
-  views={['hours', 'minutes']}
-  openTo="hours"
-  minutesStep={5}
-  value={parsePickerTime(value)}
-  disabled={disabled}
-  onChange={(newValue: Dayjs | null) => {
-    if (!newValue || !newValue.isValid()) return
-    onChange(newValue.format('HH:mm'))
-  }}
+        ampm={false}
+        closeOnSelect={false}
+        views={['hours', 'minutes']}
+        openTo="hours"
+        view={view}
+        onViewChange={(newView) => {
+  if (newView === 'hours' || newView === 'minutes') {
+    setView(newView)
+  }
+}}
+        onOpen={() => setView('hours')}
+        minutesStep={5}
+        value={parsePickerTime(value)}
+        disabled={disabled}
+        onChange={(newValue: Dayjs | null) => {
+          if (!newValue || !newValue.isValid()) return
+          onChange(newValue.format('HH:mm'))
+
+          if (view === 'hours') {
+            window.setTimeout(() => setView('minutes'), 0)
+          }
+        }}
         slotProps={{
+          actionBar: {
+            actions: ['cancel', 'accept'],
+          },
           textField: {
             size: 'small',
             fullWidth: true,
@@ -429,6 +445,11 @@ export default function RotaPage() {
       try {
         const { data: userData } = await supabase.auth.getUser()
         const userId = userData?.user?.id
+
+        if (!userId) {
+          showStatus('Log in to sync rota settings across devices.')
+        }
+
         const key = userId ? `rota:${userId}` : ROTA_USER_KEY_FALLBACK
         setRotaUserKey(key)
 
@@ -1283,10 +1304,14 @@ export default function RotaPage() {
         className={`relative min-h-44 rounded-2xl border p-2 ${
           closed
             ? 'cursor-pointer border-red-200 bg-red-50'
-            : 'border-neutral-200 bg-neutral-50'
+            : 'cursor-pointer border-neutral-200 bg-neutral-50'
         }`}
         onClick={() => {
-          if (closed) openClosedDayEditor(company, week, dayIndex)
+          if (closed) {
+            openClosedDayEditor(company, week, dayIndex)
+          } else {
+            openNewShift(company, week, dayIndex, 'work')
+          }
         }}
       >
         <div className="mb-2">
