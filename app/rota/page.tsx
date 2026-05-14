@@ -141,19 +141,41 @@ function formatWeekLabel(weekStart: Date) {
   })}`
 }
 
-function normaliseTimeInput(value: string) {
+function cleanTimeTyping(value: string) {
+  return value.replace(/[^\d:]/g, '').slice(0, 5)
+}
+
+function formatTimeOnBlur(value: string) {
   const raw = value.trim()
+
+  if (!raw) return ''
 
   if (raw.includes(':')) {
     const [hRaw = '', mRaw = ''] = raw.split(':')
-    const h = hRaw.replace(/\D/g, '').slice(0, 2)
-    const m = mRaw.replace(/\D/g, '').slice(0, 2)
-    return m ? `${h}:${m}` : h ? `${h}:` : ''
+    const h = Number(hRaw)
+    const m = Number(mRaw || 0)
+
+    if (!Number.isFinite(h) || h < 0 || h > 23) return ''
+    if (!Number.isFinite(m) || m < 0 || m > 59) return ''
+
+    return `${pad(h)}:${pad(m)}`
   }
 
-  const digits = raw.replace(/\D/g, '').slice(0, 4)
-  if (digits.length <= 2) return digits
-  return `${digits.slice(0, 2)}:${digits.slice(2)}`
+  const digits = raw.replace(/\D/g, '')
+
+  if (digits.length <= 2) {
+    const h = Number(digits)
+    if (!Number.isFinite(h) || h < 0 || h > 23) return ''
+    return `${pad(h)}:00`
+  }
+
+  const h = Number(digits.slice(0, -2))
+  const m = Number(digits.slice(-2))
+
+  if (!Number.isFinite(h) || h < 0 || h > 23) return ''
+  if (!Number.isFinite(m) || m < 0 || m > 59) return ''
+
+  return `${pad(h)}:${pad(m)}`
 }
 
 function timeToMinutes(value: string) {
@@ -960,35 +982,11 @@ export default function RotaPage() {
   }
 
   function syncGoogleCalendar() {
-    setGoogleCalendarSynced(true)
-
-    const week = startOfWeek(new Date())
-    const demoEvents: CalendarData = {}
-
-    for (let i = 0; i < 35; i += 1) {
-      const day = addDays(week, i)
-      const key = dateKey(day)
-
-      if (i % 6 === 0) {
-        demoEvents[key] = [
-          { id: crypto.randomUUID(), title: 'Synced calendar event', start: '09:00', end: '10:00' },
-        ]
-      }
-
-      if (i % 9 === 0) {
-        demoEvents[key] = [
-          ...(demoEvents[key] || []),
-          { id: crypto.randomUUID(), title: 'Unavailable', start: '14:00', end: '15:30' },
-        ]
-      }
-    }
-
-    setCalendarEvents(demoEvents)
-    showStatus('Google Calendar auto sync placeholder is enabled for this logged-in user.')
+    window.location.href = '/api/rota/google/connect'
   }
 
   function openMonthlyCalendar() {
-    showStatus('Monthly Google Calendar placeholder. This can open a full month calendar modal later.')
+    window.location.href = '/rota/calendar'
   }
 
   function saveStaffSettings() {
@@ -1182,7 +1180,8 @@ export default function RotaPage() {
                 inputMode="numeric"
                 placeholder="--:--"
                 value={draftShift.start}
-                onChange={(event) => updateDraftShift({ start: normaliseTimeInput(event.target.value) })}
+                onChange={(event) => updateDraftShift({ start: cleanTimeTyping(event.target.value) })}
+                onBlur={(event) => updateDraftShift({ start: formatTimeOnBlur(event.target.value) })}
                 className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <input
@@ -1190,7 +1189,8 @@ export default function RotaPage() {
                 inputMode="numeric"
                 placeholder="--:--"
                 value={draftShift.end}
-                onChange={(event) => updateDraftShift({ end: normaliseTimeInput(event.target.value) })}
+                onChange={(event) => updateDraftShift({ end: cleanTimeTyping(event.target.value) })}
+                onBlur={(event) => updateDraftShift({ end: formatTimeOnBlur(event.target.value) })}
                 className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <button
@@ -1332,7 +1332,6 @@ export default function RotaPage() {
   function WeekPlanner({ company, week }: { company: Company; week: Date }) {
     const total = companyWeekTotal(company.key, week)
     const staffTotals = totalsForCompanyWeek(company.key, week)
-    const isEdited = editedWeeks[company.key]?.[getWeekId(week)]
     const current = isCurrentWeek(week)
 
     return (
@@ -1356,10 +1355,6 @@ export default function RotaPage() {
                   </span>
                 )}
               </h2>
-              <p className="text-sm font-semibold text-neutral-500">
-                {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hols hrs · {money(total.wage)}
-                {isEdited ? ' · edited' : ''}
-              </p>
             </div>
           </div>
 
@@ -1654,7 +1649,8 @@ export default function RotaPage() {
                             placeholder="--:--"
                             value={opening.open}
                             disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { open: normaliseTimeInput(event.target.value) })}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { open: cleanTimeTyping(event.target.value) })}
+                            onBlur={(event) => updateOpening(company.key, dayIndex, { open: formatTimeOnBlur(event.target.value) })}
                             className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
                           />
                           <input
@@ -1663,7 +1659,8 @@ export default function RotaPage() {
                             placeholder="--:--"
                             value={opening.close}
                             disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { close: normaliseTimeInput(event.target.value) })}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { close: cleanTimeTyping(event.target.value) })}
+                            onBlur={(event) => updateOpening(company.key, dayIndex, { close: formatTimeOnBlur(event.target.value) })}
                             className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
                           />
                           <label className="flex items-center gap-1 text-[10px] font-black text-neutral-500">
