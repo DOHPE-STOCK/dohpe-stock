@@ -67,7 +67,7 @@ type ActiveEditor = {
 }
 
 const ROTA_SETTINGS_TABLE = 'rota_settings'
-const ROTA_GLOBAL_KEY = 'dohpe_global_rota'
+const ROTA_USER_KEY_FALLBACK = 'rota:default'
 const LOCAL_ROTA_KEY = 'dohpe_rota_global_settings_v1'
 const LOCAL_CALENDAR_KEY = 'dohpe_rota_calendar_settings_v1'
 
@@ -162,7 +162,6 @@ function shortTime(value: string) {
 
 function parsePickerTime(value: string) {
   if (!value || !value.includes(':')) return null
-
   const parsed = dayjs(`2024-01-01T${value}`)
   return parsed.isValid() ? parsed : null
 }
@@ -356,6 +355,7 @@ export default function RotaPage() {
   const calendarSaveTimerRef = useRef<number | null>(null)
   const statusTimerRef = useRef<number | null>(null)
 
+  const [rotaUserKey, setRotaUserKey] = useState(ROTA_USER_KEY_FALLBACK)
   const [companies, setCompanies] = useState<Company[]>(defaultCompanies)
   const [mobileCompany, setMobileCompany] = useState<CompanyKey>('dohpe')
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff)
@@ -426,7 +426,13 @@ export default function RotaPage() {
   useEffect(() => {
     async function loadCloudRota() {
       try {
-        const local = localStorage.getItem(LOCAL_ROTA_KEY)
+        const { data: userData } = await supabase.auth.getUser()
+        const userId = userData?.user?.id
+        const key = userId ? `rota:${userId}` : ROTA_USER_KEY_FALLBACK
+        setRotaUserKey(key)
+
+        const scopedLocalKey = `${LOCAL_ROTA_KEY}:${key}`
+        const local = localStorage.getItem(scopedLocalKey) || localStorage.getItem(LOCAL_ROTA_KEY)
 
         if (local) {
           const parsed = JSON.parse(local)
@@ -443,7 +449,7 @@ export default function RotaPage() {
         const { data, error } = await supabase
           .from(ROTA_SETTINGS_TABLE)
           .select('data')
-          .eq('user_key', ROTA_GLOBAL_KEY)
+          .eq('user_key', key)
           .maybeSingle()
 
         if (error) throw error
@@ -518,7 +524,7 @@ export default function RotaPage() {
       weeklyReports,
     }
 
-    localStorage.setItem(LOCAL_ROTA_KEY, JSON.stringify(payload))
+    localStorage.setItem(`${LOCAL_ROTA_KEY}:${rotaUserKey}`, JSON.stringify(payload))
 
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
 
@@ -526,7 +532,7 @@ export default function RotaPage() {
       try {
         const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert(
           {
-            user_key: ROTA_GLOBAL_KEY,
+            user_key: rotaUserKey,
             data: payload,
             updated_at: new Date().toISOString(),
           },
@@ -542,7 +548,7 @@ export default function RotaPage() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
     }
-  }, [cloudLoaded, companies, staff, openingTimes, rota, defaultRota, editedWeeks, closedDays, weeklyReports])
+  }, [cloudLoaded, rotaUserKey, companies, staff, openingTimes, rota, defaultRota, editedWeeks, closedDays, weeklyReports])
 
   useEffect(() => {
     if (!calendarLoaded) return
