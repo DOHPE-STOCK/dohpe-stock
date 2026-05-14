@@ -19,6 +19,7 @@ type Shift = {
   end: string
   holidayHours: number
   note?: string
+  saved?: boolean
 }
 
 type CalendarEvent = {
@@ -32,6 +33,7 @@ type Company = {
   key: CompanyKey
   name: string
   telegramGroup: string
+  logoUrl?: string
 }
 
 type RotaData = Record<CompanyKey, Record<string, Record<string, Shift[]>>>
@@ -40,8 +42,8 @@ type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
 type CalendarData = Record<string, CalendarEvent[]>
 
 const defaultCompanies: Company[] = [
-  { key: 'dohpe', name: 'Dohpe Vintage', telegramGroup: 'Dohpe rota group' },
-  { key: 'dlretail', name: 'DL Retail', telegramGroup: 'DL Retail rota group' },
+  { key: 'dohpe', name: 'Dohpe Vintage', telegramGroup: 'Dohpe rota group', logoUrl: '' },
+  { key: 'dlretail', name: 'DL Retail', telegramGroup: 'DL Retail rota group', logoUrl: '' },
 ]
 
 const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -108,6 +110,10 @@ function shiftHours(shift: Shift) {
   return (end - start) / 60
 }
 
+function formatHours(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
 function money(value: number) {
   return new Intl.NumberFormat('en-GB', {
     style: 'currency',
@@ -119,6 +125,7 @@ function cloneShift(shift: Shift): Shift {
   return {
     ...shift,
     id: crypto.randomUUID(),
+    saved: true,
   }
 }
 
@@ -131,6 +138,7 @@ function makeWorkShift(staffId: string): Shift {
     end: '17:00',
     holidayHours: 0,
     note: '',
+    saved: false,
   }
 }
 
@@ -143,6 +151,7 @@ function makeHolidayShift(staffId: string): Shift {
     end: '',
     holidayHours: 7,
     note: 'Holiday',
+    saved: false,
   }
 }
 
@@ -152,8 +161,36 @@ function emptyDefault(): DefaultRota {
 
 function GoogleLogo() {
   return (
-    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-sm font-black text-blue-600">
+    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-black text-blue-600 sm:h-6 sm:w-6 sm:text-sm">
       G
+    </span>
+  )
+}
+
+function CalendarIcon() {
+  return (
+    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-white text-[9px] font-black text-purple-600 sm:h-6 sm:w-6 sm:text-xs">
+      Cal
+    </span>
+  )
+}
+
+function SettingsIcon() {
+  return (
+    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-white text-[9px] font-black text-emerald-700 sm:h-6 sm:w-6 sm:text-xs">
+      Cal
+    </span>
+  )
+}
+
+function CompanyLogo({ company }: { company: Company }) {
+  return (
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-200 text-[10px] font-black text-neutral-600">
+      {company.logoUrl ? (
+        <img src={company.logoUrl} alt={company.name} className="h-full w-full object-cover" />
+      ) : (
+        company.name.slice(0, 1).toUpperCase()
+      )}
     </span>
   )
 }
@@ -205,11 +242,9 @@ export default function RotaPage() {
     return companies.find((company) => company.key === companyKey)?.name || companyKey
   }
 
-  function updateCompanyName(companyKey: CompanyKey, name: string) {
+  function updateCompany(companyKey: CompanyKey, patch: Partial<Company>) {
     setCompanies((current) =>
-      current.map((company) =>
-        company.key === companyKey ? { ...company, name } : company
-      )
+      current.map((company) => (company.key === companyKey ? { ...company, ...patch } : company))
     )
   }
 
@@ -277,8 +312,21 @@ export default function RotaPage() {
       company,
       week,
       dayIndex,
-      current.map((shift) => (shift.id === shiftId ? { ...shift, ...patch } : shift))
+      current.map((shift) => (shift.id === shiftId ? { ...shift, ...patch, saved: false } : shift))
     )
+  }
+
+  function saveShift(company: CompanyKey, week: Date, dayIndex: number, shiftId: string) {
+    const current = getDayShifts(company, week, dayIndex)
+
+    setDayShifts(
+      company,
+      week,
+      dayIndex,
+      current.map((shift) => (shift.id === shiftId ? { ...shift, saved: true } : shift))
+    )
+
+    setStatusMessage('Shift saved.')
   }
 
   function deleteShift(company: CompanyKey, week: Date, dayIndex: number, shiftId: string) {
@@ -399,7 +447,7 @@ export default function RotaPage() {
     }
 
     for (let i = 0; i < 7; i += 1) {
-      for (const shift of getDayShifts(company, week, i)) {
+      for (const shift of getDayShifts(company, week, i).filter((row) => row.saved)) {
         const person = staff.find((x) => x.id === shift.staffId)
         const hours = shiftHours(shift)
         const wage = hours * Number(person?.hourlyRate || 0)
@@ -491,7 +539,7 @@ export default function RotaPage() {
 
     for (let i = 0; i < 7; i += 1) {
       const day = addDays(week, i)
-      const shifts = getDayShifts(company, week, i)
+      const shifts = getDayShifts(company, week, i).filter((shift) => shift.saved)
 
       rotaLines.push(`${dayNames[i]} ${day.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`)
 
@@ -552,17 +600,28 @@ export default function RotaPage() {
 
     return (
       <div
-        className={`relative rounded-xl border p-2 pr-9 shadow-sm ${
+        className={`relative rounded-xl border p-2 pr-16 shadow-sm ${
           shift.type === 'holiday' ? 'border-amber-200 bg-amber-50' : 'border-neutral-200 bg-white'
         }`}
       >
-        <button
-          type="button"
-          onClick={() => deleteShift(company, week, dayIndex, shift.id)}
-          className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-red-100 text-xs font-black text-red-600"
-        >
-          ×
-        </button>
+        <div className="absolute right-2 top-2 flex gap-1">
+          <button
+            type="button"
+            onClick={() => saveShift(company, week, dayIndex, shift.id)}
+            className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-black ${
+              shift.saved ? 'bg-emerald-500 text-white' : 'bg-emerald-100 text-emerald-700'
+            }`}
+          >
+            ✓
+          </button>
+          <button
+            type="button"
+            onClick={() => deleteShift(company, week, dayIndex, shift.id)}
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-red-100 text-xs font-black text-red-600"
+          >
+            ×
+          </button>
+        </div>
 
         <div className="mb-2 flex items-center gap-2">
           <select
@@ -657,6 +716,7 @@ export default function RotaPage() {
         <div className="mt-2 text-xs">
           <span className="font-black text-neutral-500">
             {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
+            {!shift.saved ? ' · unsaved' : ''}
           </span>
         </div>
       </div>
@@ -676,7 +736,8 @@ export default function RotaPage() {
     const dayId = dateKey(actualDate)
     const expandKey = `${company}-${dayId}`
     const isExpanded = expandedDay === expandKey
-    const shifts = getDayShifts(company, week, dayIndex)
+    const allShifts = getDayShifts(company, week, dayIndex)
+    const savedShifts = allShifts.filter((shift) => shift.saved)
     const events = calendarEvents[dayId] || []
 
     return (
@@ -695,34 +756,37 @@ export default function RotaPage() {
         </div>
 
         <div className="space-y-1">
-          {shifts.length === 0 ? (
+          {savedShifts.length === 0 ? (
             <p className="rounded-xl border border-dashed border-neutral-300 p-3 text-center text-xs font-bold text-neutral-400">
               No rota entries
             </p>
           ) : (
-            shifts.slice(0, 5).map((shift) => {
+            savedShifts.slice(0, 5).map((shift) => {
               const person = staff.find((x) => x.id === shift.staffId)
+              const shiftHourValue = shiftHours(shift)
+              const shiftHourText = formatHours(shiftHourValue)
 
               return (
                 <div
                   key={shift.id}
-                  className={`flex min-h-8 flex-col justify-center rounded-lg px-1.5 py-1 text-[10px] font-black leading-[1.05] ${
+                  className={`flex min-h-8 items-center rounded-lg px-1.5 py-1 text-[10px] font-black leading-tight ${
                     shift.type === 'holiday'
                       ? 'bg-amber-100 text-amber-700'
                       : 'bg-white text-neutral-800'
                   }`}
                 >
-                  <span className="truncate">{person?.name || 'Staff'}</span>
-                  <span className="truncate text-[9px] opacity-80">
-                    {shift.type === 'holiday' ? 'HOLS' : `${shift.start}–${shift.end}`}
+                  <span className="w-full whitespace-normal break-words">
+                    {shift.type === 'holiday'
+                      ? `${person?.name || 'Staff'} HOLIDAY ${shiftHourText}h`
+                      : `${person?.name || 'Staff'} WORK ${shift.start}–${shift.end} ${shiftHourText}h`}
                   </span>
                 </div>
               )
             })
           )}
 
-          {shifts.length > 5 && (
-            <p className="text-xs font-black text-neutral-400">+{shifts.length - 5} more</p>
+          {savedShifts.length > 5 && (
+            <p className="text-xs font-black text-neutral-400">+{savedShifts.length - 5} more</p>
           )}
         </div>
 
@@ -760,12 +824,12 @@ export default function RotaPage() {
             </div>
 
             <div className="max-h-[48vh] space-y-2 overflow-auto pr-1">
-              {shifts.length === 0 ? (
+              {allShifts.length === 0 ? (
                 <p className="rounded-2xl bg-neutral-100 p-4 text-center text-sm font-bold text-neutral-400">
                   No shifts or holidays added yet.
                 </p>
               ) : (
-                shifts.map((shift) => (
+                allShifts.map((shift) => (
                   <ShiftEditor
                     key={shift.id}
                     company={company}
@@ -822,22 +886,25 @@ export default function RotaPage() {
         }`}
       >
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">
-              {company.name}
-            </p>
-            <h2 className="text-xl font-black">
-              {formatWeekLabel(week)}
-              {current && (
-                <span className="ml-2 rounded-full bg-emerald-100 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-emerald-700">
-                  Current
-                </span>
-              )}
-            </h2>
-            <p className="text-sm font-semibold text-neutral-500">
-              {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hols hrs · {money(total.wage)}
-              {isEdited ? ' · edited' : ''}
-            </p>
+          <div className="flex min-w-0 items-center gap-3">
+            <CompanyLogo company={company} />
+            <div className="min-w-0">
+              <p className="truncate text-xs font-black uppercase tracking-[0.2em] text-neutral-400">
+                {company.name}
+              </p>
+              <h2 className="text-xl font-black">
+                {formatWeekLabel(week)}
+                {current && (
+                  <span className="ml-2 rounded-full bg-emerald-100 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-emerald-700">
+                    Current
+                  </span>
+                )}
+              </h2>
+              <p className="text-sm font-semibold text-neutral-500">
+                {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hols hrs · {money(total.wage)}
+                {isEdited ? ' · edited' : ''}
+              </p>
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -943,8 +1010,8 @@ export default function RotaPage() {
 
   return (
     <main className="min-h-screen bg-neutral-100 text-neutral-950">
-      <div className="mx-auto max-w-[1900px] space-y-5 p-4">
-        <header className="rounded-3xl bg-black p-5 text-white shadow-2xl">
+      <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4">
+        <header className="rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.25em] text-white/50">
@@ -956,22 +1023,20 @@ export default function RotaPage() {
               </p>
             </div>
 
-            <div className="flex flex-wrap justify-end gap-2">
+            <div className="grid w-full grid-cols-3 gap-2 sm:w-auto sm:flex sm:flex-wrap sm:justify-end">
               <button
                 type="button"
                 onClick={openMonthlyCalendar}
-                className="flex items-center gap-2 rounded-2xl bg-purple-500 px-4 py-3 text-sm font-black text-white"
+                className="flex items-center justify-center gap-1 rounded-2xl bg-purple-500 px-2 py-3 text-xs font-black text-white sm:gap-2 sm:px-4 sm:text-sm"
               >
-                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white text-xs font-black text-purple-600">
-                  Cal
-                </span>
+                <CalendarIcon />
                 Calendar
               </button>
 
               <button
                 type="button"
                 onClick={syncGoogleCalendar}
-                className={`flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${
+                className={`flex items-center justify-center gap-1 rounded-2xl px-2 py-3 text-xs font-black sm:gap-2 sm:px-4 sm:text-sm ${
                   googleCalendarSynced ? 'bg-white text-black' : 'bg-blue-500 text-white'
                 }`}
               >
@@ -982,9 +1047,10 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={() => setSettingsOpen((value) => !value)}
-                className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
+                className="flex items-center justify-center gap-1 rounded-2xl bg-emerald-400 px-2 py-3 text-xs font-black text-black sm:gap-2 sm:px-4 sm:text-sm"
               >
-                {settingsOpen ? 'Close settings' : 'Staff settings'}
+                <SettingsIcon />
+                Settings
               </button>
             </div>
           </div>
@@ -995,13 +1061,14 @@ export default function RotaPage() {
                 key={company.key}
                 type="button"
                 onClick={() => setMobileCompany(company.key)}
-                className={`rounded-2xl px-4 py-3 text-sm font-black ${
+                className={`flex min-w-0 items-center justify-center gap-2 rounded-2xl px-3 py-3 text-sm font-black ${
                   mobileCompany === company.key
                     ? 'bg-white text-black'
                     : 'bg-white/10 text-white'
                 }`}
               >
-                Company {index + 1}
+                <CompanyLogo company={company} />
+                <span className="truncate">Company {index + 1}</span>
               </button>
             ))}
           </div>
@@ -1019,7 +1086,7 @@ export default function RotaPage() {
               <div>
                 <h2 className="text-xl font-black">Settings</h2>
                 <p className="text-sm font-semibold text-neutral-500">
-                  Edit company names, staff names, and hourly rates.
+                  Edit company names, logo URLs, staff names, and hourly rates.
                 </p>
               </div>
 
@@ -1050,11 +1117,25 @@ export default function RotaPage() {
                   <p className="mb-2 text-xs font-black uppercase tracking-widest text-neutral-400">
                     Company {index + 1}
                   </p>
-                  <input
-                    value={company.name}
-                    onChange={(event) => updateCompanyName(company.key, event.target.value)}
-                    className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
-                  />
+
+                  <div className="flex items-center gap-3">
+                    <CompanyLogo company={company} />
+
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <input
+                        value={company.name}
+                        onChange={(event) => updateCompany(company.key, { name: event.target.value })}
+                        placeholder="Company name"
+                        className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
+                      />
+                      <input
+                        value={company.logoUrl || ''}
+                        onChange={(event) => updateCompany(company.key, { logoUrl: event.target.value })}
+                        placeholder="Logo image URL"
+                        className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-xs font-bold"
+                      />
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
