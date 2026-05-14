@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 
 type CompanyKey = 'dohpe' | 'dlretail'
 type ShiftType = 'work' | 'holiday'
@@ -40,6 +41,9 @@ type RotaData = Record<CompanyKey, Record<string, Record<string, Shift[]>>>
 type DefaultRota = Record<CompanyKey, Record<string, Shift[]>>
 type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
 type CalendarData = Record<string, CalendarEvent[]>
+
+const ROTA_SETTINGS_TABLE = 'rota_settings'
+const HOVER_DELAY_MS = 400
 
 const defaultCompanies: Company[] = [
   { key: 'dohpe', name: 'Dohpe Vintage', telegramGroup: 'Dohpe rota group', logoUrl: '' },
@@ -196,6 +200,9 @@ function CompanyLogo({ company }: { company: Company }) {
 }
 
 export default function RotaPage() {
+  const hoverTimerRef = useRef<number | null>(null)
+  const saveTimerRef = useRef<number | null>(null)
+
   const [companies, setCompanies] = useState<Company[]>(defaultCompanies)
   const [mobileCompany, setMobileCompany] = useState<CompanyKey>('dohpe')
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff)
@@ -207,6 +214,8 @@ export default function RotaPage() {
   const [statusMessage, setStatusMessage] = useState('')
   const [googleCalendarSynced, setGoogleCalendarSynced] = useState(false)
   const [expandedDay, setExpandedDay] = useState<string | null>(null)
+  const [cloudUserKey, setCloudUserKey] = useState('default')
+  const [cloudLoaded, setCloudLoaded] = useState(false)
 
   const [calendarEvents, setCalendarEvents] = useState<CalendarData>(() => {
     const todayWeek = startOfWeek(new Date())
@@ -225,6 +234,94 @@ export default function RotaPage() {
   }, [currentWeekStart])
 
   const mobileCompanyList = companies.filter((company) => company.key === mobileCompany)
+
+  useEffect(() => {
+    async function loadCloudRota() {
+      try {
+        const { data: userData } = await supabase.auth.getUser()
+        const userKey = userData?.user?.id || 'default'
+        setCloudUserKey(userKey)
+
+        const { data, error } = await supabase
+          .from(ROTA_SETTINGS_TABLE)
+          .select('data')
+          .eq('user_key', userKey)
+          .maybeSingle()
+
+        if (error) throw error
+
+        const saved = data?.data || {}
+
+        if (Array.isArray(saved.companies)) setCompanies(saved.companies)
+        if (Array.isArray(saved.staff)) setStaff(saved.staff)
+        if (saved.rota) setRota(saved.rota)
+        if (saved.defaultRota) setDefaultRota(saved.defaultRota)
+        if (saved.editedWeeks) setEditedWeeks(saved.editedWeeks)
+        if (saved.googleCalendarSynced) setGoogleCalendarSynced(Boolean(saved.googleCalendarSynced))
+      } catch (error) {
+        console.error('ROTA_CLOUD_LOAD_ERROR', error)
+        setStatusMessage('Rota loaded locally. Cloud sync table may not be set up yet.')
+      } finally {
+        setCloudLoaded(true)
+      }
+    }
+
+    loadCloudRota()
+  }, [])
+
+  useEffect(() => {
+    if (!cloudLoaded) return
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current)
+    }
+
+    saveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const payload = {
+          companies,
+          staff,
+          rota,
+          defaultRota,
+          editedWeeks,
+          googleCalendarSynced,
+        }
+
+        const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert({
+          user_key: cloudUserKey,
+          data: payload,
+          updated_at: new Date().toISOString(),
+        })
+
+        if (error) throw error
+      } catch (error) {
+        console.error('ROTA_CLOUD_SAVE_ERROR', error)
+      }
+    }, 800)
+
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current)
+      }
+    }
+  }, [cloudLoaded, cloudUserKey, companies, staff, rota, defaultRota, editedWeeks, googleCalendarSynced])
+
+  function delayedExpand(key: string) {
+    if (hoverTimerRef.current) {
+      window.clearTimeout(hoverTimerRef.current)
+    }
+
+    hoverTimerRef.current = window.setTimeout(() => {
+      setExpandedDay(key)
+    }, HOVER_DELAY_MS)
+  }
+
+  function cancelDelayedExpand() {
+    if (hoverTimerRef.current) {
+      window.clearTimeout(hoverTimerRef.current)
+      hoverTimerRef.current = null
+    }
+  }
 
   function getDayId(week: Date, dayIndex: number) {
     return dateKey(addDays(week, dayIndex))
@@ -530,7 +627,7 @@ export default function RotaPage() {
 
   function saveStaffSettings() {
     setSettingsOpen(false)
-    setStatusMessage('Settings saved.')
+    setStatusMessage('Settings saved and syncing to cloud.')
   }
 
   function sendTelegram(company: CompanyKey, week: Date) {
@@ -743,7 +840,8 @@ export default function RotaPage() {
     return (
       <div
         className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2"
-        onMouseEnter={() => setExpandedDay(expandKey)}
+        onMouseEnter={() => delayedExpand(expandKey)}
+        onMouseLeave={cancelDelayedExpand}
       >
         <div className="mb-2">
           <p className="text-sm font-black">{dayNames[dayIndex]}</p>
@@ -778,7 +876,7 @@ export default function RotaPage() {
                   <span className="w-full whitespace-normal break-words">
                     {shift.type === 'holiday'
                       ? `${person?.name || 'Staff'} HOLIDAY ${shiftHourText}h`
-                      : `${person?.name || 'Staff'} WORK ${shift.start}–${shift.end} ${shiftHourText}h`}
+                      : `${person?.name || 'Staff'} ${shift.start}–${shift.end}`}
                   </span>
                 </div>
               )
@@ -792,7 +890,10 @@ export default function RotaPage() {
 
         {isExpanded && (
           <div
-            onMouseLeave={() => setExpandedDay(null)}
+            onMouseLeave={() => {
+              cancelDelayedExpand()
+              setExpandedDay(null)
+            }}
             className="absolute left-0 top-0 z-50 w-[min(440px,90vw)] rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl"
           >
             <div className="mb-3">
