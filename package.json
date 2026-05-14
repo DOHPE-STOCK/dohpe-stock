@@ -9,8 +9,13 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^9.0.1",
+    "@mui/x-date-pickers": "^9.2.0",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.105.1",
+    "dayjs": "^1.11.20",
     "googleapis": "^171.4.0",
     "next": "16.2.4",
     "openai": "^6.35.0",
