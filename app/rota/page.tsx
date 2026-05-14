@@ -129,7 +129,13 @@ function addWeeks(date: Date, weeks: number) {
 
 function formatWeekLabel(weekStart: Date) {
   const end = addDays(weekStart, 6)
-  return `${weekStart.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} – ${end.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`
+  return `${weekStart.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+  })} – ${end.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+  })}`
 }
 
 function timeToMinutes(value: string) {
@@ -143,6 +149,25 @@ function shortTime(value: string) {
   const [h, m] = value.split(':')
   if (m === '00') return String(Number(h))
   return `${Number(h)}:${m}`
+}
+
+function rawShiftHours(shift: Shift) {
+  if (shift.type === 'holiday') return Number(shift.holidayHours || 0)
+  const start = timeToMinutes(shift.start)
+  const end = timeToMinutes(shift.end)
+  if (!start || !end || end <= start) return 0
+  return (end - start) / 60
+}
+
+function shiftHours(shift: Shift) {
+  const raw = rawShiftHours(shift)
+  if (shift.type === 'holiday') return raw
+  if (raw >= 6) return Math.max(0, raw - 20 / 60)
+  return raw
+}
+
+function formatHours(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
 
 function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
@@ -160,55 +185,34 @@ function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
   return `${shortTime(shift.start)}-${shortTime(shift.end)}`
 }
 
-function rawShiftHours(shift: Shift) {
-  if (shift.type === 'holiday') return Number(shift.holidayHours || 0)
-  const start = timeToMinutes(shift.start)
-  const end = timeToMinutes(shift.end)
-  if (!start || !end || end <= start) return 0
-  return (end - start) / 60
-}
-
-function shiftHours(shift: Shift) {
-  const raw = rawShiftHours(shift)
-
-  if (shift.type === 'holiday') return raw
-
-  if (raw >= 6) {
-    return Math.max(0, raw - 20 / 60)
-  }
-
-  return raw
-}
-
-function formatHours(value: number) {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1)
-}
-
 function money(value: number) {
-  return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(value || 0)
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+  }).format(value || 0)
 }
 
 function cloneShift(shift: Shift): Shift {
   return { ...shift, id: crypto.randomUUID(), saved: true }
 }
 
-function makeWorkShift(staffId: string, opening?: OpeningTime): Shift {
+function makeWorkShift(): Shift {
   return {
     id: crypto.randomUUID(),
-    staffId,
+    staffId: '',
     type: 'work',
-    start: opening?.closed ? '10:00' : opening?.open || '10:00',
-    end: opening?.closed ? '17:00' : opening?.close || '17:00',
+    start: '',
+    end: '',
     holidayHours: 0,
     note: '',
     saved: true,
   }
 }
 
-function makeHolidayShift(staffId: string): Shift {
+function makeHolidayShift(): Shift {
   return {
     id: crypto.randomUUID(),
-    staffId,
+    staffId: '',
     type: 'holiday',
     start: '',
     end: '',
@@ -297,7 +301,11 @@ export default function RotaPage() {
     }
   })
 
-  const futureWeekStarts = useMemo(() => [1, 2, 3, 4].map((offset) => addWeeks(currentWeekStart, offset)), [currentWeekStart])
+  const futureWeekStarts = useMemo(
+    () => [1, 2, 3, 4].map((offset) => addWeeks(currentWeekStart, offset)),
+    [currentWeekStart]
+  )
+
   const mobileCompanyList = companies.filter((company) => company.key === mobileCompany)
 
   const filteredReports = useMemo(() => {
@@ -306,8 +314,16 @@ export default function RotaPage() {
 
     return weeklyReports
       .filter((report) => {
-        const staffNames = Object.values(report.staffTotals).map((row) => row.name).join(' ').toLowerCase()
-        return report.weekId.toLowerCase().includes(q) || report.companyName.toLowerCase().includes(q) || staffNames.includes(q)
+        const staffNames = Object.values(report.staffTotals)
+          .map((row) => row.name)
+          .join(' ')
+          .toLowerCase()
+
+        return (
+          report.weekId.toLowerCase().includes(q) ||
+          report.companyName.toLowerCase().includes(q) ||
+          staffNames.includes(q)
+        )
       })
       .slice(0, 20)
   }, [historySearch, weeklyReports])
@@ -322,6 +338,7 @@ export default function RotaPage() {
     async function loadCloudRota() {
       try {
         const local = localStorage.getItem(LOCAL_ROTA_KEY)
+
         if (local) {
           const parsed = JSON.parse(local)
           if (Array.isArray(parsed.companies)) setCompanies(parsed.companies)
@@ -338,10 +355,16 @@ export default function RotaPage() {
         const userKey = userData?.user?.id || 'default'
         setCloudUserKey(userKey)
 
-        const { data, error } = await supabase.from(ROTA_SETTINGS_TABLE).select('data').eq('user_key', userKey).maybeSingle()
+        const { data, error } = await supabase
+          .from(ROTA_SETTINGS_TABLE)
+          .select('data')
+          .eq('user_key', userKey)
+          .maybeSingle()
+
         if (error) throw error
 
         const saved = data?.data || {}
+
         if (Array.isArray(saved.companies)) setCompanies(saved.companies)
         if (Array.isArray(saved.staff)) setStaff(saved.staff)
         if (saved.openingTimes) setOpeningTimes(saved.openingTimes)
@@ -364,7 +387,17 @@ export default function RotaPage() {
   useEffect(() => {
     if (!cloudLoaded) return
 
-    const payload = { companies, staff, openingTimes, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced }
+    const payload = {
+      companies,
+      staff,
+      openingTimes,
+      rota,
+      defaultRota,
+      editedWeeks,
+      weeklyReports,
+      googleCalendarSynced,
+    }
+
     localStorage.setItem(LOCAL_ROTA_KEY, JSON.stringify(payload))
 
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
@@ -372,9 +405,14 @@ export default function RotaPage() {
     saveTimerRef.current = window.setTimeout(async () => {
       try {
         const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert(
-          { user_key: cloudUserKey, data: payload, updated_at: new Date().toISOString() },
+          {
+            user_key: cloudUserKey,
+            data: payload,
+            updated_at: new Date().toISOString(),
+          },
           { onConflict: 'user_key' }
         )
+
         if (error) throw error
       } catch (error) {
         console.error('ROTA_CLOUD_SAVE_ERROR', error)
@@ -384,7 +422,18 @@ export default function RotaPage() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
     }
-  }, [cloudLoaded, cloudUserKey, companies, staff, openingTimes, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced])
+  }, [
+    cloudLoaded,
+    cloudUserKey,
+    companies,
+    staff,
+    openingTimes,
+    rota,
+    defaultRota,
+    editedWeeks,
+    weeklyReports,
+    googleCalendarSynced,
+  ])
 
   function getDayId(week: Date, dayIndex: number) {
     return dateKey(addDays(week, dayIndex))
@@ -412,13 +461,17 @@ export default function RotaPage() {
   }
 
   function updateCompany(companyKey: CompanyKey, patch: Partial<Company>) {
-    setCompanies((current) => current.map((company) => (company.key === companyKey ? { ...company, ...patch } : company)))
+    setCompanies((current) =>
+      current.map((company) => (company.key === companyKey ? { ...company, ...patch } : company))
+    )
   }
 
   function updateOpening(company: CompanyKey, dayIndex: number, patch: Partial<OpeningTime>) {
     setOpeningTimes((current) => ({
       ...current,
-      [company]: current[company].map((row, index) => (index === dayIndex ? { ...row, ...patch } : row)),
+      [company]: current[company].map((row, index) =>
+        index === dayIndex ? { ...row, ...patch } : row
+      ),
     }))
   }
 
@@ -436,25 +489,38 @@ export default function RotaPage() {
 
   function weekHasDifferentInfo(company: CompanyKey, week: Date, template: Record<string, Shift[]>) {
     const weekRows = rota[company]?.[getWeekId(week)] || {}
+
     for (let i = 0; i < 7; i += 1) {
       const currentDay = (weekRows[getDayId(week, i)] || []).map(normaliseShiftForCompare)
       const templateDay = (template[String(i)] || []).map(normaliseShiftForCompare)
+
       if (JSON.stringify(currentDay) !== JSON.stringify(templateDay)) {
         if (currentDay.length > 0 || templateDay.length > 0) return true
       }
     }
+
     return false
   }
 
   function markWeekEdited(company: CompanyKey, week: Date) {
     const weekId = getWeekId(week)
+
     setEditedWeeks((current) => ({
       ...current,
-      [company]: { ...current[company], [weekId]: true },
+      [company]: {
+        ...current[company],
+        [weekId]: true,
+      },
     }))
   }
 
-  function setDayShifts(company: CompanyKey, week: Date, dayIndex: number, shifts: Shift[], markEdited = true) {
+  function setDayShifts(
+    company: CompanyKey,
+    week: Date,
+    dayIndex: number,
+    shifts: Shift[],
+    markEdited = true
+  ) {
     const weekId = getWeekId(week)
     const dayId = getDayId(week, dayIndex)
 
@@ -473,31 +539,29 @@ export default function RotaPage() {
   }
 
   function openNewShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType) {
-    const opening = getOpening(company, dayIndex)
-    const shift = type === 'holiday' ? makeHolidayShift(staff[0]?.id || '') : makeWorkShift(staff[0]?.id || '', opening)
+    const shift = type === 'holiday' ? makeHolidayShift() : makeWorkShift()
+
     setDraftShift(shift)
-    setDraftDirty(true)
-    setActiveEditor({ company, weekId: getWeekId(week), dayIndex, shiftId: shift.id, isNew: true })
-  }
-
-  function openFullDayShift(company: CompanyKey, week: Date, dayIndex: number) {
-    const opening = getOpening(company, dayIndex)
-
-    if (opening.closed) {
-      showStatus('This day is marked closed in opening times.')
-      return
-    }
-
-    const shift = makeWorkShift(staff[0]?.id || '', opening)
-    setDraftShift(shift)
-    setDraftDirty(true)
-    setActiveEditor({ company, weekId: getWeekId(week), dayIndex, shiftId: shift.id, isNew: true })
+    setDraftDirty(false)
+    setActiveEditor({
+      company,
+      weekId: getWeekId(week),
+      dayIndex,
+      shiftId: shift.id,
+      isNew: true,
+    })
   }
 
   function openExistingShift(company: CompanyKey, week: Date, dayIndex: number, shift: Shift) {
     setDraftShift({ ...shift })
     setDraftDirty(false)
-    setActiveEditor({ company, weekId: getWeekId(week), dayIndex, shiftId: shift.id, isNew: false })
+    setActiveEditor({
+      company,
+      weekId: getWeekId(week),
+      dayIndex,
+      shiftId: shift.id,
+      isNew: false,
+    })
   }
 
   function requestCloseEditor() {
@@ -505,6 +569,7 @@ export default function RotaPage() {
 
     if (draftDirty && draftShift) {
       const save = window.confirm('Save changes to this shift? Press OK to save, or Cancel to discard.')
+
       if (save) {
         saveDraftShift()
       } else {
@@ -512,6 +577,7 @@ export default function RotaPage() {
         setDraftShift(null)
         setDraftDirty(false)
       }
+
       return
     }
 
@@ -525,8 +591,35 @@ export default function RotaPage() {
     setDraftDirty(true)
   }
 
+  function setDraftFullDay() {
+    if (!activeEditor) return
+
+    const opening = getOpening(activeEditor.company, activeEditor.dayIndex)
+
+    if (opening.closed) {
+      showStatus('This day is marked closed in opening times.')
+      return
+    }
+
+    updateDraftShift({
+      type: 'work',
+      start: opening.open,
+      end: opening.close,
+    })
+  }
+
   function saveDraftShift() {
     if (!activeEditor || !draftShift) return
+
+    if (!draftShift.staffId) {
+      showStatus('Select a staff member before saving.')
+      return
+    }
+
+    if (draftShift.type === 'work' && (!draftShift.start || !draftShift.end)) {
+      showStatus('Enter start and finish times before saving.')
+      return
+    }
 
     const week = getWeekFromId(activeEditor.weekId)
     const current = getDayShiftsByWeekId(activeEditor.company, activeEditor.weekId, activeEditor.dayIndex)
@@ -550,7 +643,14 @@ export default function RotaPage() {
     if (!confirmed) return
 
     const current = getDayShifts(company, week, dayIndex)
-    setDayShifts(company, week, dayIndex, current.filter((shift) => shift.id !== shiftId))
+
+    setDayShifts(
+      company,
+      week,
+      dayIndex,
+      current.filter((shift) => shift.id !== shiftId)
+    )
+
     saveWeeklyReportSnapshot(company, week)
     showStatus('Shift removed.')
   }
@@ -565,7 +665,10 @@ export default function RotaPage() {
 
     setRota((current) => ({
       ...current,
-      [company]: { ...current[company], [weekId]: copied },
+      [company]: {
+        ...current[company],
+        [weekId]: copied,
+      },
     }))
   }
 
@@ -578,10 +681,15 @@ export default function RotaPage() {
     }
 
     const futureWeeks = [1, 2, 3, 4].map((offset) => addWeeks(week, offset))
-    const willOverwriteDifferentInfo = futureWeeks.some((futureWeek) => weekHasDifferentInfo(company, futureWeek, template))
+    const willOverwriteDifferentInfo = futureWeeks.some((futureWeek) =>
+      weekHasDifferentInfo(company, futureWeek, template)
+    )
 
     if (willOverwriteDifferentInfo) {
-      const confirmed = window.confirm('This default is different to information already entered in upcoming weeks. Setting default will overwrite those weeks. Continue?')
+      const confirmed = window.confirm(
+        'This default is different to information already entered in upcoming weeks. Setting default will overwrite those weeks. Continue?'
+      )
+
       if (!confirmed) return
     }
 
@@ -593,7 +701,11 @@ export default function RotaPage() {
 
     setEditedWeeks((current) => {
       const next = { ...current, [company]: { ...current[company] } }
-      for (const futureWeek of futureWeeks) delete next[company][getWeekId(futureWeek)]
+
+      for (const futureWeek of futureWeeks) {
+        delete next[company][getWeekId(futureWeek)]
+      }
+
       return next
     })
 
@@ -601,10 +713,15 @@ export default function RotaPage() {
   }
 
   function copyWeekToNext(company: CompanyKey, week: Date) {
-    const answer = window.prompt('Copy this week to which week?\nEnter 1 for next week, 2 for 2 weeks ahead, 3 for 3 weeks ahead, or 4 for 4 weeks ahead.', '1')
+    const answer = window.prompt(
+      'Copy this week to which week?\nEnter 1 for next week, 2 for 2 weeks ahead, 3 for 3 weeks ahead, or 4 for 4 weeks ahead.',
+      '1'
+    )
+
     if (!answer) return
 
     const offset = Number(answer)
+
     if (!Number.isFinite(offset) || offset < 1 || offset > 4) {
       showStatus('Copy cancelled. Enter a number from 1 to 4.')
       return
@@ -622,7 +739,10 @@ export default function RotaPage() {
 
     setRota((current) => ({
       ...current,
-      [company]: { ...current[company], [targetWeekId]: copied },
+      [company]: {
+        ...current[company],
+        [targetWeekId]: copied,
+      },
     }))
 
     markWeekEdited(company, targetWeek)
@@ -630,7 +750,10 @@ export default function RotaPage() {
   }
 
   function totalsForCompanyWeek(company: CompanyKey, week: Date) {
-    const totals: Record<string, { workHours: number; holidayHours: number; workWage: number; holidayWage: number }> = {}
+    const totals: Record<
+      string,
+      { workHours: number; holidayHours: number; workWage: number; holidayWage: number }
+    > = {}
 
     for (const person of staff) {
       totals[person.id] = { workHours: 0, holidayHours: 0, workWage: 0, holidayWage: 0 }
@@ -638,6 +761,8 @@ export default function RotaPage() {
 
     for (let i = 0; i < 7; i += 1) {
       for (const shift of getDayShifts(company, week, i)) {
+        if (!shift.staffId) continue
+
         const person = staff.find((x) => x.id === shift.staffId)
         const hours = shiftHours(shift)
         const wage = hours * Number(person?.hourlyRate || 0)
@@ -661,6 +786,7 @@ export default function RotaPage() {
 
   function companyWeekTotal(company: CompanyKey, week: Date) {
     const totals = totalsForCompanyWeek(company, week)
+
     return Object.values(totals).reduce(
       (sum, row) => ({
         workHours: sum.workHours + row.workHours,
@@ -677,7 +803,13 @@ export default function RotaPage() {
     const staffTotals: WeeklyReport['staffTotals'] = {}
 
     for (const person of staff) {
-      const row = totals[person.id] || { workHours: 0, holidayHours: 0, workWage: 0, holidayWage: 0 }
+      const row = totals[person.id] || {
+        workHours: 0,
+        holidayHours: 0,
+        workWage: 0,
+        holidayWage: 0,
+      }
+
       staffTotals[person.id] = {
         name: person.name,
         workHours: row.workHours,
@@ -696,11 +828,15 @@ export default function RotaPage() {
       createdAt: new Date().toISOString(),
     }
 
-    setWeeklyReports((current) => [report, ...current.filter((row) => row.id !== report.id)].slice(0, 250))
+    setWeeklyReports((current) => {
+      const withoutCurrent = current.filter((row) => row.id !== report.id)
+      return [report, ...withoutCurrent].slice(0, 250)
+    })
   }
 
   function syncGoogleCalendar() {
     setGoogleCalendarSynced(true)
+
     const week = startOfWeek(new Date())
     const demoEvents: CalendarData = {}
 
@@ -709,11 +845,16 @@ export default function RotaPage() {
       const key = dateKey(day)
 
       if (i % 6 === 0) {
-        demoEvents[key] = [{ id: crypto.randomUUID(), title: 'Synced calendar event', start: '09:00', end: '10:00' }]
+        demoEvents[key] = [
+          { id: crypto.randomUUID(), title: 'Synced calendar event', start: '09:00', end: '10:00' },
+        ]
       }
 
       if (i % 9 === 0) {
-        demoEvents[key] = [...(demoEvents[key] || []), { id: crypto.randomUUID(), title: 'Unavailable', start: '14:00', end: '15:30' }]
+        demoEvents[key] = [
+          ...(demoEvents[key] || []),
+          { id: crypto.randomUUID(), title: 'Unavailable', start: '14:00', end: '15:30' },
+        ]
       }
     }
 
@@ -737,6 +878,7 @@ export default function RotaPage() {
     for (let i = 0; i < 7; i += 1) {
       const day = addDays(week, i)
       const shifts = getDayShifts(company, week, i)
+
       rotaLines.push(`${dayNames[i]} ${day.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`)
 
       if (shifts.length === 0) {
@@ -744,7 +886,11 @@ export default function RotaPage() {
       } else {
         for (const shift of shifts) {
           const person = staff.find((x) => x.id === shift.staffId)
-          rotaLines.push(shift.type === 'holiday' ? `HOLS ${person?.name || 'Staff'}` : `${person?.name || 'Staff'} ${shiftTimeLabel(shift, getOpening(company, i))}`)
+          rotaLines.push(
+            shift.type === 'holiday'
+              ? `HOLS ${person?.name || 'Staff'}`
+              : `${person?.name || 'Staff'} ${shiftTimeLabel(shift, getOpening(company, i))}`
+          )
         }
       }
 
@@ -756,11 +902,16 @@ export default function RotaPage() {
   }
 
   function addStaffMember() {
-    setStaff((current) => [...current, { id: crypto.randomUUID(), name: `Staff ${current.length + 1}`, hourlyRate: 12.21 }])
+    setStaff((current) => [
+      ...current,
+      { id: crypto.randomUUID(), name: `Staff ${current.length + 1}`, hourlyRate: 12.21 },
+    ])
   }
 
   function updateStaff(id: string, patch: Partial<StaffMember>) {
-    setStaff((current) => current.map((person) => (person.id === id ? { ...person, ...patch } : person)))
+    setStaff((current) =>
+      current.map((person) => (person.id === id ? { ...person, ...patch } : person))
+    )
   }
 
   function deleteStaff(id: string) {
@@ -772,55 +923,65 @@ export default function RotaPage() {
 
     const week = getWeekFromId(activeEditor.weekId)
     const actualDate = addDays(week, activeEditor.dayIndex)
-    const person = staff.find((x) => x.id === draftShift.staffId)
-    const hours = shiftHours(draftShift)
-    const rawHours = rawShiftHours(draftShift)
     const events = calendarEvents[getDayId(week, activeEditor.dayIndex)] || []
     const opening = getOpening(activeEditor.company, activeEditor.dayIndex)
 
     return (
       <div
         onClick={(event) => event.stopPropagation()}
-        className="absolute left-0 top-0 z-50 w-[min(440px,90vw)] cursor-default rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl"
+        className="fixed left-1/2 top-20 z-50 w-[min(440px,92vw)] -translate-x-1/2 cursor-default rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl xl:absolute xl:left-0 xl:top-0 xl:translate-x-0"
       >
         <div className="mb-3">
           <p className="text-lg font-black">{dayNames[activeEditor.dayIndex]}</p>
           <p className="text-sm font-bold text-neutral-500">
-            {actualDate.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' })}
+            {actualDate.toLocaleDateString('en-GB', {
+              weekday: 'long',
+              day: '2-digit',
+              month: 'long',
+            })}
           </p>
 
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => updateDraftShift({ type: 'work', start: draftShift.start || opening.open, end: draftShift.end || opening.close })}
-              className={`rounded-xl px-4 py-2 text-xs font-black ${draftShift.type === 'work' ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-400'}`}
+              onClick={() => updateDraftShift({ type: 'work' })}
+              className={`rounded-xl px-4 py-2 text-xs font-black ${
+                draftShift.type === 'work' ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-400'
+              }`}
             >
               SHIFT
             </button>
+
             <button
               type="button"
               onClick={() => updateDraftShift({ type: 'holiday', holidayHours: draftShift.holidayHours || 7 })}
-              className={`rounded-xl px-4 py-2 text-xs font-black ${draftShift.type === 'holiday' ? 'bg-amber-300 text-black' : 'bg-neutral-100 text-neutral-400'}`}
+              className={`rounded-xl px-4 py-2 text-xs font-black ${
+                draftShift.type === 'holiday' ? 'bg-amber-300 text-black' : 'bg-neutral-100 text-neutral-400'
+              }`}
             >
               HOLIDAY
-            </button>
-            <button
-              type="button"
-              onClick={() => updateDraftShift({ type: 'work', start: opening.open, end: opening.close })}
-              disabled={opening.closed}
-              className="rounded-xl bg-cyan-100 px-4 py-2 text-xs font-black text-cyan-800 disabled:opacity-40"
-            >
-              FULL DAY
             </button>
           </div>
         </div>
 
-        <div className={`relative rounded-xl border p-2 pr-16 shadow-sm ${draftShift.type === 'holiday' ? 'border-amber-200 bg-amber-50' : 'border-neutral-200 bg-white'}`}>
+        <div
+          className={`relative rounded-xl border p-2 pr-16 shadow-sm ${
+            draftShift.type === 'holiday' ? 'border-amber-200 bg-amber-50' : 'border-neutral-200 bg-white'
+          }`}
+        >
           <div className="absolute right-2 top-2 flex gap-1">
-            <button type="button" onClick={saveDraftShift} className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-black text-emerald-700">
+            <button
+              type="button"
+              onClick={saveDraftShift}
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-black text-emerald-700"
+            >
               ✓
             </button>
-            <button type="button" onClick={requestCloseEditor} className="flex h-6 w-6 items-center justify-center rounded-full bg-red-100 text-xs font-black text-red-600">
+            <button
+              type="button"
+              onClick={requestCloseEditor}
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-red-100 text-xs font-black text-red-600"
+            >
               ×
             </button>
           </div>
@@ -831,6 +992,7 @@ export default function RotaPage() {
               onChange={(event) => updateDraftShift({ staffId: event.target.value })}
               className="min-w-0 flex-1 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
             >
+              <option value="">Select staff</option>
               {staff.map((person) => (
                 <option key={person.id} value={person.id}>
                   {person.name}
@@ -850,12 +1012,9 @@ export default function RotaPage() {
                   className="w-20 rounded-lg border border-amber-200 px-2 py-2 text-xs font-black"
                 />
               </div>
-              <p className="mt-1 text-xs font-black text-amber-700">
-                Holiday · {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
-              </p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
               <input
                 type="time"
                 value={draftShift.start}
@@ -868,6 +1027,25 @@ export default function RotaPage() {
                 onChange={(event) => updateDraftShift({ end: event.target.value })}
                 className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
+              <button
+                type="button"
+                onClick={() => {
+                  if (opening.closed) {
+                    showStatus('This day is marked closed in opening times.')
+                    return
+                  }
+
+                  updateDraftShift({
+                    type: 'work',
+                    start: opening.open,
+                    end: opening.close,
+                  })
+                }}
+                disabled={opening.closed}
+                className="rounded-lg bg-cyan-100 px-2 py-2 text-[10px] font-black text-cyan-800 disabled:opacity-40"
+              >
+                FULL DAY
+              </button>
             </div>
           )}
 
@@ -877,23 +1055,15 @@ export default function RotaPage() {
             placeholder="Note"
             className="mt-2 w-full rounded-lg border border-neutral-200 px-2 py-2 text-xs"
           />
-
-          <div className="mt-2 text-xs">
-            <span className="font-black text-neutral-500">
-              {draftShift.type === 'work' && rawHours >= 6
-                ? `${rawHours.toFixed(2)} hrs minus 20 min break = ${hours.toFixed(2)} paid hrs`
-                : `${hours.toFixed(2)} hrs`}
-              {' · '}
-              {money(hours * Number(person?.hourlyRate || 0))}
-              {draftDirty ? ' · unsaved' : ''}
-            </span>
-          </div>
         </div>
 
         <div className="mt-3 rounded-2xl bg-blue-50 p-3">
           <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-500">Google Calendar</p>
+
           {!googleCalendarSynced ? (
-            <p className="text-xs font-bold text-blue-400">Calendar entries will be displayed here once Google Calendar is synced.</p>
+            <p className="text-xs font-bold text-blue-400">
+              Calendar entries will be displayed here once Google Calendar is synced.
+            </p>
           ) : events.length === 0 ? (
             <p className="text-xs font-bold text-blue-400">Calendar entries will be displayed here.</p>
           ) : (
@@ -915,7 +1085,10 @@ export default function RotaPage() {
     const shifts = getDayShifts(company, week, dayIndex)
     const opening = getOpening(company, dayIndex)
     const openingLabel = opening.closed ? 'Closed' : `${shortTime(opening.open)}-${shortTime(opening.close)}`
-    const editorOpenHere = activeEditor?.company === company && activeEditor.weekId === getWeekId(week) && activeEditor.dayIndex === dayIndex
+    const editorOpenHere =
+      activeEditor?.company === company &&
+      activeEditor.weekId === getWeekId(week) &&
+      activeEditor.dayIndex === dayIndex
 
     return (
       <div className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2">
@@ -925,30 +1098,29 @@ export default function RotaPage() {
               <p className="text-sm font-black">{dayNames[dayIndex]}</p>
               <span className="truncate text-[10px] font-black text-cyan-700">{openingLabel}</span>
             </div>
-            <p className="text-xs font-bold text-neutral-400">{actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</p>
+            <p className="text-xs font-bold text-neutral-400">
+              {actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+            </p>
           </div>
 
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={() => openFullDayShift(company, week, dayIndex)}
-              className="flex h-7 items-center justify-center rounded-full bg-cyan-100 px-2 text-[10px] font-black text-cyan-800"
-            >
-              FD
-            </button>
-            <button
-              type="button"
-              onClick={() => openNewShift(company, week, dayIndex, 'work')}
-              className="flex h-7 w-7 items-center justify-center rounded-full bg-black text-sm font-black text-white"
-            >
-              +
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => openNewShift(company, week, dayIndex, 'work')}
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-transparent text-xl font-black leading-none text-neutral-400 opacity-60 hover:text-black hover:opacity-100"
+          >
+            +
+          </button>
         </div>
 
         <div className="space-y-1">
           {shifts.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-neutral-300 p-3 text-center text-xs font-bold text-neutral-400">No rota entries</p>
+            <button
+              type="button"
+              onClick={() => openNewShift(company, week, dayIndex, 'work')}
+              className="w-full rounded-xl border border-dashed border-neutral-300 p-3 text-center text-xs font-bold text-neutral-400"
+            >
+              No rota entries
+            </button>
           ) : (
             shifts.slice(0, 5).map((shift) => {
               const person = staff.find((x) => x.id === shift.staffId)
@@ -967,12 +1139,12 @@ export default function RotaPage() {
                       event.stopPropagation()
                       quickDeleteShift(company, week, dayIndex, shift.id)
                     }}
-                    className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-100 text-[10px] font-black text-red-600"
+                    className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-red-100 text-[10px] font-black text-red-600"
                   >
                     ×
                   </button>
                   <span className="truncate pr-1">{person?.name || 'Staff'}</span>
-                  <span className="truncate pr-0 text-[9px] opacity-80">{shiftTimeLabel(shift, opening)}</span>
+                  <span className="truncate text-[9px] opacity-80">{shiftTimeLabel(shift, opening)}</span>
                 </div>
               )
             })
@@ -993,15 +1165,25 @@ export default function RotaPage() {
     const current = isCurrentWeek(week)
 
     return (
-      <section className={`rounded-3xl border bg-white p-4 shadow-xl ${current ? 'border-emerald-600 ring-4 ring-emerald-300' : 'border-neutral-200'}`}>
+      <section
+        className={`rounded-3xl border bg-white p-4 shadow-xl ${
+          current ? 'border-emerald-600 ring-4 ring-emerald-300' : 'border-neutral-200'
+        }`}
+      >
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <CompanyLogo company={company} />
             <div className="min-w-0">
-              <p className="truncate text-xs font-black uppercase tracking-[0.2em] text-neutral-400">{company.name}</p>
+              <p className="truncate text-xs font-black uppercase tracking-[0.2em] text-neutral-400">
+                {company.name}
+              </p>
               <h2 className="text-xl font-black">
                 {formatWeekLabel(week)}
-                {current && <span className="ml-2 rounded-full bg-emerald-600 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-white">Current</span>}
+                {current && (
+                  <span className="ml-2 rounded-full bg-emerald-600 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-white">
+                    Current
+                  </span>
+                )}
               </h2>
               <p className="text-sm font-semibold text-neutral-500">
                 {total.workHours.toFixed(2)} work hrs · {total.holidayHours.toFixed(2)} hols hrs · {money(total.wage)}
@@ -1011,13 +1193,25 @@ export default function RotaPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setWeekAsDefault(company.key, week)} className="rounded-xl bg-emerald-400 px-3 py-2 text-xs font-black text-black">
+            <button
+              type="button"
+              onClick={() => setWeekAsDefault(company.key, week)}
+              className="rounded-xl bg-emerald-400 px-3 py-2 text-xs font-black text-black"
+            >
               Set default
             </button>
-            <button type="button" onClick={() => copyWeekToNext(company.key, week)} className="rounded-xl bg-black px-3 py-2 text-xs font-black text-white">
+            <button
+              type="button"
+              onClick={() => copyWeekToNext(company.key, week)}
+              className="rounded-xl bg-black px-3 py-2 text-xs font-black text-white"
+            >
               Copy week
             </button>
-            <button type="button" onClick={() => sendTelegram(company.key, week)} className="rounded-xl bg-sky-500 px-3 py-2 text-xs font-black text-white">
+            <button
+              type="button"
+              onClick={() => sendTelegram(company.key, week)}
+              className="rounded-xl bg-sky-500 px-3 py-2 text-xs font-black text-white"
+            >
               Telegram
             </button>
           </div>
@@ -1025,7 +1219,12 @@ export default function RotaPage() {
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
           {dayNames.map((_, dayIndex) => (
-            <DayCard key={`${company.key}-${getDayId(week, dayIndex)}`} company={company.key} week={week} dayIndex={dayIndex} />
+            <DayCard
+              key={`${company.key}-${getDayId(week, dayIndex)}`}
+              company={company.key}
+              week={week}
+              dayIndex={dayIndex}
+            />
           ))}
         </div>
 
@@ -1039,13 +1238,20 @@ export default function RotaPage() {
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {staff.map((person) => {
-              const row = staffTotals[person.id] || { workHours: 0, holidayHours: 0, workWage: 0, holidayWage: 0 }
+              const row = staffTotals[person.id] || {
+                workHours: 0,
+                holidayHours: 0,
+                workWage: 0,
+                holidayWage: 0,
+              }
+
               return (
                 <div key={person.id} className="rounded-xl bg-cyan-100 p-2 text-xs font-bold text-cyan-950">
                   <div className="flex items-center justify-between gap-2">
                     <span>{person.name}</span>
                     <span>{(row.workHours + row.holidayHours).toFixed(2)} hrs</span>
                   </div>
+
                   <div className="mt-1 grid grid-cols-2 gap-1 text-cyan-700">
                     <span>Work {row.workHours.toFixed(2)}h</span>
                     <span className="text-right">{money(row.workWage)}</span>
@@ -1080,32 +1286,54 @@ export default function RotaPage() {
   }
 
   return (
-    <main className="min-h-screen bg-neutral-100 text-neutral-950" onClick={requestCloseEditor}>
-      <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4" onClick={(event) => event.stopPropagation()}>
+    <main className="min-h-screen bg-neutral-100 text-neutral-950">
+      {activeEditor && <div className="fixed inset-0 z-40 bg-transparent" onClick={requestCloseEditor} />}
+
+      <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4">
         <header className="rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.25em] text-white/50">Staff rota</p>
               <h1 className="text-3xl font-black tracking-tight">Weekly Planner</h1>
-              <p className="mt-1 text-sm font-semibold text-white/60">Two-company rota · current week + next 4 weeks · staff hours · holiday hours · wage totals</p>
+              <p className="mt-1 text-sm font-semibold text-white/60">
+                Two-company rota · current week + next 4 weeks · staff hours · holiday hours · wage totals
+              </p>
             </div>
 
             <div className="grid w-full grid-cols-4 gap-2 sm:w-auto sm:flex sm:flex-wrap sm:justify-end">
-              <button type="button" onClick={() => setHistoryOpen((value) => !value)} className="flex items-center justify-center rounded-2xl bg-white/10 px-2 py-3 text-xs font-black text-white sm:px-4 sm:text-sm">
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((value) => !value)}
+                className="flex items-center justify-center rounded-2xl bg-white/10 px-2 py-3 text-xs font-black text-white sm:px-4 sm:text-sm"
+              >
                 History
               </button>
 
-              <button type="button" onClick={openMonthlyCalendar} className="flex items-center justify-center gap-1 rounded-2xl bg-purple-500 px-2 py-3 text-xs font-black text-white sm:gap-2 sm:px-4 sm:text-sm">
+              <button
+                type="button"
+                onClick={openMonthlyCalendar}
+                className="flex items-center justify-center gap-1 rounded-2xl bg-purple-500 px-2 py-3 text-xs font-black text-white sm:gap-2 sm:px-4 sm:text-sm"
+              >
                 <CalendarIcon />
                 Calendar
               </button>
 
-              <button type="button" onClick={syncGoogleCalendar} className={`flex items-center justify-center gap-1 rounded-2xl px-2 py-3 text-xs font-black sm:gap-2 sm:px-4 sm:text-sm ${googleCalendarSynced ? 'bg-white text-black' : 'bg-blue-500 text-white'}`}>
+              <button
+                type="button"
+                onClick={syncGoogleCalendar}
+                className={`flex items-center justify-center gap-1 rounded-2xl px-2 py-3 text-xs font-black sm:gap-2 sm:px-4 sm:text-sm ${
+                  googleCalendarSynced ? 'bg-white text-black' : 'bg-blue-500 text-white'
+                }`}
+              >
                 <GoogleLogo />
                 {googleCalendarSynced ? '✓' : 'Sync'}
               </button>
 
-              <button type="button" onClick={() => setSettingsOpen((value) => !value)} className="flex items-center justify-center rounded-2xl bg-emerald-400 px-2 py-3 text-xs font-black text-black sm:px-4 sm:text-sm">
+              <button
+                type="button"
+                onClick={() => setSettingsOpen((value) => !value)}
+                className="flex items-center justify-center rounded-2xl bg-emerald-400 px-2 py-3 text-xs font-black text-black sm:px-4 sm:text-sm"
+              >
                 Settings
               </button>
             </div>
@@ -1117,7 +1345,9 @@ export default function RotaPage() {
                 key={company.key}
                 type="button"
                 onClick={() => setMobileCompany(company.key)}
-                className={`flex min-w-0 items-center justify-center gap-2 rounded-2xl px-3 py-3 text-sm font-black ${mobileCompany === company.key ? 'bg-white text-black' : 'bg-white/10 text-white'}`}
+                className={`flex min-w-0 items-center justify-center gap-2 rounded-2xl px-3 py-3 text-sm font-black ${
+                  mobileCompany === company.key ? 'bg-white text-black' : 'bg-white/10 text-white'
+                }`}
               >
                 <CompanyLogo company={company} />
                 <span className="truncate">Company {index + 1}</span>
@@ -1135,19 +1365,32 @@ export default function RotaPage() {
                 <h2 className="text-xl font-black">Rota history</h2>
                 <p className="text-sm font-semibold text-neutral-500">Saved weekly staff hours for future reports.</p>
               </div>
-              <input value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="Search week, company, staff..." className="w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold md:w-80" />
+
+              <input
+                value={historySearch}
+                onChange={(event) => setHistorySearch(event.target.value)}
+                placeholder="Search week, company, staff..."
+                className="w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold md:w-80"
+              />
             </div>
 
             <div className="space-y-2">
               {filteredReports.length === 0 ? (
-                <p className="rounded-2xl bg-neutral-100 p-4 text-sm font-bold text-neutral-400">No saved history yet. Save shifts and weekly totals will appear here.</p>
+                <p className="rounded-2xl bg-neutral-100 p-4 text-sm font-bold text-neutral-400">
+                  No saved history yet. Save shifts and weekly totals will appear here.
+                </p>
               ) : (
                 filteredReports.map((report) => (
                   <div key={report.id} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
                     <div className="mb-2 flex items-center justify-between gap-3">
-                      <p className="font-black">{report.companyName} · week {report.weekId}</p>
-                      <p className="text-xs font-bold text-neutral-400">{new Date(report.createdAt).toLocaleString('en-GB')}</p>
+                      <p className="font-black">
+                        {report.companyName} · week {report.weekId}
+                      </p>
+                      <p className="text-xs font-bold text-neutral-400">
+                        {new Date(report.createdAt).toLocaleString('en-GB')}
+                      </p>
                     </div>
+
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
                       {Object.values(report.staffTotals).map((row) => (
                         <div key={row.name} className="rounded-xl bg-white p-2 text-xs font-bold">
@@ -1176,29 +1419,58 @@ export default function RotaPage() {
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-black">Settings</h2>
-                <p className="text-sm font-semibold text-neutral-500">Edit company names, logo URLs, opening times, staff names, and hourly rates.</p>
+                <p className="text-sm font-semibold text-neutral-500">
+                  Edit company names, logo URLs, opening times, staff names, and hourly rates.
+                </p>
               </div>
 
               <div className="flex gap-2">
-                <button type="button" onClick={addStaffMember} className="rounded-2xl bg-black px-4 py-3 text-sm font-black text-white">Add staff</button>
-                <button type="button" onClick={saveStaffSettings} className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-black">Save</button>
+                <button
+                  type="button"
+                  onClick={addStaffMember}
+                  className="rounded-2xl bg-black px-4 py-3 text-sm font-black text-white"
+                >
+                  Add staff
+                </button>
+                <button
+                  type="button"
+                  onClick={saveStaffSettings}
+                  className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
+                >
+                  Save
+                </button>
               </div>
             </div>
 
             <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               {companies.map((company, index) => (
                 <div key={company.key} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
-                  <p className="mb-2 text-xs font-black uppercase tracking-widest text-neutral-400">Company {index + 1}</p>
+                  <p className="mb-2 text-xs font-black uppercase tracking-widest text-neutral-400">
+                    Company {index + 1}
+                  </p>
+
                   <div className="flex items-center gap-3">
                     <CompanyLogo company={company} />
+
                     <div className="min-w-0 flex-1 space-y-2">
-                      <input value={company.name} onChange={(event) => updateCompany(company.key, { name: event.target.value })} placeholder="Company name" className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold" />
-                      <input value={company.logoUrl || ''} onChange={(event) => updateCompany(company.key, { logoUrl: event.target.value })} placeholder="Logo image URL" className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-xs font-bold" />
+                      <input
+                        value={company.name}
+                        onChange={(event) => updateCompany(company.key, { name: event.target.value })}
+                        placeholder="Company name"
+                        className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
+                      />
+                      <input
+                        value={company.logoUrl || ''}
+                        onChange={(event) => updateCompany(company.key, { logoUrl: event.target.value })}
+                        placeholder="Logo image URL"
+                        className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-xs font-bold"
+                      />
                     </div>
                   </div>
 
                   <div className="mt-4 space-y-2">
                     <p className="text-xs font-black uppercase tracking-widest text-neutral-400">Opening times</p>
+
                     {dayNames.map((day, dayIndex) => {
                       const opening = getOpening(company.key, dayIndex)
 
@@ -1239,11 +1511,27 @@ export default function RotaPage() {
               {staff.map((person) => (
                 <div key={person.id} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
                   <div className="grid grid-cols-2 gap-2">
-                    <input value={person.name} onChange={(event) => updateStaff(person.id, { name: event.target.value })} className="rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold" />
-                    <input type="number" value={person.hourlyRate} onChange={(event) => updateStaff(person.id, { hourlyRate: Number(event.target.value) })} className="rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold" />
+                    <input
+                      value={person.name}
+                      onChange={(event) => updateStaff(person.id, { name: event.target.value })}
+                      className="rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
+                    />
+                    <input
+                      type="number"
+                      value={person.hourlyRate}
+                      onChange={(event) => updateStaff(person.id, { hourlyRate: Number(event.target.value) })}
+                      className="rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
+                    />
                   </div>
+
                   <div className="mt-3 flex items-center justify-end">
-                    <button type="button" onClick={() => deleteStaff(person.id)} className="rounded-xl bg-red-100 px-3 py-2 text-xs font-black text-red-600">Delete</button>
+                    <button
+                      type="button"
+                      onClick={() => deleteStaff(person.id)}
+                      className="rounded-xl bg-red-100 px-3 py-2 text-xs font-black text-red-600"
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))}
@@ -1255,7 +1543,9 @@ export default function RotaPage() {
 
         <section className="space-y-5">
           <h2 className="px-1 text-xl font-black">Next 4 weeks</h2>
-          {futureWeekStarts.map((week) => <WeekGroup key={dateKey(week)} week={week} />)}
+          {futureWeekStarts.map((week) => (
+            <WeekGroup key={dateKey(week)} week={week} />
+          ))}
         </section>
       </div>
     </main>
