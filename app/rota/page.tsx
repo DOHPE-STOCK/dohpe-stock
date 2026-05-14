@@ -199,13 +199,23 @@ function formatHours(value: number) {
 }
 
 function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
-  if (shift.type === 'holiday') return `HOLIDAY ${formatHours(shiftHours(shift))}h`
+  if (shift.type === 'holiday') return `HOLIDAY ${formatHours(rawShiftHours(shift))}h`
 
   if (opening && !opening.closed && shift.start === opening.open && shift.end === opening.close) {
     return 'FULL DAY'
   }
 
   return `${shortTime(shift.start)}-${shortTime(shift.end)}`
+}
+
+function telegramShiftTimeLabel(shift: Shift, opening?: OpeningTime) {
+  if (shift.type === 'holiday') return `${formatHours(rawShiftHours(shift))}h`
+
+  if (opening && !opening.closed && shift.start === opening.open && shift.end === opening.close) {
+    return 'FULL DAY'
+  }
+
+  return `${shift.start}-${shift.end}`
 }
 
 function openingTimeLabel(opening: OpeningTime, mobileFull = false) {
@@ -564,6 +574,11 @@ export default function RotaPage() {
     showStatus('Day marked closed.')
   }
 
+  function openDay(company: CompanyKey, dayIndex: number) {
+    updateOpening(company, dayIndex, { closed: false })
+    showStatus('Day reopened.')
+  }
+
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
     const weekId = getWeekId(week)
     const dayId = getDayId(week, dayIndex)
@@ -627,9 +642,9 @@ export default function RotaPage() {
     if (markEdited) markWeekEdited(company, week)
   }
 
-  function openNewShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType) {
+  function openNewShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType, allowClosed = false) {
     const opening = getOpening(company, dayIndex)
-    if (opening.closed) return
+    if (opening.closed && !allowClosed) return
 
     const shift = type === 'holiday' ? makeHolidayShift() : makeWorkShift()
 
@@ -642,6 +657,10 @@ export default function RotaPage() {
       shiftId: shift.id,
       isNew: true,
     })
+  }
+
+  function openClosedDayEditor(company: CompanyKey, week: Date, dayIndex: number) {
+    openNewShift(company, week, dayIndex, 'work', true)
   }
 
   function openExistingShift(company: CompanyKey, week: Date, dayIndex: number, shift: Shift) {
@@ -705,6 +724,7 @@ export default function RotaPage() {
       : current.map((shift) => (shift.id === activeEditor.shiftId ? savedShift : shift))
 
     setDayShifts(activeEditor.company, week, activeEditor.dayIndex, next)
+    updateOpening(activeEditor.company, activeEditor.dayIndex, { closed: false })
     saveWeeklyReportSnapshot(activeEditor.company, week)
 
     setActiveEditor(null)
@@ -946,34 +966,56 @@ export default function RotaPage() {
     showStatus('Settings saved.')
   }
 
-  function sendTelegram(company: CompanyKey, week: Date) {
+  async function sendTelegram(company: CompanyKey, week: Date) {
     const companyName = getCompanyName(company)
-    const rotaLines: string[] = []
+    const weekLabel = formatWeekLabel(week)
 
-    for (let i = 0; i < 7; i += 1) {
-      const day = addDays(week, i)
-      const shifts = getDayShifts(company, week, i)
+    const days = dayNames.map((dayName, dayIndex) => {
+      const actualDate = addDays(week, dayIndex)
+      const opening = getOpening(company, dayIndex)
+      const shifts = getDayShifts(company, week, dayIndex)
 
-      rotaLines.push(`${dayNames[i]} ${day.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`)
-
-      if (shifts.length === 0) {
-        rotaLines.push('Closed / no shifts')
-      } else {
-        for (const shift of shifts) {
+      return {
+        day: dayName,
+        date: actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+        opening: opening.closed ? 'Closed' : `${opening.open} - ${opening.close}`,
+        shifts: shifts.map((shift) => {
           const person = staff.find((x) => x.id === shift.staffId)
-          rotaLines.push(
-            shift.type === 'holiday'
-              ? `HOLS ${person?.name || 'Staff'}`
-              : `${person?.name || 'Staff'} ${shiftTimeLabel(shift, getOpening(company, i))}`
-          )
-        }
+
+          return {
+            name: person?.name || 'Staff',
+            type: shift.type,
+            time: telegramShiftTimeLabel(shift, opening),
+          }
+        }),
+      }
+    })
+
+    try {
+      showStatus(`Sending ${companyName} rota to Telegram...`)
+
+      const response = await fetch('/api/rota/send-telegram', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          company,
+          companyName,
+          weekLabel,
+          days,
+        }),
+      })
+
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Telegram send failed.')
       }
 
-      rotaLines.push('')
+      showStatus(`${companyName} rota sent to Telegram.`)
+    } catch (error: any) {
+      console.error('ROTA_TELEGRAM_SEND_ERROR', error)
+      showStatus(error.message || 'Telegram send failed.')
     }
-
-    console.log(`Telegram preview for ${companyName}`, rotaLines.join('\n'))
-    showStatus(`Telegram placeholder: ${companyName} rota only would be sent. Weekly totals are excluded.`)
   }
 
   function addStaffMember() {
@@ -1019,7 +1061,10 @@ export default function RotaPage() {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => updateDraftShift({ type: 'work' })}
+              onClick={() => {
+                openDay(activeEditor.company, activeEditor.dayIndex)
+                updateDraftShift({ type: 'work' })
+              }}
               className={`rounded-xl px-4 py-2 text-xs font-black ${
                 draftShift.type === 'work' ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-400'
               }`}
@@ -1029,7 +1074,10 @@ export default function RotaPage() {
 
             <button
               type="button"
-              onClick={() => updateDraftShift({ type: 'holiday', holidayHours: draftShift.holidayHours || 7 })}
+              onClick={() => {
+                openDay(activeEditor.company, activeEditor.dayIndex)
+                updateDraftShift({ type: 'holiday', holidayHours: draftShift.holidayHours || 7 })
+              }}
               className={`rounded-xl px-4 py-2 text-xs font-black ${
                 draftShift.type === 'holiday' ? 'bg-amber-300 text-black' : 'bg-neutral-100 text-neutral-400'
               }`}
@@ -1048,7 +1096,7 @@ export default function RotaPage() {
         </div>
 
         <div
-          className={`relative rounded-xl border p-2 pr-14 shadow-sm ${
+          className={`relative rounded-xl border p-2 pr-16 shadow-sm ${
             draftShift.type === 'holiday' ? 'border-amber-200 bg-amber-50' : 'border-neutral-200 bg-white'
           }`}
         >
@@ -1069,11 +1117,11 @@ export default function RotaPage() {
             </button>
           </div>
 
-          <div className="mb-2 flex items-center gap-2">
+          <div className="mb-2">
             <select
               value={draftShift.staffId}
               onChange={(event) => updateDraftShift({ staffId: event.target.value })}
-              className="min-w-0 flex-1 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+              className="w-[calc(100%-0.5rem)] max-w-[300px] rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
             >
               <option value="">Select staff</option>
               {staff.map((person) => (
@@ -1117,19 +1165,14 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={() => {
-                  if (opening.closed) {
-                    showStatus('This day is marked closed in opening times.')
-                    return
-                  }
-
+                  openDay(activeEditor.company, activeEditor.dayIndex)
                   updateDraftShift({
                     type: 'work',
                     start: opening.open,
                     end: opening.close,
                   })
                 }}
-                disabled={opening.closed}
-                className="min-w-0 rounded-lg bg-cyan-100 px-2 py-2 text-[10px] font-black text-cyan-800 disabled:opacity-40"
+                className="min-w-0 rounded-lg bg-cyan-100 px-2 py-2 text-[10px] font-black text-cyan-800"
               >
                 FULL DAY
               </button>
@@ -1179,7 +1222,16 @@ export default function RotaPage() {
       activeEditor.dayIndex === dayIndex
 
     return (
-      <div className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2">
+      <div
+        className={`relative min-h-44 rounded-2xl border p-2 ${
+          opening.closed
+            ? 'cursor-pointer border-red-200 bg-red-50'
+            : 'border-neutral-200 bg-neutral-50'
+        }`}
+        onClick={() => {
+          if (opening.closed) openClosedDayEditor(company, week, dayIndex)
+        }}
+      >
         <div className="mb-2">
           <div className="flex min-w-0 items-baseline justify-between gap-2">
             <p className="text-sm font-black">{dayNames[dayIndex]}</p>
@@ -1202,7 +1254,10 @@ export default function RotaPage() {
             return (
               <div
                 key={shift.id}
-                onClick={() => openExistingShift(company, week, dayIndex, shift)}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  openExistingShift(company, week, dayIndex, shift)
+                }}
                 className={`relative flex min-h-9 cursor-pointer flex-col justify-center rounded-lg px-1.5 py-1 pr-4 text-[10px] font-black leading-tight ${
                   shift.type === 'holiday' ? 'bg-amber-100 text-amber-700' : 'bg-white text-neutral-800'
                 }`}
@@ -1226,7 +1281,10 @@ export default function RotaPage() {
           {!opening.closed && (
             <button
               type="button"
-              onClick={() => openNewShift(company, week, dayIndex, 'work')}
+              onClick={(event) => {
+                event.stopPropagation()
+                openNewShift(company, week, dayIndex, 'work')
+              }}
               className="flex min-h-9 w-full items-center justify-center rounded-lg border border-dashed border-neutral-300 bg-white/70 px-2 py-1 text-xs font-black text-neutral-400 hover:border-neutral-500 hover:text-neutral-700"
             >
               + SHIFT
