@@ -191,7 +191,6 @@ function TimePickerField({
           textField: {
             size: 'small',
             fullWidth: true,
-            inputProps: { readOnly: true },
             sx: {
               '& .MuiInputBase-root': {
                 borderRadius: '0.5rem',
