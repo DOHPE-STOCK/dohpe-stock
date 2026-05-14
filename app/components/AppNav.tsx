@@ -16,6 +16,7 @@ type NavKey =
   | 'transfers'
   | 'allocate'
   | 'loan'
+  | 'rota'
 
 type AppNavProps = {
   current?: NavKey
@@ -39,6 +40,7 @@ const navItems: NavItem[] = [
   { key: 'transfers', label: 'Transfers', href: '/transfers' },
   { key: 'allocate', label: 'Allocate', href: '/scanner/allocate' },
   { key: 'loan', label: 'Loan', href: '/scanner/loan' },
+  { key: 'rota', label: 'Rota', href: '/rota' },
   { key: 'settings', label: '⚙', href: '/settings', iconOnly: true },
 ]
 
@@ -102,7 +104,7 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
           const isCurrent = current === item.key
 
           const normalClass =
-            'rounded-lg px-4 py-2 text-xs font-bold bg-zinc-800 hover:bg-zinc-700'
+            'rounded-lg px-4 py-2 text-xs font-bold bg-zinc-800 hover:bg-zinc-700 text-white'
 
           const iconClass = 'px-2 text-lg text-zinc-400 hover:text-white'
 
@@ -115,7 +117,7 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
                 className={
                   item.iconOnly
                     ? `${iconClass} text-white`
-                    : `${normalClass} bg-zinc-700 text-white ring-1 ring-zinc-500`
+                    : `${normalClass} bg-zinc-700 ring-1 ring-zinc-500`
                 }
               >
                 {item.label}
@@ -154,6 +156,7 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
             <span className="max-w-[180px] truncate rounded-lg bg-zinc-900 px-3 py-2 text-xs font-bold text-zinc-300">
               {userLabel}
             </span>
+
             <button
               type="button"
               onClick={signOut}

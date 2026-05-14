@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import AppNav from '@/app/components/AppNav'
 
 type CompanyKey = 'dohpe' | 'dlretail'
 type ShiftType = 'work' | 'holiday'
@@ -139,43 +140,6 @@ function formatWeekLabel(weekStart: Date) {
     day: '2-digit',
     month: 'short',
   })}`
-}
-
-function cleanTimeTyping(value: string) {
-  return value.replace(/[^\d:]/g, '').slice(0, 5)
-}
-
-function formatTimeOnBlur(value: string) {
-  const raw = value.trim()
-
-  if (!raw) return ''
-
-  if (raw.includes(':')) {
-    const [hRaw = '', mRaw = ''] = raw.split(':')
-    const h = Number(hRaw)
-    const m = Number(mRaw || 0)
-
-    if (!Number.isFinite(h) || h < 0 || h > 23) return ''
-    if (!Number.isFinite(m) || m < 0 || m > 59) return ''
-
-    return `${pad(h)}:${pad(m)}`
-  }
-
-  const digits = raw.replace(/\D/g, '')
-
-  if (digits.length <= 2) {
-    const h = Number(digits)
-    if (!Number.isFinite(h) || h < 0 || h > 23) return ''
-    return `${pad(h)}:00`
-  }
-
-  const h = Number(digits.slice(0, -2))
-  const m = Number(digits.slice(-2))
-
-  if (!Number.isFinite(h) || h < 0 || h > 23) return ''
-  if (!Number.isFinite(m) || m < 0 || m > 59) return ''
-
-  return `${pad(h)}:${pad(m)}`
 }
 
 function timeToMinutes(value: string) {
@@ -1174,21 +1138,15 @@ export default function RotaPage() {
           ) : (
             <div className="grid grid-cols-[72px_72px_1fr] gap-2 sm:grid-cols-[86px_86px_1fr]">
               <input
-                type="text"
-                inputMode="numeric"
-                placeholder="--:--"
+                type="time"
                 value={draftShift.start}
-                onChange={(event) => updateDraftShift({ start: cleanTimeTyping(event.target.value) })}
-                onBlur={(event) => updateDraftShift({ start: formatTimeOnBlur(event.target.value) })}
+                onChange={(event) => updateDraftShift({ start: event.target.value })}
                 className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <input
-                type="text"
-                inputMode="numeric"
-                placeholder="--:--"
+                type="time"
                 value={draftShift.end}
-                onChange={(event) => updateDraftShift({ end: cleanTimeTyping(event.target.value) })}
-                onBlur={(event) => updateDraftShift({ end: formatTimeOnBlur(event.target.value) })}
+                onChange={(event) => updateDraftShift({ end: event.target.value })}
                 className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <button
@@ -1458,6 +1416,10 @@ export default function RotaPage() {
 
       <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4">
         <header className="rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
+          <div className="mb-4">
+            <AppNav current="rota" />
+          </div>
+
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.25em] text-white/50">Staff rota</p>
@@ -1645,23 +1607,17 @@ export default function RotaPage() {
                         <div key={`${company.key}-${day}`} className="grid grid-cols-[44px_1fr_1fr_70px] items-center gap-2">
                           <span className="text-xs font-black text-neutral-500">{day}</span>
                           <input
-                            type="text"
-                            inputMode="numeric"
-                            placeholder="--:--"
+                            type="time"
                             value={opening.open}
                             disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { open: cleanTimeTyping(event.target.value) })}
-                            onBlur={(event) => updateOpening(company.key, dayIndex, { open: formatTimeOnBlur(event.target.value) })}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { open: event.target.value })}
                             className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
                           />
                           <input
-                            type="text"
-                            inputMode="numeric"
-                            placeholder="--:--"
+                            type="time"
                             value={opening.close}
                             disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { close: cleanTimeTyping(event.target.value) })}
-                            onBlur={(event) => updateOpening(company.key, dayIndex, { close: formatTimeOnBlur(event.target.value) })}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { close: event.target.value })}
                             className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
                           />
                           <label className="flex items-center gap-1 text-[10px] font-black text-neutral-500">
