@@ -66,8 +66,15 @@ type ActiveEditor = {
   isNew: boolean
 }
 
+type ExpandedDay = {
+  company: CompanyKey
+  weekId: string
+  dayIndex: number
+}
+
 const ROTA_SETTINGS_TABLE = 'rota_settings'
 const ROTA_USER_KEY_FALLBACK = 'rota:default'
+const LEGACY_ROTA_GLOBAL_KEY = 'dohpe_global_rota'
 const LOCAL_ROTA_KEY = 'dohpe_rota_global_settings_v1'
 const LOCAL_CALENDAR_KEY = 'dohpe_rota_calendar_settings_v1'
 
@@ -175,32 +182,56 @@ function TimePickerField({
   onChange: (value: string) => void
   disabled?: boolean
 }) {
+  const [open, setOpen] = useState(false)
   const [view, setView] = useState<'hours' | 'minutes'>('hours')
+  const [tempValue, setTempValue] = useState<Dayjs | null>(parsePickerTime(value))
+
+  function openPicker() {
+    if (disabled) return
+    setTempValue(parsePickerTime(value) || dayjs('2024-01-01T09:00'))
+    setView('hours')
+    setOpen(true)
+  }
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <MobileTimePicker
         ampm={false}
-        closeOnSelect={false}
+        open={open}
+        view={view}
         views={['hours', 'minutes']}
         openTo="hours"
-        view={view}
-        onViewChange={(newView) => {
-  if (newView === 'hours' || newView === 'minutes') {
-    setView(newView)
-  }
-}}
-        onOpen={() => setView('hours')}
+        closeOnSelect={false}
         minutesStep={5}
-        value={parsePickerTime(value)}
+        value={tempValue}
         disabled={disabled}
-        onChange={(newValue: Dayjs | null) => {
+        onOpen={openPicker}
+        onClose={() => {
+          if (view === 'hours') {
+            setView('minutes')
+            window.setTimeout(() => setOpen(true), 0)
+            return
+          }
+
+          setOpen(false)
+        }}
+        onViewChange={(newView) => {
+          if (newView === 'hours' || newView === 'minutes') {
+            setView(newView)
+          }
+        }}
+        onChange={(newValue) => {
           if (!newValue || !newValue.isValid()) return
-          onChange(newValue.format('HH:mm'))
+          setTempValue(newValue)
 
           if (view === 'hours') {
             window.setTimeout(() => setView('minutes'), 0)
           }
+        }}
+        onAccept={(newValue) => {
+          if (!newValue || !newValue.isValid()) return
+          onChange(newValue.format('HH:mm'))
+          setOpen(false)
         }}
         slotProps={{
           actionBar: {
@@ -209,6 +240,7 @@ function TimePickerField({
           textField: {
             size: 'small',
             fullWidth: true,
+            onClick: openPicker,
             sx: {
               '& .MuiInputBase-root': {
                 borderRadius: '0.5rem',
@@ -341,6 +373,31 @@ function normaliseShiftForCompare(shift: Shift) {
   }
 }
 
+function applyRotaPayload(
+  saved: any,
+  setters: {
+    setCompanies: (value: Company[]) => void
+    setStaff: (value: StaffMember[]) => void
+    setOpeningTimes: (value: OpeningTimes) => void
+    setRota: (value: RotaData) => void
+    setDefaultRota: (value: DefaultRota) => void
+    setEditedWeeks: (value: EditedWeeks) => void
+    setClosedDays: (value: ClosedDays) => void
+    setWeeklyReports: (value: WeeklyReport[]) => void
+  }
+) {
+  if (!saved) return
+
+  if (Array.isArray(saved.companies)) setters.setCompanies(saved.companies)
+  if (Array.isArray(saved.staff)) setters.setStaff(saved.staff)
+  if (saved.openingTimes) setters.setOpeningTimes(saved.openingTimes)
+  if (saved.rota) setters.setRota(saved.rota)
+  if (saved.defaultRota) setters.setDefaultRota(saved.defaultRota)
+  if (saved.editedWeeks) setters.setEditedWeeks(saved.editedWeeks)
+  if (saved.closedDays) setters.setClosedDays(saved.closedDays)
+  if (Array.isArray(saved.weeklyReports)) setters.setWeeklyReports(saved.weeklyReports)
+}
+
 function GoogleCalendarLogo() {
   return (
     <span className="relative flex h-6 w-6 shrink-0 overflow-hidden rounded-md bg-white shadow-sm">
@@ -388,6 +445,7 @@ export default function RotaPage() {
   const [statusMessage, setStatusMessage] = useState('')
   const [googleCalendarSynced, setGoogleCalendarSynced] = useState(false)
   const [activeEditor, setActiveEditor] = useState<ActiveEditor | null>(null)
+  const [expandedDay, setExpandedDay] = useState<ExpandedDay | null>(null)
   const [draftShift, setDraftShift] = useState<Shift | null>(null)
   const [draftDirty, setDraftDirty] = useState(false)
   const [cloudLoaded, setCloudLoaded] = useState(false)
@@ -443,8 +501,8 @@ export default function RotaPage() {
   useEffect(() => {
     async function loadCloudRota() {
       try {
-        const { data: userData } = await supabase.auth.getUser()
-        const userId = userData?.user?.id
+        const { data: sessionData } = await supabase.auth.getSession()
+        const userId = sessionData.session?.user?.id
 
         if (!userId) {
           showStatus('Log in to sync rota settings across devices.')
@@ -457,15 +515,16 @@ export default function RotaPage() {
         const local = localStorage.getItem(scopedLocalKey) || localStorage.getItem(LOCAL_ROTA_KEY)
 
         if (local) {
-          const parsed = JSON.parse(local)
-          if (Array.isArray(parsed.companies)) setCompanies(parsed.companies)
-          if (Array.isArray(parsed.staff)) setStaff(parsed.staff)
-          if (parsed.openingTimes) setOpeningTimes(parsed.openingTimes)
-          if (parsed.rota) setRota(parsed.rota)
-          if (parsed.defaultRota) setDefaultRota(parsed.defaultRota)
-          if (parsed.editedWeeks) setEditedWeeks(parsed.editedWeeks)
-          if (parsed.closedDays) setClosedDays(parsed.closedDays)
-          if (Array.isArray(parsed.weeklyReports)) setWeeklyReports(parsed.weeklyReports)
+          applyRotaPayload(JSON.parse(local), {
+            setCompanies,
+            setStaff,
+            setOpeningTimes,
+            setRota,
+            setDefaultRota,
+            setEditedWeeks,
+            setClosedDays,
+            setWeeklyReports,
+          })
         }
 
         const { data, error } = await supabase
@@ -476,16 +535,43 @@ export default function RotaPage() {
 
         if (error) throw error
 
-        const saved = data?.data || {}
+        let saved = data?.data || null
 
-        if (Array.isArray(saved.companies)) setCompanies(saved.companies)
-        if (Array.isArray(saved.staff)) setStaff(saved.staff)
-        if (saved.openingTimes) setOpeningTimes(saved.openingTimes)
-        if (saved.rota) setRota(saved.rota)
-        if (saved.defaultRota) setDefaultRota(saved.defaultRota)
-        if (saved.editedWeeks) setEditedWeeks(saved.editedWeeks)
-        if (saved.closedDays) setClosedDays(saved.closedDays)
-        if (Array.isArray(saved.weeklyReports)) setWeeklyReports(saved.weeklyReports)
+        if (!saved && userId) {
+          const { data: legacyData, error: legacyError } = await supabase
+            .from(ROTA_SETTINGS_TABLE)
+            .select('data')
+            .eq('user_key', LEGACY_ROTA_GLOBAL_KEY)
+            .maybeSingle()
+
+          if (legacyError) throw legacyError
+
+          if (legacyData?.data) {
+            saved = legacyData.data
+
+            await supabase.from(ROTA_SETTINGS_TABLE).upsert(
+              {
+                user_key: key,
+                data: saved,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'user_key' }
+            )
+          }
+        }
+
+        if (saved) {
+          applyRotaPayload(saved, {
+            setCompanies,
+            setStaff,
+            setOpeningTimes,
+            setRota,
+            setDefaultRota,
+            setEditedWeeks,
+            setClosedDays,
+            setWeeklyReports,
+          })
+        }
       } catch (error) {
         console.error('ROTA_CLOUD_LOAD_ERROR', error)
         showStatus('Rota loaded locally. Cloud sync may not be set up yet.')
@@ -500,8 +586,8 @@ export default function RotaPage() {
   useEffect(() => {
     async function loadUserCalendarSettings() {
       try {
-        const { data: userData } = await supabase.auth.getUser()
-        const key = `calendar:${userData?.user?.id || 'default'}`
+        const { data: sessionData } = await supabase.auth.getSession()
+        const key = `calendar:${sessionData.session?.user?.id || 'default'}`
         setCalendarUserKey(key)
 
         const local = localStorage.getItem(`${LOCAL_CALENDAR_KEY}:${key}`)
@@ -564,6 +650,7 @@ export default function RotaPage() {
         if (error) throw error
       } catch (error) {
         console.error('ROTA_CLOUD_SAVE_ERROR', error)
+        showStatus('Rota save failed. Check Supabase rota_settings permissions.')
       }
     }, 800)
 
@@ -668,6 +755,24 @@ export default function RotaPage() {
       delete next[company][dayId]
       return next
     })
+
+    showStatus('Day reopened.')
+  }
+
+  function toggleExpandedDay(company: CompanyKey, week: Date, dayIndex: number) {
+    const weekId = getWeekId(week)
+
+    setExpandedDay((current) => {
+      if (
+        current?.company === company &&
+        current.weekId === weekId &&
+        current.dayIndex === dayIndex
+      ) {
+        return null
+      }
+
+      return { company, weekId, dayIndex }
+    })
   }
 
   function updateCompany(companyKey: CompanyKey, patch: Partial<Company>) {
@@ -762,10 +867,6 @@ export default function RotaPage() {
       shiftId: shift.id,
       isNew: true,
     })
-  }
-
-  function openClosedDayEditor(company: CompanyKey, week: Date, dayIndex: number) {
-    openNewShift(company, week, dayIndex, 'work', true)
   }
 
   function openExistingShift(company: CompanyKey, week: Date, dayIndex: number, shift: Shift) {
@@ -1272,7 +1373,7 @@ export default function RotaPage() {
               Calendar entries will be displayed here once Google Calendar is synced.
             </p>
           ) : events.length === 0 ? (
-            <p className="text-xs font-bold text-blue-400">Calendar entries will be displayed here.</p>
+            <p className="text-xs font-bold text-blue-400">No calendar entries for this day.</p>
           ) : (
             <div className="space-y-1">
               {events.map((event) => (
@@ -1292,27 +1393,30 @@ export default function RotaPage() {
     const shifts = getDayShifts(company, week, dayIndex)
     const opening = getOpening(company, dayIndex)
     const closed = isDayClosed(company, week, dayIndex)
+    const events = calendarEvents[getDayId(week, dayIndex)] || []
     const openingShortLabel = openingTimeLabel(opening, false, closed)
     const openingMobileLabel = openingTimeLabel(opening, true, closed)
+    const weekId = getWeekId(week)
+    const expanded =
+      expandedDay?.company === company &&
+      expandedDay.weekId === weekId &&
+      expandedDay.dayIndex === dayIndex
+
     const editorOpenHere =
       activeEditor?.company === company &&
-      activeEditor.weekId === getWeekId(week) &&
+      activeEditor.weekId === weekId &&
       activeEditor.dayIndex === dayIndex
 
     return (
       <div
-        className={`relative min-h-44 rounded-2xl border p-2 ${
+        className={`relative rounded-2xl border p-2 ${
+          expanded ? 'min-h-64 ring-2 ring-cyan-400' : 'min-h-44'
+        } ${
           closed
             ? 'cursor-pointer border-red-200 bg-red-50'
             : 'cursor-pointer border-neutral-200 bg-neutral-50'
         }`}
-        onClick={() => {
-          if (closed) {
-            openClosedDayEditor(company, week, dayIndex)
-          } else {
-            openNewShift(company, week, dayIndex, 'work')
-          }
-        }}
+        onClick={() => toggleExpandedDay(company, week, dayIndex)}
       >
         <div className="mb-2">
           <div className="flex min-w-0 items-baseline justify-between gap-2">
@@ -1373,6 +1477,70 @@ export default function RotaPage() {
             </button>
           )}
         </div>
+
+        {expanded && (
+          <div
+            className="mt-3 space-y-2 rounded-2xl bg-white p-2 text-xs font-bold"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap gap-2">
+              {!closed ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => openNewShift(company, week, dayIndex, 'work')}
+                    className="rounded-xl bg-black px-3 py-2 text-[10px] font-black text-white"
+                  >
+                    Add shift
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openNewShift(company, week, dayIndex, 'holiday')}
+                    className="rounded-xl bg-amber-300 px-3 py-2 text-[10px] font-black text-black"
+                  >
+                    Holiday
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => closeSpecificDay(company, week, dayIndex)}
+                    className="rounded-xl bg-red-100 px-3 py-2 text-[10px] font-black text-red-600"
+                  >
+                    Close day
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => reopenSpecificDay(company, week, dayIndex)}
+                  className="rounded-xl bg-emerald-100 px-3 py-2 text-[10px] font-black text-emerald-700"
+                >
+                  Reopen day
+                </button>
+              )}
+            </div>
+
+            <div className="rounded-xl bg-blue-50 p-2">
+              <p className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-blue-500">
+                <GoogleCalendarLogo />
+                Google Calendar
+              </p>
+
+              {!googleCalendarSynced ? (
+                <p className="text-[11px] font-bold text-blue-400">Sync Google Calendar to show events here.</p>
+              ) : events.length === 0 ? (
+                <p className="text-[11px] font-bold text-blue-400">No calendar entries for this day.</p>
+              ) : (
+                <div className="space-y-1">
+                  {events.map((event) => (
+                    <div key={event.id} className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-blue-700">
+                      {event.start}–{event.end} · {event.title}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {editorOpenHere && <ShiftEditor />}
       </div>
