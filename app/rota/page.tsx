@@ -298,18 +298,16 @@ function normaliseShiftForCompare(shift: Shift) {
   }
 }
 
-function GoogleLogo() {
+function GoogleCalendarLogo() {
   return (
-    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-black text-blue-600 sm:h-6 sm:w-6 sm:text-sm">
-      G
-    </span>
-  )
-}
-
-function CalendarIcon() {
-  return (
-    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-white text-[9px] font-black text-purple-600 sm:h-6 sm:w-6 sm:text-xs">
-      Cal
+    <span className="relative flex h-6 w-6 shrink-0 overflow-hidden rounded-md bg-white shadow-sm">
+      <span className="absolute left-0 top-0 h-full w-1.5 bg-blue-500" />
+      <span className="absolute left-0 top-0 h-1.5 w-full bg-red-500" />
+      <span className="absolute right-0 top-0 h-full w-1.5 bg-yellow-400" />
+      <span className="absolute bottom-0 left-0 h-1.5 w-full bg-green-500" />
+      <span className="absolute inset-[5px] flex items-center justify-center rounded-sm bg-white text-[10px] font-black leading-none text-blue-600">
+        31
+      </span>
     </span>
   )
 }
@@ -1219,7 +1217,10 @@ export default function RotaPage() {
         </div>
 
         <div className="mt-3 rounded-2xl bg-blue-50 p-3">
-          <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-500">Google Calendar</p>
+          <p className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-blue-500">
+            <GoogleCalendarLogo />
+            Google Calendar
+          </p>
 
           {!googleCalendarSynced ? (
             <p className="text-xs font-bold text-blue-400">
@@ -1478,9 +1479,9 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={openMonthlyCalendar}
-                className="flex items-center justify-center gap-1 rounded-2xl bg-purple-500 px-2 py-3 text-xs font-black text-white sm:gap-2 sm:px-4 sm:text-sm"
+                className="flex items-center justify-center gap-1 rounded-2xl bg-white px-2 py-3 text-xs font-black text-black sm:gap-2 sm:px-4 sm:text-sm"
               >
-                <CalendarIcon />
+                <GoogleCalendarLogo />
                 Calendar
               </button>
 
@@ -1491,7 +1492,7 @@ export default function RotaPage() {
                   googleCalendarSynced ? 'bg-white text-black' : 'bg-blue-500 text-white'
                 }`}
               >
-                <GoogleLogo />
+                <GoogleCalendarLogo />
                 {googleCalendarSynced ? '✓' : 'Sync'}
               </button>
 
