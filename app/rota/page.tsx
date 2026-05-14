@@ -62,7 +62,6 @@ type CalendarData = Record<string, CalendarEvent[]>
 
 const ROTA_SETTINGS_TABLE = 'rota_settings'
 const LOCAL_ROTA_KEY = 'dohpe_rota_settings_v1'
-const HOVER_DELAY_MS = 400
 
 const defaultCompanies: Company[] = [
   { key: 'dohpe', name: 'Dohpe Vintage', telegramGroup: 'Dohpe rota group', logoUrl: '' },
@@ -126,7 +125,6 @@ function timeToMinutes(value: string) {
 
 function shiftHours(shift: Shift) {
   if (shift.type === 'holiday') return Number(shift.holidayHours || 0)
-
   const start = timeToMinutes(shift.start)
   const end = timeToMinutes(shift.end)
   if (!start || !end || end <= start) return 0
@@ -145,11 +143,7 @@ function money(value: number) {
 }
 
 function cloneShift(shift: Shift): Shift {
-  return {
-    ...shift,
-    id: crypto.randomUUID(),
-    saved: true,
-  }
+  return { ...shift, id: crypto.randomUUID(), saved: true }
 }
 
 function makeWorkShift(staffId: string): Shift {
@@ -186,6 +180,18 @@ function safeSaved(shift: Shift) {
   return shift.saved !== false
 }
 
+function normaliseShiftForCompare(shift: Shift) {
+  return {
+    staffId: shift.staffId,
+    type: shift.type,
+    start: shift.start,
+    end: shift.end,
+    holidayHours: Number(shift.holidayHours || 0),
+    note: shift.note || '',
+    saved: safeSaved(shift),
+  }
+}
+
 function GoogleLogo() {
   return (
     <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-black text-blue-600 sm:h-6 sm:w-6 sm:text-sm">
@@ -197,14 +203,6 @@ function GoogleLogo() {
 function CalendarIcon() {
   return (
     <span className="flex h-5 w-5 items-center justify-center rounded-md bg-white text-[9px] font-black text-purple-600 sm:h-6 sm:w-6 sm:text-xs">
-      Cal
-    </span>
-  )
-}
-
-function SettingsIcon() {
-  return (
-    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-white text-[9px] font-black text-emerald-700 sm:h-6 sm:w-6 sm:text-xs">
       Cal
     </span>
   )
@@ -223,8 +221,8 @@ function CompanyLogo({ company }: { company: Company }) {
 }
 
 export default function RotaPage() {
-  const hoverTimerRef = useRef<number | null>(null)
   const saveTimerRef = useRef<number | null>(null)
+  const statusTimerRef = useRef<number | null>(null)
 
   const [companies, setCompanies] = useState<Company[]>(defaultCompanies)
   const [mobileCompany, setMobileCompany] = useState<CompanyKey>('dohpe')
@@ -281,6 +279,18 @@ export default function RotaPage() {
       .slice(0, 20)
   }, [historySearch, weeklyReports])
 
+  function showStatus(message: string) {
+    setStatusMessage(message)
+
+    if (statusTimerRef.current) {
+      window.clearTimeout(statusTimerRef.current)
+    }
+
+    statusTimerRef.current = window.setTimeout(() => {
+      setStatusMessage('')
+    }, 3000)
+  }
+
   useEffect(() => {
     async function loadCloudRota() {
       try {
@@ -319,7 +329,7 @@ export default function RotaPage() {
         if (saved.googleCalendarSynced) setGoogleCalendarSynced(Boolean(saved.googleCalendarSynced))
       } catch (error) {
         console.error('ROTA_CLOUD_LOAD_ERROR', error)
-        setStatusMessage('Rota loaded locally. Cloud sync may not be set up yet.')
+        showStatus('Rota loaded locally. Cloud sync may not be set up yet.')
       } finally {
         setCloudLoaded(true)
       }
@@ -349,11 +359,14 @@ export default function RotaPage() {
 
     saveTimerRef.current = window.setTimeout(async () => {
       try {
-        const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert({
-          user_key: cloudUserKey,
-          data: payload,
-          updated_at: new Date().toISOString(),
-        })
+        const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert(
+          {
+            user_key: cloudUserKey,
+            data: payload,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_key' }
+        )
 
         if (error) throw error
       } catch (error) {
@@ -367,28 +380,6 @@ export default function RotaPage() {
       }
     }
   }, [cloudLoaded, cloudUserKey, companies, staff, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced])
-
-  function delayedExpand(key: string) {
-    if (hoverTimerRef.current) {
-      window.clearTimeout(hoverTimerRef.current)
-    }
-
-    hoverTimerRef.current = window.setTimeout(() => {
-      setExpandedDay(key)
-    }, HOVER_DELAY_MS)
-  }
-
-  function cancelDelayedExpand() {
-    if (hoverTimerRef.current) {
-      window.clearTimeout(hoverTimerRef.current)
-      hoverTimerRef.current = null
-    }
-  }
-
-  function closeExpandedDay() {
-    cancelDelayedExpand()
-    setExpandedDay(null)
-  }
 
   function getDayId(week: Date, dayIndex: number) {
     return dateKey(addDays(week, dayIndex))
@@ -416,6 +407,21 @@ export default function RotaPage() {
     const weekId = getWeekId(week)
     const dayId = getDayId(week, dayIndex)
     return rota[company]?.[weekId]?.[dayId] || []
+  }
+
+  function weekHasDifferentInfo(company: CompanyKey, week: Date, template: Record<string, Shift[]>) {
+    const weekRows = rota[company]?.[getWeekId(week)] || {}
+
+    for (let i = 0; i < 7; i += 1) {
+      const currentDay = (weekRows[getDayId(week, i)] || []).map(normaliseShiftForCompare)
+      const templateDay = (template[String(i)] || []).map(normaliseShiftForCompare)
+
+      if (JSON.stringify(currentDay) !== JSON.stringify(templateDay)) {
+        if (currentDay.length > 0 || templateDay.length > 0) return true
+      }
+    }
+
+    return false
   }
 
   function markWeekEdited(company: CompanyKey, week: Date) {
@@ -491,7 +497,8 @@ export default function RotaPage() {
     )
 
     saveWeeklyReportSnapshot(company, week)
-    setStatusMessage('Shift saved.')
+    setExpandedDay(null)
+    showStatus('Shift saved.')
   }
 
   function deleteShift(company: CompanyKey, week: Date, dayIndex: number, shiftId: string) {
@@ -503,6 +510,7 @@ export default function RotaPage() {
       current.filter((shift) => shift.id !== shiftId)
     )
     saveWeeklyReportSnapshot(company, week)
+    setExpandedDay(null)
   }
 
   function applyDefaultToWeek(company: CompanyKey, week: Date, template: Record<string, Shift[]>) {
@@ -510,10 +518,7 @@ export default function RotaPage() {
     const copied: Record<string, Shift[]> = {}
 
     for (let i = 0; i < 7; i += 1) {
-      const sourceKey = String(i)
-      const targetDay = getDayId(week, i)
-
-      copied[targetDay] = (template[sourceKey] || []).map(cloneShift)
+      copied[getDayId(week, i)] = (template[String(i)] || []).map(cloneShift)
     }
 
     setRota((current) => ({
@@ -526,9 +531,7 @@ export default function RotaPage() {
   }
 
   function setWeekAsDefault(company: CompanyKey, week: Date) {
-    const weekId = getWeekId(week)
-    const weekRows = rota[company]?.[weekId] || {}
-
+    const weekRows = rota[company]?.[getWeekId(week)] || {}
     const template: Record<string, Shift[]> = {}
 
     for (let i = 0; i < 7; i += 1) {
@@ -536,13 +539,13 @@ export default function RotaPage() {
     }
 
     const futureWeeks = [1, 2, 3, 4].map((offset) => addWeeks(week, offset))
-    const editedFutureWeeks = futureWeeks.filter(
-      (futureWeek) => editedWeeks[company]?.[getWeekId(futureWeek)]
+    const willOverwriteDifferentInfo = futureWeeks.some((futureWeek) =>
+      weekHasDifferentInfo(company, futureWeek, template)
     )
 
-    if (editedFutureWeeks.length > 0) {
+    if (willOverwriteDifferentInfo) {
       const confirmed = window.confirm(
-        'Some future weeks have been edited differently. Setting this as default will overwrite those calendar entries. Continue?'
+        'This default is different to information already entered in upcoming weeks. Setting default will overwrite those weeks. Continue?'
       )
 
       if (!confirmed) return
@@ -567,22 +570,32 @@ export default function RotaPage() {
       return next
     })
 
-    setStatusMessage(`${getCompanyName(company)} default rota set and applied to next 4 weeks.`)
+    showStatus(`${getCompanyName(company)} default rota set and applied to next 4 weeks.`)
   }
 
   function copyWeekToNext(company: CompanyKey, week: Date) {
+    const answer = window.prompt(
+      'Copy this week to which week?\nEnter 1 for next week, 2 for 2 weeks ahead, 3 for 3 weeks ahead, or 4 for 4 weeks ahead.',
+      '1'
+    )
+
+    if (!answer) return
+
+    const offset = Number(answer)
+    if (!Number.isFinite(offset) || offset < 1 || offset > 4) {
+      showStatus('Copy cancelled. Enter a number from 1 to 4.')
+      return
+    }
+
     const sourceWeekId = getWeekId(week)
-    const targetWeek = addWeeks(week, 1)
+    const targetWeek = addWeeks(week, offset)
     const targetWeekId = getWeekId(targetWeek)
     const source = rota[company]?.[sourceWeekId] || {}
 
     const copied: Record<string, Shift[]> = {}
 
     for (let i = 0; i < 7; i += 1) {
-      const sourceDay = getDayId(week, i)
-      const targetDay = getDayId(targetWeek, i)
-
-      copied[targetDay] = (source[sourceDay] || []).map(cloneShift)
+      copied[getDayId(targetWeek, i)] = (source[getDayId(week, i)] || []).map(cloneShift)
     }
 
     setRota((current) => ({
@@ -594,7 +607,7 @@ export default function RotaPage() {
     }))
 
     markWeekEdited(company, targetWeek)
-    setStatusMessage(`${getCompanyName(company)} copied to next week.`)
+    showStatus(`${getCompanyName(company)} copied to ${formatWeekLabel(targetWeek)}.`)
   }
 
   function totalsForCompanyWeek(company: CompanyKey, week: Date) {
@@ -725,16 +738,16 @@ export default function RotaPage() {
     }
 
     setCalendarEvents(demoEvents)
-    setStatusMessage('Google Calendar auto sync placeholder is enabled.')
+    showStatus('Google Calendar auto sync placeholder is enabled.')
   }
 
   function openMonthlyCalendar() {
-    setStatusMessage('Monthly Google Calendar placeholder. This can open a full month calendar modal later.')
+    showStatus('Monthly Google Calendar placeholder. This can open a full month calendar modal later.')
   }
 
   function saveStaffSettings() {
     setSettingsOpen(false)
-    setStatusMessage('Settings saved.')
+    showStatus('Settings saved.')
   }
 
   function sendTelegram(company: CompanyKey, week: Date) {
@@ -764,7 +777,7 @@ export default function RotaPage() {
     }
 
     console.log(`Telegram preview for ${companyName}`, rotaLines.join('\n'))
-    setStatusMessage(`Telegram placeholder: ${companyName} rota only would be sent. Weekly totals are excluded.`)
+    showStatus(`Telegram placeholder: ${companyName} rota only would be sent. Weekly totals are excluded.`)
   }
 
   function addStaffMember() {
@@ -946,9 +959,8 @@ export default function RotaPage() {
 
     return (
       <div
-        className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2"
-        onMouseEnter={() => delayedExpand(expandKey)}
-        onMouseLeave={cancelDelayedExpand}
+        className="relative min-h-44 cursor-pointer rounded-2xl border border-neutral-200 bg-neutral-50 p-2"
+        onClick={() => setExpandedDay(expandKey)}
       >
         <div className="mb-2">
           <p className="text-sm font-black">{dayNames[dayIndex]}</p>
@@ -973,16 +985,15 @@ export default function RotaPage() {
               return (
                 <div
                   key={shift.id}
-                  className={`flex min-h-8 items-center rounded-lg px-1.5 py-1 text-[10px] font-black leading-tight ${
+                  className={`flex min-h-9 flex-col justify-center rounded-lg px-1.5 py-1 text-[10px] font-black leading-tight ${
                     shift.type === 'holiday'
                       ? 'bg-amber-100 text-amber-700'
                       : 'bg-white text-neutral-800'
                   }`}
                 >
-                  <span className="w-full whitespace-normal break-words">
-                    {shift.type === 'holiday'
-                      ? `${person?.name || 'Staff'} HOLIDAY ${shiftHourText}h`
-                      : `${person?.name || 'Staff'} ${shift.start}–${shift.end}`}
+                  <span className="truncate">{person?.name || 'Staff'}</span>
+                  <span className="truncate text-[9px] opacity-80">
+                    {shift.type === 'holiday' ? `HOLIDAY ${shiftHourText}h` : `${shift.start}–${shift.end}`}
                   </span>
                 </div>
               )
@@ -996,8 +1007,8 @@ export default function RotaPage() {
 
         {isExpanded && (
           <div
-            onMouseLeave={closeExpandedDay}
-            className="absolute left-0 top-0 z-50 w-[min(440px,90vw)] rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+            className="absolute left-0 top-0 z-50 w-[min(440px,90vw)] cursor-default rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl"
           >
             <div className="mb-3">
               <p className="text-lg font-black">{dayNames[dayIndex]}</p>
@@ -1147,10 +1158,10 @@ export default function RotaPage() {
           ))}
         </div>
 
-        <div className="mt-4 rounded-2xl bg-neutral-950 p-3 text-white">
+        <div className="mt-4 rounded-2xl bg-cyan-950 p-3 text-white">
           <div className="mb-2 flex items-center justify-between">
             <p className="text-sm font-black">Weekly totals</p>
-            <p className="text-sm font-black">
+            <p className="text-sm font-black text-cyan-100">
               {total.workHours.toFixed(2)} work · {total.holidayHours.toFixed(2)} hols · {money(total.wage)}
             </p>
           </div>
@@ -1165,13 +1176,13 @@ export default function RotaPage() {
               }
 
               return (
-                <div key={person.id} className="rounded-xl bg-white/10 p-2 text-xs font-bold">
+                <div key={person.id} className="rounded-xl bg-cyan-100 p-2 text-xs font-bold text-cyan-950">
                   <div className="flex items-center justify-between gap-2">
                     <span>{person.name}</span>
                     <span>{(row.workHours + row.holidayHours).toFixed(2)} hrs</span>
                   </div>
 
-                  <div className="mt-1 grid grid-cols-2 gap-1 text-white/60">
+                  <div className="mt-1 grid grid-cols-2 gap-1 text-cyan-700">
                     <span>Work {row.workHours.toFixed(2)}h</span>
                     <span className="text-right">{money(row.workWage)}</span>
                     <span>Hols {row.holidayHours.toFixed(2)}h</span>
@@ -1213,8 +1224,8 @@ export default function RotaPage() {
   }
 
   return (
-    <main className="min-h-screen bg-neutral-100 text-neutral-950">
-      <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4">
+    <main className="min-h-screen bg-neutral-100 text-neutral-950" onClick={() => setExpandedDay(null)}>
+      <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4" onClick={(event) => event.stopPropagation()}>
         <header className="rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
