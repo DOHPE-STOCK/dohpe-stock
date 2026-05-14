@@ -178,15 +178,17 @@ function TimePickerField({
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <MobileTimePicker
-        ampm
-        closeOnSelect={false}
-        minutesStep={5}
-        value={parsePickerTime(value)}
-        disabled={disabled}
-        onChange={(newValue: Dayjs | null) => {
-          if (!newValue || !newValue.isValid()) return
-          onChange(newValue.format('HH:mm'))
-        }}
+  ampm={false}
+  closeOnSelect={false}
+  views={['hours', 'minutes']}
+  openTo="hours"
+  minutesStep={5}
+  value={parsePickerTime(value)}
+  disabled={disabled}
+  onChange={(newValue: Dayjs | null) => {
+    if (!newValue || !newValue.isValid()) return
+    onChange(newValue.format('HH:mm'))
+  }}
         slotProps={{
           textField: {
             size: 'small',
