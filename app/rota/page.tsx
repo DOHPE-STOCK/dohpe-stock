@@ -61,7 +61,9 @@ type ActiveEditor = {
 }
 
 const ROTA_SETTINGS_TABLE = 'rota_settings'
-const LOCAL_ROTA_KEY = 'dohpe_rota_settings_v1'
+const ROTA_GLOBAL_KEY = 'dohpe_global_rota'
+const LOCAL_ROTA_KEY = 'dohpe_rota_global_settings_v1'
+const LOCAL_CALENDAR_KEY = 'dohpe_rota_calendar_settings_v1'
 
 const defaultCompanies: Company[] = [
   { key: 'dohpe', name: 'Dohpe Vintage', telegramGroup: 'Dohpe rota group', logoUrl: '' },
@@ -138,9 +140,26 @@ function formatWeekLabel(weekStart: Date) {
   })}`
 }
 
+function normaliseTimeInput(value: string) {
+  const raw = value.trim()
+
+  if (raw.includes(':')) {
+    const [hRaw = '', mRaw = ''] = raw.split(':')
+    const h = hRaw.replace(/\D/g, '').slice(0, 2)
+    const m = mRaw.replace(/\D/g, '').slice(0, 2)
+    return m ? `${h}:${m}` : h ? `${h}:` : ''
+  }
+
+  const digits = raw.replace(/\D/g, '').slice(0, 4)
+
+  if (digits.length <= 2) return digits
+  return `${digits.slice(0, 2)}:${digits.slice(2)}`
+}
+
 function timeToMinutes(value: string) {
   if (!value || !value.includes(':')) return 0
   const [h, m] = value.split(':').map(Number)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0
   return h * 60 + m
 }
 
@@ -159,9 +178,19 @@ function rawShiftHours(shift: Shift) {
   return (end - start) / 60
 }
 
-function shiftHours(shift: Shift) {
+function shiftHours(shift: Shift, staffMember?: StaffMember) {
   const raw = rawShiftHours(shift)
   if (shift.type === 'holiday') return raw
+
+  const staffName = (staffMember?.name || '').trim().toLowerCase()
+  const specialBreakStaff = staffName === 'meghan' || staffName === 'ned'
+
+  if (specialBreakStaff) {
+    if (raw >= 6) return Math.max(0, raw - 30 / 60)
+    if (raw > 4) return Math.max(0, raw - 15 / 60)
+    return raw
+  }
+
   if (raw >= 6) return Math.max(0, raw - 20 / 60)
   return raw
 }
@@ -187,7 +216,7 @@ function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
 
 function openingTimeLabel(opening: OpeningTime) {
   if (opening.closed) return 'Closed'
-  return `${shortTime(opening.open)}-${shortTime(opening.close)}`
+  return `${opening.open} - ${opening.close}`
 }
 
 function money(value: number) {
@@ -272,6 +301,7 @@ function CompanyLogo({ company }: { company: Company }) {
 
 export default function RotaPage() {
   const saveTimerRef = useRef<number | null>(null)
+  const calendarSaveTimerRef = useRef<number | null>(null)
   const statusTimerRef = useRef<number | null>(null)
 
   const [companies, setCompanies] = useState<Company[]>(defaultCompanies)
@@ -291,8 +321,9 @@ export default function RotaPage() {
   const [activeEditor, setActiveEditor] = useState<ActiveEditor | null>(null)
   const [draftShift, setDraftShift] = useState<Shift | null>(null)
   const [draftDirty, setDraftDirty] = useState(false)
-  const [cloudUserKey, setCloudUserKey] = useState('default')
   const [cloudLoaded, setCloudLoaded] = useState(false)
+  const [calendarUserKey, setCalendarUserKey] = useState('calendar:default')
+  const [calendarLoaded, setCalendarLoaded] = useState(false)
 
   const [calendarEvents, setCalendarEvents] = useState<CalendarData>(() => {
     const todayWeek = startOfWeek(new Date())
@@ -353,17 +384,12 @@ export default function RotaPage() {
           if (parsed.defaultRota) setDefaultRota(parsed.defaultRota)
           if (parsed.editedWeeks) setEditedWeeks(parsed.editedWeeks)
           if (Array.isArray(parsed.weeklyReports)) setWeeklyReports(parsed.weeklyReports)
-          if (parsed.googleCalendarSynced) setGoogleCalendarSynced(Boolean(parsed.googleCalendarSynced))
         }
-
-        const { data: userData } = await supabase.auth.getUser()
-        const userKey = userData?.user?.id || 'default'
-        setCloudUserKey(userKey)
 
         const { data, error } = await supabase
           .from(ROTA_SETTINGS_TABLE)
           .select('data')
-          .eq('user_key', userKey)
+          .eq('user_key', ROTA_GLOBAL_KEY)
           .maybeSingle()
 
         if (error) throw error
@@ -377,7 +403,6 @@ export default function RotaPage() {
         if (saved.defaultRota) setDefaultRota(saved.defaultRota)
         if (saved.editedWeeks) setEditedWeeks(saved.editedWeeks)
         if (Array.isArray(saved.weeklyReports)) setWeeklyReports(saved.weeklyReports)
-        if (saved.googleCalendarSynced) setGoogleCalendarSynced(Boolean(saved.googleCalendarSynced))
       } catch (error) {
         console.error('ROTA_CLOUD_LOAD_ERROR', error)
         showStatus('Rota loaded locally. Cloud sync may not be set up yet.')
@@ -387,6 +412,41 @@ export default function RotaPage() {
     }
 
     loadCloudRota()
+  }, [])
+
+  useEffect(() => {
+    async function loadUserCalendarSettings() {
+      try {
+        const { data: userData } = await supabase.auth.getUser()
+        const key = `calendar:${userData?.user?.id || 'default'}`
+        setCalendarUserKey(key)
+
+        const local = localStorage.getItem(`${LOCAL_CALENDAR_KEY}:${key}`)
+        if (local) {
+          const parsed = JSON.parse(local)
+          if (parsed.googleCalendarSynced) setGoogleCalendarSynced(Boolean(parsed.googleCalendarSynced))
+          if (parsed.calendarEvents) setCalendarEvents(parsed.calendarEvents)
+        }
+
+        const { data, error } = await supabase
+          .from(ROTA_SETTINGS_TABLE)
+          .select('data')
+          .eq('user_key', key)
+          .maybeSingle()
+
+        if (error) throw error
+
+        const saved = data?.data || {}
+        if (saved.googleCalendarSynced) setGoogleCalendarSynced(Boolean(saved.googleCalendarSynced))
+        if (saved.calendarEvents) setCalendarEvents(saved.calendarEvents)
+      } catch (error) {
+        console.error('ROTA_CALENDAR_LOAD_ERROR', error)
+      } finally {
+        setCalendarLoaded(true)
+      }
+    }
+
+    loadUserCalendarSettings()
   }, [])
 
   useEffect(() => {
@@ -400,7 +460,6 @@ export default function RotaPage() {
       defaultRota,
       editedWeeks,
       weeklyReports,
-      googleCalendarSynced,
     }
 
     localStorage.setItem(LOCAL_ROTA_KEY, JSON.stringify(payload))
@@ -411,7 +470,7 @@ export default function RotaPage() {
       try {
         const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert(
           {
-            user_key: cloudUserKey,
+            user_key: ROTA_GLOBAL_KEY,
             data: payload,
             updated_at: new Date().toISOString(),
           },
@@ -427,18 +486,41 @@ export default function RotaPage() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
     }
-  }, [
-    cloudLoaded,
-    cloudUserKey,
-    companies,
-    staff,
-    openingTimes,
-    rota,
-    defaultRota,
-    editedWeeks,
-    weeklyReports,
-    googleCalendarSynced,
-  ])
+  }, [cloudLoaded, companies, staff, openingTimes, rota, defaultRota, editedWeeks, weeklyReports])
+
+  useEffect(() => {
+    if (!calendarLoaded) return
+
+    const payload = {
+      googleCalendarSynced,
+      calendarEvents,
+    }
+
+    localStorage.setItem(`${LOCAL_CALENDAR_KEY}:${calendarUserKey}`, JSON.stringify(payload))
+
+    if (calendarSaveTimerRef.current) window.clearTimeout(calendarSaveTimerRef.current)
+
+    calendarSaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert(
+          {
+            user_key: calendarUserKey,
+            data: payload,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_key' }
+        )
+
+        if (error) throw error
+      } catch (error) {
+        console.error('ROTA_CALENDAR_SAVE_ERROR', error)
+      }
+    }, 800)
+
+    return () => {
+      if (calendarSaveTimerRef.current) window.clearTimeout(calendarSaveTimerRef.current)
+    }
+  }, [calendarLoaded, calendarUserKey, googleCalendarSynced, calendarEvents])
 
   function getDayId(week: Date, dayIndex: number) {
     return dateKey(addDays(week, dayIndex))
@@ -752,7 +834,7 @@ export default function RotaPage() {
         if (!shift.staffId) continue
 
         const person = staff.find((x) => x.id === shift.staffId)
-        const hours = shiftHours(shift)
+        const hours = shiftHours(shift, person)
         const wage = hours * Number(person?.hourlyRate || 0)
 
         if (!totals[shift.staffId]) {
@@ -847,7 +929,7 @@ export default function RotaPage() {
     }
 
     setCalendarEvents(demoEvents)
-    showStatus('Google Calendar auto sync placeholder is enabled.')
+    showStatus('Google Calendar auto sync placeholder is enabled for this logged-in user.')
   }
 
   function openMonthlyCalendar() {
@@ -1004,15 +1086,19 @@ export default function RotaPage() {
           ) : (
             <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
               <input
-                type="time"
+                type="text"
+                inputMode="numeric"
+                placeholder="--:--"
                 value={draftShift.start}
-                onChange={(event) => updateDraftShift({ start: event.target.value })}
+                onChange={(event) => updateDraftShift({ start: normaliseTimeInput(event.target.value) })}
                 className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <input
-                type="time"
+                type="text"
+                inputMode="numeric"
+                placeholder="--:--"
                 value={draftShift.end}
-                onChange={(event) => updateDraftShift({ end: event.target.value })}
+                onChange={(event) => updateDraftShift({ end: normaliseTimeInput(event.target.value) })}
                 className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <button
@@ -1083,7 +1169,7 @@ export default function RotaPage() {
         <div className="mb-2">
           <div className="flex min-w-0 items-baseline justify-between gap-2">
             <p className="text-sm font-black">{dayNames[dayIndex]}</p>
-            <span className="shrink-0 text-sm font-black text-cyan-700">{openingLabel}</span>
+            <span className="shrink-0 text-[11px] font-black text-cyan-700 sm:text-sm">{openingLabel}</span>
           </div>
           <p className="text-xs font-bold text-neutral-400">
             {actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
@@ -1452,17 +1538,21 @@ export default function RotaPage() {
                         <div key={`${company.key}-${day}`} className="grid grid-cols-[44px_1fr_1fr_70px] items-center gap-2">
                           <span className="text-xs font-black text-neutral-500">{day}</span>
                           <input
-                            type="time"
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="--:--"
                             value={opening.open}
                             disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { open: event.target.value })}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { open: normaliseTimeInput(event.target.value) })}
                             className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
                           />
                           <input
-                            type="time"
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="--:--"
                             value={opening.close}
                             disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { close: event.target.value })}
+                            onChange={(event) => updateOpening(company.key, dayIndex, { close: normaliseTimeInput(event.target.value) })}
                             className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
                           />
                           <label className="flex items-center gap-1 text-[10px] font-black text-neutral-500">
