@@ -11,9 +11,17 @@ const supabase = createClient(
 export async function GET(request: NextRequest) {
   try {
     const code = request.nextUrl.searchParams.get('code')
+    const userId = request.nextUrl.searchParams.get('state')
 
     if (!code) {
       return NextResponse.json({ error: 'Missing code' }, { status: 400 })
+    }
+
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'Missing Supabase user state' },
+        { status: 400 }
+      )
     }
 
     const oauth2Client = getGoogleOAuthClient()
@@ -28,32 +36,11 @@ export async function GET(request: NextRequest) {
     })
 
     const me = await oauth2.userinfo.get()
-
     const googleEmail = me.data.email
-
-    const supabaseAccessToken = request.cookies.get('sb-access-token')?.value
-
-    if (!supabaseAccessToken) {
-      return NextResponse.json(
-        { error: 'Not logged in to Supabase' },
-        { status: 401 }
-      )
-    }
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser(supabaseAccessToken)
-
-    if (!user) {
-      return NextResponse.json(
-        { error: 'No authenticated user' },
-        { status: 401 }
-      )
-    }
 
     await supabase.from('rota_google_tokens').upsert(
       {
-        user_id: user.id,
+        user_id: userId,
         google_email: googleEmail,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
@@ -67,9 +54,7 @@ export async function GET(request: NextRequest) {
       }
     )
 
-    return NextResponse.redirect(
-      new URL('/rota/calendar', request.url)
-    )
+    return NextResponse.redirect(new URL('/rota/calendar', request.url))
   } catch (error) {
     console.error(error)
 
