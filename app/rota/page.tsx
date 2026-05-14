@@ -185,6 +185,11 @@ function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
   return `${shortTime(shift.start)}-${shortTime(shift.end)}`
 }
 
+function openingTimeLabel(opening: OpeningTime) {
+  if (opening.closed) return 'Closed'
+  return `${shortTime(opening.open)}-${shortTime(opening.close)}`
+}
+
 function money(value: number) {
   return new Intl.NumberFormat('en-GB', {
     style: 'currency',
@@ -589,23 +594,6 @@ export default function RotaPage() {
   function updateDraftShift(patch: Partial<Shift>) {
     setDraftShift((current) => (current ? { ...current, ...patch } : current))
     setDraftDirty(true)
-  }
-
-  function setDraftFullDay() {
-    if (!activeEditor) return
-
-    const opening = getOpening(activeEditor.company, activeEditor.dayIndex)
-
-    if (opening.closed) {
-      showStatus('This day is marked closed in opening times.')
-      return
-    }
-
-    updateDraftShift({
-      type: 'work',
-      start: opening.open,
-      end: opening.close,
-    })
   }
 
   function saveDraftShift() {
@@ -1084,7 +1072,7 @@ export default function RotaPage() {
     const actualDate = addDays(week, dayIndex)
     const shifts = getDayShifts(company, week, dayIndex)
     const opening = getOpening(company, dayIndex)
-    const openingLabel = opening.closed ? 'Closed' : `${shortTime(opening.open)}-${shortTime(opening.close)}`
+    const openingLabel = openingTimeLabel(opening)
     const editorOpenHere =
       activeEditor?.company === company &&
       activeEditor.weekId === getWeekId(week) &&
@@ -1092,65 +1080,51 @@ export default function RotaPage() {
 
     return (
       <div className="relative min-h-44 rounded-2xl border border-neutral-200 bg-neutral-50 p-2">
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <div className="min-w-0 pr-1">
-            <div className="flex min-w-0 items-center gap-1">
-              <p className="text-sm font-black">{dayNames[dayIndex]}</p>
-              <span className="truncate text-[10px] font-black text-cyan-700">{openingLabel}</span>
-            </div>
-            <p className="text-xs font-bold text-neutral-400">
-              {actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
-            </p>
+        <div className="mb-2">
+          <div className="flex min-w-0 items-baseline justify-between gap-2">
+            <p className="text-sm font-black">{dayNames[dayIndex]}</p>
+            <span className="shrink-0 text-sm font-black text-cyan-700">{openingLabel}</span>
           </div>
+          <p className="text-xs font-bold text-neutral-400">
+            {actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          {shifts.map((shift) => {
+            const person = staff.find((x) => x.id === shift.staffId)
+
+            return (
+              <div
+                key={shift.id}
+                onClick={() => openExistingShift(company, week, dayIndex, shift)}
+                className={`relative flex min-h-9 cursor-pointer flex-col justify-center rounded-lg px-1.5 py-1 pr-4 text-[10px] font-black leading-tight ${
+                  shift.type === 'holiday' ? 'bg-amber-100 text-amber-700' : 'bg-white text-neutral-800'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    quickDeleteShift(company, week, dayIndex, shift.id)
+                  }}
+                  className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-red-100 text-[10px] font-black text-red-600"
+                >
+                  ×
+                </button>
+                <span className="truncate pr-1">{person?.name || 'Staff'}</span>
+                <span className="truncate text-[9px] opacity-80">{shiftTimeLabel(shift, opening)}</span>
+              </div>
+            )
+          })}
 
           <button
             type="button"
             onClick={() => openNewShift(company, week, dayIndex, 'work')}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-transparent text-xl font-black leading-none text-neutral-400 opacity-60 hover:text-black hover:opacity-100"
+            className="flex min-h-9 w-full items-center justify-center rounded-lg border border-dashed border-neutral-300 bg-white/70 px-2 py-1 text-xs font-black text-neutral-400 hover:border-neutral-500 hover:text-neutral-700"
           >
-            +
+            + SHIFT
           </button>
-        </div>
-
-        <div className="space-y-1">
-          {shifts.length === 0 ? (
-            <button
-              type="button"
-              onClick={() => openNewShift(company, week, dayIndex, 'work')}
-              className="w-full rounded-xl border border-dashed border-neutral-300 p-3 text-center text-xs font-bold text-neutral-400"
-            >
-              No rota entries
-            </button>
-          ) : (
-            shifts.slice(0, 5).map((shift) => {
-              const person = staff.find((x) => x.id === shift.staffId)
-
-              return (
-                <div
-                  key={shift.id}
-                  onClick={() => openExistingShift(company, week, dayIndex, shift)}
-                  className={`relative flex min-h-9 cursor-pointer flex-col justify-center rounded-lg px-1.5 py-1 pr-4 text-[10px] font-black leading-tight ${
-                    shift.type === 'holiday' ? 'bg-amber-100 text-amber-700' : 'bg-white text-neutral-800'
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      quickDeleteShift(company, week, dayIndex, shift.id)
-                    }}
-                    className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-red-100 text-[10px] font-black text-red-600"
-                  >
-                    ×
-                  </button>
-                  <span className="truncate pr-1">{person?.name || 'Staff'}</span>
-                  <span className="truncate text-[9px] opacity-80">{shiftTimeLabel(shift, opening)}</span>
-                </div>
-              )
-            })
-          )}
-
-          {shifts.length > 5 && <p className="text-xs font-black text-neutral-400">+{shifts.length - 5} more</p>}
         </div>
 
         {editorOpenHere && <ShiftEditor />}
