@@ -151,7 +151,6 @@ function normaliseTimeInput(value: string) {
   }
 
   const digits = raw.replace(/\D/g, '').slice(0, 4)
-
   if (digits.length <= 2) return digits
   return `${digits.slice(0, 2)}:${digits.slice(2)}`
 }
@@ -202,21 +201,16 @@ function formatHours(value: number) {
 function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
   if (shift.type === 'holiday') return `HOLIDAY ${formatHours(shiftHours(shift))}h`
 
-  if (
-    opening &&
-    !opening.closed &&
-    shift.start === opening.open &&
-    shift.end === opening.close
-  ) {
+  if (opening && !opening.closed && shift.start === opening.open && shift.end === opening.close) {
     return 'FULL DAY'
   }
 
   return `${shortTime(shift.start)}-${shortTime(shift.end)}`
 }
 
-function openingTimeLabel(opening: OpeningTime) {
+function openingTimeLabel(opening: OpeningTime, mobileFull = false) {
   if (opening.closed) return 'Closed'
-  return `${opening.open} - ${opening.close}`
+  return mobileFull ? `${opening.open} - ${opening.close}` : `${shortTime(opening.open)}-${shortTime(opening.close)}`
 }
 
 function money(value: number) {
@@ -562,6 +556,14 @@ export default function RotaPage() {
     }))
   }
 
+  function closeDay(company: CompanyKey, dayIndex: number) {
+    updateOpening(company, dayIndex, { closed: true })
+    setActiveEditor(null)
+    setDraftShift(null)
+    setDraftDirty(false)
+    showStatus('Day marked closed.')
+  }
+
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
     const weekId = getWeekId(week)
     const dayId = getDayId(week, dayIndex)
@@ -626,6 +628,9 @@ export default function RotaPage() {
   }
 
   function openNewShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType) {
+    const opening = getOpening(company, dayIndex)
+    if (opening.closed) return
+
     const shift = type === 'holiday' ? makeHolidayShift() : makeWorkShift()
 
     setDraftShift(shift)
@@ -1031,11 +1036,19 @@ export default function RotaPage() {
             >
               HOLIDAY
             </button>
+
+            <button
+              type="button"
+              onClick={() => closeDay(activeEditor.company, activeEditor.dayIndex)}
+              className="rounded-xl bg-red-100 px-4 py-2 text-xs font-black text-red-600"
+            >
+              CLOSE
+            </button>
           </div>
         </div>
 
         <div
-          className={`relative rounded-xl border p-2 pr-16 shadow-sm ${
+          className={`relative rounded-xl border p-2 pr-14 shadow-sm ${
             draftShift.type === 'holiday' ? 'border-amber-200 bg-amber-50' : 'border-neutral-200 bg-white'
           }`}
         >
@@ -1084,14 +1097,14 @@ export default function RotaPage() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+            <div className="grid grid-cols-[72px_72px_1fr] gap-2 sm:grid-cols-[86px_86px_1fr]">
               <input
                 type="text"
                 inputMode="numeric"
                 placeholder="--:--"
                 value={draftShift.start}
                 onChange={(event) => updateDraftShift({ start: normaliseTimeInput(event.target.value) })}
-                className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+                className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <input
                 type="text"
@@ -1099,7 +1112,7 @@ export default function RotaPage() {
                 placeholder="--:--"
                 value={draftShift.end}
                 onChange={(event) => updateDraftShift({ end: normaliseTimeInput(event.target.value) })}
-                className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+                className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
               />
               <button
                 type="button"
@@ -1116,7 +1129,7 @@ export default function RotaPage() {
                   })
                 }}
                 disabled={opening.closed}
-                className="rounded-lg bg-cyan-100 px-2 py-2 text-[10px] font-black text-cyan-800 disabled:opacity-40"
+                className="min-w-0 rounded-lg bg-cyan-100 px-2 py-2 text-[10px] font-black text-cyan-800 disabled:opacity-40"
               >
                 FULL DAY
               </button>
@@ -1158,7 +1171,8 @@ export default function RotaPage() {
     const actualDate = addDays(week, dayIndex)
     const shifts = getDayShifts(company, week, dayIndex)
     const opening = getOpening(company, dayIndex)
-    const openingLabel = openingTimeLabel(opening)
+    const openingShortLabel = openingTimeLabel(opening, false)
+    const openingMobileLabel = openingTimeLabel(opening, true)
     const editorOpenHere =
       activeEditor?.company === company &&
       activeEditor.weekId === getWeekId(week) &&
@@ -1169,7 +1183,12 @@ export default function RotaPage() {
         <div className="mb-2">
           <div className="flex min-w-0 items-baseline justify-between gap-2">
             <p className="text-sm font-black">{dayNames[dayIndex]}</p>
-            <span className="shrink-0 text-[11px] font-black text-cyan-700 sm:text-sm">{openingLabel}</span>
+            <span className="shrink-0 text-[11px] font-black text-cyan-700 xl:hidden">
+              {openingMobileLabel}
+            </span>
+            <span className="hidden shrink-0 text-[11px] font-black text-cyan-700 xl:inline">
+              {openingShortLabel}
+            </span>
           </div>
           <p className="text-xs font-bold text-neutral-400">
             {actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
@@ -1204,13 +1223,15 @@ export default function RotaPage() {
             )
           })}
 
-          <button
-            type="button"
-            onClick={() => openNewShift(company, week, dayIndex, 'work')}
-            className="flex min-h-9 w-full items-center justify-center rounded-lg border border-dashed border-neutral-300 bg-white/70 px-2 py-1 text-xs font-black text-neutral-400 hover:border-neutral-500 hover:text-neutral-700"
-          >
-            + SHIFT
-          </button>
+          {!opening.closed && (
+            <button
+              type="button"
+              onClick={() => openNewShift(company, week, dayIndex, 'work')}
+              className="flex min-h-9 w-full items-center justify-center rounded-lg border border-dashed border-neutral-300 bg-white/70 px-2 py-1 text-xs font-black text-neutral-400 hover:border-neutral-500 hover:text-neutral-700"
+            >
+              + SHIFT
+            </button>
+          )}
         </div>
 
         {editorOpenHere && <ShiftEditor />}
