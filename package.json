@@ -13,7 +13,7 @@
     "@emotion/styled": "^11.14.1",
     "@mui/material": "^9.0.1",
     "@mui/x-date-pickers": "^9.2.0",
-    "@supabase/ssr": "^0.10.2",
+    "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.1",
     "dayjs": "^1.11.20",
     "googleapis": "^171.4.0",
