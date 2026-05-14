@@ -51,6 +51,7 @@ type DefaultRota = Record<CompanyKey, Record<string, Shift[]>>
 type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
 type CalendarData = Record<string, CalendarEvent[]>
 type OpeningTimes = Record<CompanyKey, OpeningTime[]>
+type ClosedDays = Record<CompanyKey, Record<string, boolean>>
 
 type ActiveEditor = {
   company: CompanyKey
@@ -198,28 +199,28 @@ function formatHours(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
 
-function shiftTimeLabel(shift: Shift, opening?: OpeningTime) {
+function shiftTimeLabel(shift: Shift, opening?: OpeningTime, closed = false) {
   if (shift.type === 'holiday') return `HOLIDAY ${formatHours(rawShiftHours(shift))}h`
 
-  if (opening && !opening.closed && shift.start === opening.open && shift.end === opening.close) {
+  if (opening && !closed && shift.start === opening.open && shift.end === opening.close) {
     return 'FULL DAY'
   }
 
   return `${shortTime(shift.start)}-${shortTime(shift.end)}`
 }
 
-function telegramShiftTimeLabel(shift: Shift, opening?: OpeningTime) {
+function telegramShiftTimeLabel(shift: Shift, opening?: OpeningTime, closed = false) {
   if (shift.type === 'holiday') return `${formatHours(rawShiftHours(shift))}h`
 
-  if (opening && !opening.closed && shift.start === opening.open && shift.end === opening.close) {
+  if (opening && !closed && shift.start === opening.open && shift.end === opening.close) {
     return 'FULL DAY'
   }
 
   return `${shift.start}-${shift.end}`
 }
 
-function openingTimeLabel(opening: OpeningTime, mobileFull = false) {
-  if (opening.closed) return 'Closed'
+function openingTimeLabel(opening: OpeningTime, mobileFull = false, closed = false) {
+  if (closed) return 'Closed'
   return mobileFull ? `${opening.open} - ${opening.close}` : `${shortTime(opening.open)}-${shortTime(opening.close)}`
 }
 
@@ -328,6 +329,7 @@ export default function RotaPage() {
   const [cloudLoaded, setCloudLoaded] = useState(false)
   const [calendarUserKey, setCalendarUserKey] = useState('calendar:default')
   const [calendarLoaded, setCalendarLoaded] = useState(false)
+  const [closedDays, setClosedDays] = useState<ClosedDays>({ dohpe: {}, dlretail: {} })
 
   const [calendarEvents, setCalendarEvents] = useState<CalendarData>(() => {
     const todayWeek = startOfWeek(new Date())
@@ -387,6 +389,7 @@ export default function RotaPage() {
           if (parsed.rota) setRota(parsed.rota)
           if (parsed.defaultRota) setDefaultRota(parsed.defaultRota)
           if (parsed.editedWeeks) setEditedWeeks(parsed.editedWeeks)
+          if (parsed.closedDays) setClosedDays(parsed.closedDays)
           if (Array.isArray(parsed.weeklyReports)) setWeeklyReports(parsed.weeklyReports)
         }
 
@@ -406,6 +409,7 @@ export default function RotaPage() {
         if (saved.rota) setRota(saved.rota)
         if (saved.defaultRota) setDefaultRota(saved.defaultRota)
         if (saved.editedWeeks) setEditedWeeks(saved.editedWeeks)
+        if (saved.closedDays) setClosedDays(saved.closedDays)
         if (Array.isArray(saved.weeklyReports)) setWeeklyReports(saved.weeklyReports)
       } catch (error) {
         console.error('ROTA_CLOUD_LOAD_ERROR', error)
@@ -463,6 +467,7 @@ export default function RotaPage() {
       rota,
       defaultRota,
       editedWeeks,
+      closedDays,
       weeklyReports,
     }
 
@@ -490,7 +495,7 @@ export default function RotaPage() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
     }
-  }, [cloudLoaded, companies, staff, openingTimes, rota, defaultRota, editedWeeks, weeklyReports])
+  }, [cloudLoaded, companies, staff, openingTimes, rota, defaultRota, editedWeeks, closedDays, weeklyReports])
 
   useEffect(() => {
     if (!calendarLoaded) return
@@ -551,6 +556,45 @@ export default function RotaPage() {
     return openingTimes[company]?.[dayIndex] || { open: '10:00', close: '17:00' }
   }
 
+  function isDayClosed(company: CompanyKey, week: Date, dayIndex: number) {
+    const dayId = getDayId(week, dayIndex)
+    if (closedDays[company]?.[dayId]) return true
+    return Boolean(getOpening(company, dayIndex).closed)
+  }
+
+  function closeSpecificDay(company: CompanyKey, week: Date, dayIndex: number) {
+    const dayId = getDayId(week, dayIndex)
+
+    setClosedDays((current) => ({
+      ...current,
+      [company]: {
+        ...current[company],
+        [dayId]: true,
+      },
+    }))
+
+    setActiveEditor(null)
+    setDraftShift(null)
+    setDraftDirty(false)
+    showStatus('Day marked closed.')
+  }
+
+  function reopenSpecificDay(company: CompanyKey, week: Date, dayIndex: number) {
+    const dayId = getDayId(week, dayIndex)
+
+    setClosedDays((current) => {
+      const next = {
+        ...current,
+        [company]: {
+          ...current[company],
+        },
+      }
+
+      delete next[company][dayId]
+      return next
+    })
+  }
+
   function updateCompany(companyKey: CompanyKey, patch: Partial<Company>) {
     setCompanies((current) =>
       current.map((company) => (company.key === companyKey ? { ...company, ...patch } : company))
@@ -564,19 +608,6 @@ export default function RotaPage() {
         index === dayIndex ? { ...row, ...patch } : row
       ),
     }))
-  }
-
-  function closeDay(company: CompanyKey, dayIndex: number) {
-    updateOpening(company, dayIndex, { closed: true })
-    setActiveEditor(null)
-    setDraftShift(null)
-    setDraftDirty(false)
-    showStatus('Day marked closed.')
-  }
-
-  function openDay(company: CompanyKey, dayIndex: number) {
-    updateOpening(company, dayIndex, { closed: false })
-    showStatus('Day reopened.')
   }
 
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
@@ -643,8 +674,7 @@ export default function RotaPage() {
   }
 
   function openNewShift(company: CompanyKey, week: Date, dayIndex: number, type: ShiftType, allowClosed = false) {
-    const opening = getOpening(company, dayIndex)
-    if (opening.closed && !allowClosed) return
+    if (isDayClosed(company, week, dayIndex) && !allowClosed) return
 
     const shift = type === 'holiday' ? makeHolidayShift() : makeWorkShift()
 
@@ -724,7 +754,7 @@ export default function RotaPage() {
       : current.map((shift) => (shift.id === activeEditor.shiftId ? savedShift : shift))
 
     setDayShifts(activeEditor.company, week, activeEditor.dayIndex, next)
-    updateOpening(activeEditor.company, activeEditor.dayIndex, { closed: false })
+    reopenSpecificDay(activeEditor.company, week, activeEditor.dayIndex)
     saveWeeklyReportSnapshot(activeEditor.company, week)
 
     setActiveEditor(null)
@@ -973,19 +1003,20 @@ export default function RotaPage() {
     const days = dayNames.map((dayName, dayIndex) => {
       const actualDate = addDays(week, dayIndex)
       const opening = getOpening(company, dayIndex)
+      const closed = isDayClosed(company, week, dayIndex)
       const shifts = getDayShifts(company, week, dayIndex)
 
       return {
         day: dayName,
         date: actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-        opening: opening.closed ? 'Closed' : `${opening.open} - ${opening.close}`,
+        opening: closed ? 'Closed' : `${opening.open} - ${opening.close}`,
         shifts: shifts.map((shift) => {
           const person = staff.find((x) => x.id === shift.staffId)
 
           return {
             name: person?.name || 'Staff',
             type: shift.type,
-            time: telegramShiftTimeLabel(shift, opening),
+            time: telegramShiftTimeLabel(shift, opening, closed),
           }
         }),
       }
@@ -1062,7 +1093,7 @@ export default function RotaPage() {
             <button
               type="button"
               onClick={() => {
-                openDay(activeEditor.company, activeEditor.dayIndex)
+                reopenSpecificDay(activeEditor.company, week, activeEditor.dayIndex)
                 updateDraftShift({ type: 'work' })
               }}
               className={`rounded-xl px-4 py-2 text-xs font-black ${
@@ -1075,7 +1106,7 @@ export default function RotaPage() {
             <button
               type="button"
               onClick={() => {
-                openDay(activeEditor.company, activeEditor.dayIndex)
+                reopenSpecificDay(activeEditor.company, week, activeEditor.dayIndex)
                 updateDraftShift({ type: 'holiday', holidayHours: draftShift.holidayHours || 7 })
               }}
               className={`rounded-xl px-4 py-2 text-xs font-black ${
@@ -1087,7 +1118,7 @@ export default function RotaPage() {
 
             <button
               type="button"
-              onClick={() => closeDay(activeEditor.company, activeEditor.dayIndex)}
+              onClick={() => closeSpecificDay(activeEditor.company, week, activeEditor.dayIndex)}
               className="rounded-xl bg-red-100 px-4 py-2 text-xs font-black text-red-600"
             >
               CLOSE
@@ -1165,7 +1196,7 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={() => {
-                  openDay(activeEditor.company, activeEditor.dayIndex)
+                  reopenSpecificDay(activeEditor.company, week, activeEditor.dayIndex)
                   updateDraftShift({
                     type: 'work',
                     start: opening.open,
@@ -1214,8 +1245,9 @@ export default function RotaPage() {
     const actualDate = addDays(week, dayIndex)
     const shifts = getDayShifts(company, week, dayIndex)
     const opening = getOpening(company, dayIndex)
-    const openingShortLabel = openingTimeLabel(opening, false)
-    const openingMobileLabel = openingTimeLabel(opening, true)
+    const closed = isDayClosed(company, week, dayIndex)
+    const openingShortLabel = openingTimeLabel(opening, false, closed)
+    const openingMobileLabel = openingTimeLabel(opening, true, closed)
     const editorOpenHere =
       activeEditor?.company === company &&
       activeEditor.weekId === getWeekId(week) &&
@@ -1224,12 +1256,12 @@ export default function RotaPage() {
     return (
       <div
         className={`relative min-h-44 rounded-2xl border p-2 ${
-          opening.closed
+          closed
             ? 'cursor-pointer border-red-200 bg-red-50'
             : 'border-neutral-200 bg-neutral-50'
         }`}
         onClick={() => {
-          if (opening.closed) openClosedDayEditor(company, week, dayIndex)
+          if (closed) openClosedDayEditor(company, week, dayIndex)
         }}
       >
         <div className="mb-2">
@@ -1273,12 +1305,12 @@ export default function RotaPage() {
                   ×
                 </button>
                 <span className="truncate pr-1">{person?.name || 'Staff'}</span>
-                <span className="truncate text-[9px] opacity-80">{shiftTimeLabel(shift, opening)}</span>
+                <span className="truncate text-[9px] opacity-80">{shiftTimeLabel(shift, opening, closed)}</span>
               </div>
             )
           })}
 
-          {!opening.closed && (
+          {!closed && (
             <button
               type="button"
               onClick={(event) => {
