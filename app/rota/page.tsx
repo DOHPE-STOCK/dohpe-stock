@@ -37,12 +37,31 @@ type Company = {
   logoUrl?: string
 }
 
+type WeeklyReport = {
+  id: string
+  company: CompanyKey
+  weekId: string
+  companyName: string
+  staffTotals: Record<
+    string,
+    {
+      name: string
+      workHours: number
+      holidayHours: number
+      workWage: number
+      holidayWage: number
+    }
+  >
+  createdAt: string
+}
+
 type RotaData = Record<CompanyKey, Record<string, Record<string, Shift[]>>>
 type DefaultRota = Record<CompanyKey, Record<string, Shift[]>>
 type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
 type CalendarData = Record<string, CalendarEvent[]>
 
 const ROTA_SETTINGS_TABLE = 'rota_settings'
+const LOCAL_ROTA_KEY = 'dohpe_rota_settings_v1'
 const HOVER_DELAY_MS = 400
 
 const defaultCompanies: Company[] = [
@@ -163,6 +182,10 @@ function emptyDefault(): DefaultRota {
   return { dohpe: {}, dlretail: {} }
 }
 
+function safeSaved(shift: Shift) {
+  return shift.saved !== false
+}
+
 function GoogleLogo() {
   return (
     <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-black text-blue-600 sm:h-6 sm:w-6 sm:text-sm">
@@ -207,9 +230,12 @@ export default function RotaPage() {
   const [mobileCompany, setMobileCompany] = useState<CompanyKey>('dohpe')
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff)
   const [currentWeekStart] = useState(startOfWeek(new Date()))
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historySearch, setHistorySearch] = useState('')
   const [rota, setRota] = useState<RotaData>({ dohpe: {}, dlretail: {} })
   const [defaultRota, setDefaultRota] = useState<DefaultRota>(emptyDefault())
   const [editedWeeks, setEditedWeeks] = useState<EditedWeeks>({ dohpe: {}, dlretail: {} })
+  const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
   const [googleCalendarSynced, setGoogleCalendarSynced] = useState(false)
@@ -235,9 +261,41 @@ export default function RotaPage() {
 
   const mobileCompanyList = companies.filter((company) => company.key === mobileCompany)
 
+  const filteredReports = useMemo(() => {
+    const q = historySearch.trim().toLowerCase()
+    if (!q) return weeklyReports.slice(0, 20)
+
+    return weeklyReports
+      .filter((report) => {
+        const staffNames = Object.values(report.staffTotals)
+          .map((row) => row.name)
+          .join(' ')
+          .toLowerCase()
+
+        return (
+          report.weekId.toLowerCase().includes(q) ||
+          report.companyName.toLowerCase().includes(q) ||
+          staffNames.includes(q)
+        )
+      })
+      .slice(0, 20)
+  }, [historySearch, weeklyReports])
+
   useEffect(() => {
     async function loadCloudRota() {
       try {
+        const local = localStorage.getItem(LOCAL_ROTA_KEY)
+        if (local) {
+          const parsed = JSON.parse(local)
+          if (Array.isArray(parsed.companies)) setCompanies(parsed.companies)
+          if (Array.isArray(parsed.staff)) setStaff(parsed.staff)
+          if (parsed.rota) setRota(parsed.rota)
+          if (parsed.defaultRota) setDefaultRota(parsed.defaultRota)
+          if (parsed.editedWeeks) setEditedWeeks(parsed.editedWeeks)
+          if (Array.isArray(parsed.weeklyReports)) setWeeklyReports(parsed.weeklyReports)
+          if (parsed.googleCalendarSynced) setGoogleCalendarSynced(Boolean(parsed.googleCalendarSynced))
+        }
+
         const { data: userData } = await supabase.auth.getUser()
         const userKey = userData?.user?.id || 'default'
         setCloudUserKey(userKey)
@@ -257,10 +315,11 @@ export default function RotaPage() {
         if (saved.rota) setRota(saved.rota)
         if (saved.defaultRota) setDefaultRota(saved.defaultRota)
         if (saved.editedWeeks) setEditedWeeks(saved.editedWeeks)
+        if (Array.isArray(saved.weeklyReports)) setWeeklyReports(saved.weeklyReports)
         if (saved.googleCalendarSynced) setGoogleCalendarSynced(Boolean(saved.googleCalendarSynced))
       } catch (error) {
         console.error('ROTA_CLOUD_LOAD_ERROR', error)
-        setStatusMessage('Rota loaded locally. Cloud sync table may not be set up yet.')
+        setStatusMessage('Rota loaded locally. Cloud sync may not be set up yet.')
       } finally {
         setCloudLoaded(true)
       }
@@ -272,21 +331,24 @@ export default function RotaPage() {
   useEffect(() => {
     if (!cloudLoaded) return
 
+    const payload = {
+      companies,
+      staff,
+      rota,
+      defaultRota,
+      editedWeeks,
+      weeklyReports,
+      googleCalendarSynced,
+    }
+
+    localStorage.setItem(LOCAL_ROTA_KEY, JSON.stringify(payload))
+
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current)
     }
 
     saveTimerRef.current = window.setTimeout(async () => {
       try {
-        const payload = {
-          companies,
-          staff,
-          rota,
-          defaultRota,
-          editedWeeks,
-          googleCalendarSynced,
-        }
-
         const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert({
           user_key: cloudUserKey,
           data: payload,
@@ -304,7 +366,7 @@ export default function RotaPage() {
         window.clearTimeout(saveTimerRef.current)
       }
     }
-  }, [cloudLoaded, cloudUserKey, companies, staff, rota, defaultRota, editedWeeks, googleCalendarSynced])
+  }, [cloudLoaded, cloudUserKey, companies, staff, rota, defaultRota, editedWeeks, weeklyReports, googleCalendarSynced])
 
   function delayedExpand(key: string) {
     if (hoverTimerRef.current) {
@@ -321,6 +383,11 @@ export default function RotaPage() {
       window.clearTimeout(hoverTimerRef.current)
       hoverTimerRef.current = null
     }
+  }
+
+  function closeExpandedDay() {
+    cancelDelayedExpand()
+    setExpandedDay(null)
   }
 
   function getDayId(week: Date, dayIndex: number) {
@@ -423,6 +490,7 @@ export default function RotaPage() {
       current.map((shift) => (shift.id === shiftId ? { ...shift, saved: true } : shift))
     )
 
+    saveWeeklyReportSnapshot(company, week)
     setStatusMessage('Shift saved.')
   }
 
@@ -434,6 +502,7 @@ export default function RotaPage() {
       dayIndex,
       current.filter((shift) => shift.id !== shiftId)
     )
+    saveWeeklyReportSnapshot(company, week)
   }
 
   function applyDefaultToWeek(company: CompanyKey, week: Date, template: Record<string, Shift[]>) {
@@ -544,7 +613,7 @@ export default function RotaPage() {
     }
 
     for (let i = 0; i < 7; i += 1) {
-      for (const shift of getDayShifts(company, week, i).filter((row) => row.saved)) {
+      for (const shift of getDayShifts(company, week, i).filter(safeSaved)) {
         const person = staff.find((x) => x.id === shift.staffId)
         const hours = shiftHours(shift)
         const wage = hours * Number(person?.hourlyRate || 0)
@@ -581,6 +650,44 @@ export default function RotaPage() {
       }),
       { workHours: 0, holidayHours: 0, wage: 0 }
     )
+  }
+
+  function saveWeeklyReportSnapshot(company: CompanyKey, week: Date) {
+    const weekId = getWeekId(week)
+    const totals = totalsForCompanyWeek(company, week)
+
+    const staffTotals: WeeklyReport['staffTotals'] = {}
+
+    for (const person of staff) {
+      const row = totals[person.id] || {
+        workHours: 0,
+        holidayHours: 0,
+        workWage: 0,
+        holidayWage: 0,
+      }
+
+      staffTotals[person.id] = {
+        name: person.name,
+        workHours: row.workHours,
+        holidayHours: row.holidayHours,
+        workWage: row.workWage,
+        holidayWage: row.holidayWage,
+      }
+    }
+
+    const report: WeeklyReport = {
+      id: `${company}-${weekId}`,
+      company,
+      weekId,
+      companyName: getCompanyName(company),
+      staffTotals,
+      createdAt: new Date().toISOString(),
+    }
+
+    setWeeklyReports((current) => {
+      const withoutCurrent = current.filter((row) => row.id !== report.id)
+      return [report, ...withoutCurrent].slice(0, 250)
+    })
   }
 
   function syncGoogleCalendar() {
@@ -627,7 +734,7 @@ export default function RotaPage() {
 
   function saveStaffSettings() {
     setSettingsOpen(false)
-    setStatusMessage('Settings saved and syncing to cloud.')
+    setStatusMessage('Settings saved.')
   }
 
   function sendTelegram(company: CompanyKey, week: Date) {
@@ -636,7 +743,7 @@ export default function RotaPage() {
 
     for (let i = 0; i < 7; i += 1) {
       const day = addDays(week, i)
-      const shifts = getDayShifts(company, week, i).filter((shift) => shift.saved)
+      const shifts = getDayShifts(company, week, i).filter(safeSaved)
 
       rotaLines.push(`${dayNames[i]} ${day.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`)
 
@@ -706,7 +813,7 @@ export default function RotaPage() {
             type="button"
             onClick={() => saveShift(company, week, dayIndex, shift.id)}
             className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-black ${
-              shift.saved ? 'bg-emerald-500 text-white' : 'bg-emerald-100 text-emerald-700'
+              safeSaved(shift) ? 'bg-emerald-500 text-white' : 'bg-emerald-100 text-emerald-700'
             }`}
           >
             ✓
@@ -813,7 +920,7 @@ export default function RotaPage() {
         <div className="mt-2 text-xs">
           <span className="font-black text-neutral-500">
             {hours.toFixed(2)} hrs · {money(hours * Number(person?.hourlyRate || 0))}
-            {!shift.saved ? ' · unsaved' : ''}
+            {!safeSaved(shift) ? ' · unsaved' : ''}
           </span>
         </div>
       </div>
@@ -834,7 +941,7 @@ export default function RotaPage() {
     const expandKey = `${company}-${dayId}`
     const isExpanded = expandedDay === expandKey
     const allShifts = getDayShifts(company, week, dayIndex)
-    const savedShifts = allShifts.filter((shift) => shift.saved)
+    const savedShifts = allShifts.filter(safeSaved)
     const events = calendarEvents[dayId] || []
 
     return (
@@ -861,8 +968,7 @@ export default function RotaPage() {
           ) : (
             savedShifts.slice(0, 5).map((shift) => {
               const person = staff.find((x) => x.id === shift.staffId)
-              const shiftHourValue = shiftHours(shift)
-              const shiftHourText = formatHours(shiftHourValue)
+              const shiftHourText = formatHours(shiftHours(shift))
 
               return (
                 <div
@@ -890,10 +996,7 @@ export default function RotaPage() {
 
         {isExpanded && (
           <div
-            onMouseLeave={() => {
-              cancelDelayedExpand()
-              setExpandedDay(null)
-            }}
+            onMouseLeave={closeExpandedDay}
             className="absolute left-0 top-0 z-50 w-[min(440px,90vw)] rounded-3xl border border-neutral-300 bg-white p-3 shadow-2xl"
           >
             <div className="mb-3">
@@ -1124,7 +1227,15 @@ export default function RotaPage() {
               </p>
             </div>
 
-            <div className="grid w-full grid-cols-3 gap-2 sm:w-auto sm:flex sm:flex-wrap sm:justify-end">
+            <div className="grid w-full grid-cols-4 gap-2 sm:w-auto sm:flex sm:flex-wrap sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((value) => !value)}
+                className="flex items-center justify-center rounded-2xl bg-white/10 px-2 py-3 text-xs font-black text-white sm:px-4 sm:text-sm"
+              >
+                History
+              </button>
+
               <button
                 type="button"
                 onClick={openMonthlyCalendar}
@@ -1148,9 +1259,8 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={() => setSettingsOpen((value) => !value)}
-                className="flex items-center justify-center gap-1 rounded-2xl bg-emerald-400 px-2 py-3 text-xs font-black text-black sm:gap-2 sm:px-4 sm:text-sm"
+                className="flex items-center justify-center rounded-2xl bg-emerald-400 px-2 py-3 text-xs font-black text-black sm:px-4 sm:text-sm"
               >
-                <SettingsIcon />
                 Settings
               </button>
             </div>
@@ -1180,6 +1290,64 @@ export default function RotaPage() {
             </div>
           )}
         </header>
+
+        {historyOpen && (
+          <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-black">Rota history</h2>
+                <p className="text-sm font-semibold text-neutral-500">
+                  Saved weekly staff hours for future reports.
+                </p>
+              </div>
+
+              <input
+                value={historySearch}
+                onChange={(event) => setHistorySearch(event.target.value)}
+                placeholder="Search week, company, staff..."
+                className="w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold md:w-80"
+              />
+            </div>
+
+            <div className="space-y-2">
+              {filteredReports.length === 0 ? (
+                <p className="rounded-2xl bg-neutral-100 p-4 text-sm font-bold text-neutral-400">
+                  No saved history yet. Save shifts and weekly totals will appear here.
+                </p>
+              ) : (
+                filteredReports.map((report) => (
+                  <div key={report.id} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="font-black">
+                        {report.companyName} · week {report.weekId}
+                      </p>
+                      <p className="text-xs font-bold text-neutral-400">
+                        {new Date(report.createdAt).toLocaleString('en-GB')}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+                      {Object.values(report.staffTotals).map((row) => (
+                        <div key={row.name} className="rounded-xl bg-white p-2 text-xs font-bold">
+                          <div className="flex items-center justify-between">
+                            <span>{row.name}</span>
+                            <span>{(row.workHours + row.holidayHours).toFixed(2)}h</span>
+                          </div>
+                          <div className="mt-1 grid grid-cols-2 gap-1 text-neutral-500">
+                            <span>Work {row.workHours.toFixed(2)}h</span>
+                            <span className="text-right">{money(row.workWage)}</span>
+                            <span>Hols {row.holidayHours.toFixed(2)}h</span>
+                            <span className="text-right">{money(row.holidayWage)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
 
         {settingsOpen && (
           <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
