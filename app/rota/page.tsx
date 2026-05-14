@@ -39,7 +39,7 @@ type DefaultRota = Record<CompanyKey, Record<string, Shift[]>>
 type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
 type CalendarData = Record<string, CalendarEvent[]>
 
-const companies: Company[] = [
+const defaultCompanies: Company[] = [
   { key: 'dohpe', name: 'Dohpe Vintage', telegramGroup: 'Dohpe rota group' },
   { key: 'dlretail', name: 'DL Retail', telegramGroup: 'DL Retail rota group' },
 ]
@@ -159,6 +159,8 @@ function GoogleLogo() {
 }
 
 export default function RotaPage() {
+  const [companies, setCompanies] = useState<Company[]>(defaultCompanies)
+  const [mobileCompany, setMobileCompany] = useState<CompanyKey>('dohpe')
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff)
   const [currentWeekStart] = useState(startOfWeek(new Date()))
   const [rota, setRota] = useState<RotaData>({ dohpe: {}, dlretail: {} })
@@ -185,6 +187,8 @@ export default function RotaPage() {
     return [1, 2, 3, 4].map((offset) => addWeeks(currentWeekStart, offset))
   }, [currentWeekStart])
 
+  const mobileCompanyList = companies.filter((company) => company.key === mobileCompany)
+
   function getDayId(week: Date, dayIndex: number) {
     return dateKey(addDays(week, dayIndex))
   }
@@ -195,6 +199,18 @@ export default function RotaPage() {
 
   function isCurrentWeek(week: Date) {
     return getWeekId(week) === getWeekId(currentWeekStart)
+  }
+
+  function getCompanyName(companyKey: CompanyKey) {
+    return companies.find((company) => company.key === companyKey)?.name || companyKey
+  }
+
+  function updateCompanyName(companyKey: CompanyKey, name: string) {
+    setCompanies((current) =>
+      current.map((company) =>
+        company.key === companyKey ? { ...company, name } : company
+      )
+    )
   }
 
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
@@ -337,9 +353,7 @@ export default function RotaPage() {
       return next
     })
 
-    setStatusMessage(
-      `${companies.find((c) => c.key === company)?.name} default rota set and applied to next 4 weeks.`
-    )
+    setStatusMessage(`${getCompanyName(company)} default rota set and applied to next 4 weeks.`)
   }
 
   function copyWeekToNext(company: CompanyKey, week: Date) {
@@ -366,7 +380,7 @@ export default function RotaPage() {
     }))
 
     markWeekEdited(company, targetWeek)
-    setStatusMessage(`${companies.find((c) => c.key === company)?.name} copied to next week.`)
+    setStatusMessage(`${getCompanyName(company)} copied to next week.`)
   }
 
   function totalsForCompanyWeek(company: CompanyKey, week: Date) {
@@ -468,12 +482,11 @@ export default function RotaPage() {
 
   function saveStaffSettings() {
     setSettingsOpen(false)
-    setStatusMessage('Staff settings saved.')
+    setStatusMessage('Settings saved.')
   }
 
   function sendTelegram(company: CompanyKey, week: Date) {
-    const companyName = companies.find((c) => c.key === company)?.name
-
+    const companyName = getCompanyName(company)
     const rotaLines: string[] = []
 
     for (let i = 0; i < 7; i += 1) {
@@ -689,17 +702,19 @@ export default function RotaPage() {
           ) : (
             shifts.slice(0, 5).map((shift) => {
               const person = staff.find((x) => x.id === shift.staffId)
+
               return (
                 <div
                   key={shift.id}
-                  className={`flex min-h-7 items-center rounded-lg px-2 py-1 text-[11px] font-black leading-tight ${
-                    shift.type === 'holiday' ? 'bg-amber-100 text-amber-700' : 'bg-white text-neutral-800'
+                  className={`flex min-h-8 flex-col justify-center rounded-lg px-1.5 py-1 text-[10px] font-black leading-[1.05] ${
+                    shift.type === 'holiday'
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-white text-neutral-800'
                   }`}
                 >
-                  <span className="w-full truncate">
-                    {shift.type === 'holiday'
-                      ? `HOLS ${person?.name || 'Staff'}`
-                      : `${person?.name || 'Staff'} ${shift.start}–${shift.end}`}
+                  <span className="truncate">{person?.name || 'Staff'}</span>
+                  <span className="truncate text-[9px] opacity-80">
+                    {shift.type === 'holiday' ? 'HOLS' : `${shift.start}–${shift.end}`}
                   </span>
                 </div>
               )
@@ -732,14 +747,14 @@ export default function RotaPage() {
                   onClick={() => addShift(company, week, dayIndex, 'work')}
                   className="rounded-xl bg-black px-4 py-2 text-xs font-black text-white"
                 >
-                  + Shift
+                  + SHIFT
                 </button>
                 <button
                   type="button"
                   onClick={() => addShift(company, week, dayIndex, 'holiday')}
                   className="rounded-xl bg-amber-300 px-4 py-2 text-xs font-black text-black"
                 >
-                  HOLS
+                  + HOLIDAY
                 </button>
               </div>
             </div>
@@ -900,6 +915,32 @@ export default function RotaPage() {
     )
   }
 
+  function WeekGroup({ week }: { week: Date }) {
+    return (
+      <>
+        <div className="hidden grid-cols-1 gap-5 xl:grid xl:grid-cols-2">
+          {companies.map((company) => (
+            <WeekPlanner
+              key={`${company.key}-${dateKey(week)}`}
+              company={company}
+              week={week}
+            />
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 xl:hidden">
+          {mobileCompanyList.map((company) => (
+            <WeekPlanner
+              key={`${company.key}-${dateKey(week)}-mobile`}
+              company={company}
+              week={week}
+            />
+          ))}
+        </div>
+      </>
+    )
+  }
+
   return (
     <main className="min-h-screen bg-neutral-100 text-neutral-950">
       <div className="mx-auto max-w-[1900px] space-y-5 p-4">
@@ -948,6 +989,23 @@ export default function RotaPage() {
             </div>
           </div>
 
+          <div className="mt-4 grid grid-cols-2 gap-2 xl:hidden">
+            {companies.map((company, index) => (
+              <button
+                key={company.key}
+                type="button"
+                onClick={() => setMobileCompany(company.key)}
+                className={`rounded-2xl px-4 py-3 text-sm font-black ${
+                  mobileCompany === company.key
+                    ? 'bg-white text-black'
+                    : 'bg-white/10 text-white'
+                }`}
+              >
+                Company {index + 1}
+              </button>
+            ))}
+          </div>
+
           {statusMessage && (
             <div className="mt-4 rounded-2xl bg-white/10 p-3 text-sm font-bold">
               {statusMessage}
@@ -959,9 +1017,9 @@ export default function RotaPage() {
           <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-black">Rota staff</h2>
+                <h2 className="text-xl font-black">Settings</h2>
                 <p className="text-sm font-semibold text-neutral-500">
-                  Edit staff names and hourly rates. Google Calendar sync is only for the logged-in user.
+                  Edit company names, staff names, and hourly rates.
                 </p>
               </div>
 
@@ -981,6 +1039,24 @@ export default function RotaPage() {
                   Save
                 </button>
               </div>
+            </div>
+
+            <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              {companies.map((company, index) => (
+                <div
+                  key={company.key}
+                  className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3"
+                >
+                  <p className="mb-2 text-xs font-black uppercase tracking-widest text-neutral-400">
+                    Company {index + 1}
+                  </p>
+                  <input
+                    value={company.name}
+                    onChange={(event) => updateCompanyName(company.key, event.target.value)}
+                    className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
+                  />
+                </div>
+              ))}
             </div>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -1017,29 +1093,13 @@ export default function RotaPage() {
           </section>
         )}
 
-        <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-          {companies.map((company) => (
-            <WeekPlanner
-              key={`${company.key}-${dateKey(currentWeekStart)}`}
-              company={company}
-              week={currentWeekStart}
-            />
-          ))}
-        </section>
+        <WeekGroup week={currentWeekStart} />
 
         <section className="space-y-5">
           <h2 className="px-1 text-xl font-black">Next 4 weeks</h2>
 
           {futureWeekStarts.map((week) => (
-            <div key={dateKey(week)} className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-              {companies.map((company) => (
-                <WeekPlanner
-                  key={`${company.key}-${dateKey(week)}-future`}
-                  company={company}
-                  week={week}
-                />
-              ))}
-            </div>
+            <WeekGroup key={dateKey(week)} week={week} />
           ))}
         </section>
       </div>
