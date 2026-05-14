@@ -1,6 +1,10 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import dayjs, { Dayjs } from 'dayjs'
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
+import { MobileTimePicker } from '@mui/x-date-pickers/MobileTimePicker'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 
@@ -154,6 +158,65 @@ function shortTime(value: string) {
   const [h, m] = value.split(':')
   if (m === '00') return String(Number(h))
   return `${Number(h)}:${m}`
+}
+
+function parsePickerTime(value: string) {
+  if (!value || !value.includes(':')) return null
+
+  const parsed = dayjs(`2024-01-01T${value}`)
+  return parsed.isValid() ? parsed : null
+}
+
+function TimePickerField({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+}) {
+  return (
+    <LocalizationProvider dateAdapter={AdapterDayjs}>
+      <MobileTimePicker
+        ampm
+        closeOnSelect={false}
+        minutesStep={5}
+        value={parsePickerTime(value)}
+        disabled={disabled}
+        onChange={(newValue: Dayjs | null) => {
+          if (!newValue || !newValue.isValid()) return
+          onChange(newValue.format('HH:mm'))
+        }}
+        slotProps={{
+          textField: {
+            size: 'small',
+            fullWidth: true,
+            inputProps: { readOnly: true },
+            sx: {
+              '& .MuiInputBase-root': {
+                borderRadius: '0.5rem',
+                backgroundColor: disabled ? '#f5f5f5' : 'white',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+              },
+              '& input': {
+                padding: '8.5px 8px',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              },
+            },
+          },
+          mobilePaper: {
+            sx: {
+              borderRadius: '24px',
+            },
+          },
+        }}
+      />
+    </LocalizationProvider>
+  )
 }
 
 function rawShiftHours(shift: Shift) {
@@ -1136,18 +1199,14 @@ export default function RotaPage() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-[72px_72px_1fr] gap-2 sm:grid-cols-[86px_86px_1fr]">
-              <input
-                type="time"
+            <div className="grid grid-cols-[90px_90px_1fr] gap-2 sm:grid-cols-[110px_110px_1fr]">
+              <TimePickerField
                 value={draftShift.start}
-                onChange={(event) => updateDraftShift({ start: event.target.value })}
-                className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+                onChange={(value) => updateDraftShift({ start: value })}
               />
-              <input
-                type="time"
+              <TimePickerField
                 value={draftShift.end}
-                onChange={(event) => updateDraftShift({ end: event.target.value })}
-                className="min-w-0 rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold"
+                onChange={(value) => updateDraftShift({ end: value })}
               />
               <button
                 type="button"
@@ -1606,19 +1665,15 @@ export default function RotaPage() {
                       return (
                         <div key={`${company.key}-${day}`} className="grid grid-cols-[44px_1fr_1fr_70px] items-center gap-2">
                           <span className="text-xs font-black text-neutral-500">{day}</span>
-                          <input
-                            type="time"
+                          <TimePickerField
                             value={opening.open}
-                            disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { open: event.target.value })}
-                            className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
+                            disabled={Boolean(opening.closed)}
+                            onChange={(value) => updateOpening(company.key, dayIndex, { open: value })}
                           />
-                          <input
-                            type="time"
+                          <TimePickerField
                             value={opening.close}
-                            disabled={opening.closed}
-                            onChange={(event) => updateOpening(company.key, dayIndex, { close: event.target.value })}
-                            className="rounded-lg border border-neutral-200 px-2 py-2 text-xs font-bold disabled:opacity-40"
+                            disabled={Boolean(opening.closed)}
+                            onChange={(value) => updateOpening(company.key, dayIndex, { close: value })}
                           />
                           <label className="flex items-center gap-1 text-[10px] font-black text-neutral-500">
                             <input
