@@ -28,10 +28,10 @@ function getChatId(company: string) {
 
 function getCompanyLogo(company: string) {
   if (company === 'dlretail') {
-    return 'https://your-domain.com/dl-retail-logo.png'
+    return 'https://hmeaanftisuhcdrzmpil.supabase.co/storage/v1/object/public/item-images/thumbs/DLR%20logo%20Round.png'
   }
 
-  return 'https://your-domain.com/dohpe-logo.png'
+  return 'https://hmeaanftisuhcdrzmpil.supabase.co/storage/v1/object/public/item-images/thumbs/DOHPE%20dragon%20logo%20round.png'
 }
 
 function getCompanyDisplayName(company: string) {
@@ -65,6 +65,7 @@ function getShiftTextForEmployee(day: RotaDay, employeeName: string) {
   return shifts
     .map((shift) => {
       if (shift.type === 'holiday') return `HOLIDAY · ${shift.time}`
+      if (shift.time === 'FULL DAY') return day.opening
       return shift.time
     })
     .join('\n')
