@@ -81,21 +81,21 @@ export default function RotaCalendarPage() {
     loadEvents()
   }, [])
 
-  async function getGoogleToken() {
+  async function getSupabaseAccessToken() {
     const {
       data: { session },
     } = await supabase.auth.getSession()
 
-    return session?.provider_token || ''
+    return session?.access_token || ''
   }
 
   async function loadEvents() {
     try {
       setLoading(true)
 
-      const googleToken = await getGoogleToken()
+      const supabaseToken = await getSupabaseAccessToken()
 
-      if (!googleToken) {
+      if (!supabaseToken) {
         setConnected(false)
         setLoading(false)
         return
@@ -103,24 +103,29 @@ export default function RotaCalendarPage() {
 
       const response = await fetch('/api/rota/google/events', {
         headers: {
-          Authorization: `Bearer ${googleToken}`,
+          Authorization: `Bearer ${supabaseToken}`,
         },
       })
 
-      if (!response.ok) {
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
         setConnected(false)
+        setEvents([])
+        setEmail('')
+        setStatusMessage(data?.message || 'Google Calendar not connected.')
         setLoading(false)
         return
       }
 
-      const data = await response.json()
-
-      setEvents(data.events || [])
+      setEvents(Array.isArray(data.events) ? data.events : [])
       setEmail(data.email || '')
       setConnected(true)
+      setStatusMessage('')
     } catch (error) {
       console.error(error)
       setConnected(false)
+      setStatusMessage('Could not load Google Calendar.')
     } finally {
       setLoading(false)
     }
@@ -147,10 +152,10 @@ export default function RotaCalendarPage() {
 
       setSaving(true)
 
-      const googleToken = await getGoogleToken()
+      const supabaseToken = await getSupabaseAccessToken()
 
-      if (!googleToken) {
-        setStatusMessage('Reconnect Google Calendar before saving.')
+      if (!supabaseToken) {
+        setStatusMessage('Log in again before saving.')
         setConnected(false)
         return
       }
@@ -158,7 +163,7 @@ export default function RotaCalendarPage() {
       const response = await fetch('/api/rota/google/create-event', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${googleToken}`,
+          Authorization: `Bearer ${supabaseToken}`,
           'content-type': 'application/json',
         },
         body: JSON.stringify({
@@ -200,6 +205,10 @@ export default function RotaCalendarPage() {
 
       if (!grouped[key]) grouped[key] = []
       grouped[key].push(event)
+    }
+
+    for (const key of Object.keys(grouped)) {
+      grouped[key].sort((a, b) => String(a.start).localeCompare(String(b.start)))
     }
 
     return grouped
