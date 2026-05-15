@@ -26,11 +26,55 @@ function getChatId(company: string) {
   return process.env.TELEGRAM_CHAT_ID
 }
 
+function getCompanyLogo(company: string) {
+  if (company === 'dlretail') {
+    return 'https://your-domain.com/dl-retail-logo.png'
+  }
+
+  return 'https://your-domain.com/dohpe-logo.png'
+}
+
+function getCompanyDisplayName(company: string) {
+  if (company === 'dlretail') return 'DL RETAIL'
+  return 'DOHPE VINTAGE'
+}
+
 function el(type: string, props: any, ...children: any[]) {
   return React.createElement(type, props, ...children)
 }
 
-async function makeImage(companyName: string, weekLabel: string, days: RotaDay[]) {
+function getEmployeeNames(days: RotaDay[]) {
+  const names: string[] = []
+
+  for (const day of days) {
+    for (const shift of day.shifts) {
+      if (shift.name && !names.includes(shift.name)) {
+        names.push(shift.name)
+      }
+    }
+  }
+
+  return names
+}
+
+function getShiftTextForEmployee(day: RotaDay, employeeName: string) {
+  const shifts = day.shifts.filter((shift) => shift.name === employeeName)
+
+  if (shifts.length === 0) return ''
+
+  return shifts
+    .map((shift) => {
+      if (shift.type === 'holiday') return `HOLIDAY · ${shift.time}`
+      return shift.time
+    })
+    .join('\n')
+}
+
+async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
+  const companyName = getCompanyDisplayName(company)
+  const logoUrl = getCompanyLogo(company)
+  const employees = getEmployeeNames(days)
+
   return new ImageResponse(
     el(
       'div',
@@ -39,43 +83,91 @@ async function makeImage(companyName: string, weekLabel: string, days: RotaDay[]
           width: 1200,
           height: 675,
           background: '#f8fafc',
-          padding: 34,
+          padding: 30,
           fontFamily: 'Arial',
           color: '#0f172a',
           display: 'flex',
           flexDirection: 'column',
-          gap: 20,
+          gap: 18,
         },
       },
+
       el(
         'div',
         {
           style: {
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'flex-end',
+            alignItems: 'center',
           },
         },
-        el(
-          'div',
-          { style: { display: 'flex', flexDirection: 'column' } },
-          el('div', { style: { fontSize: 44, fontWeight: 900 } }, companyName),
-          el(
-            'div',
-            { style: { fontSize: 24, fontWeight: 800, color: '#0891b2' } },
-            `Staff Rota · ${weekLabel}`
-          )
-        ),
+
         el(
           'div',
           {
             style: {
-              fontSize: 22,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 18,
+            },
+          },
+
+          el('img', {
+            src: logoUrl,
+            width: 76,
+            height: 76,
+            style: {
+              borderRadius: 999,
+              objectFit: 'cover',
+              border: '4px solid white',
+            },
+          }),
+
+          el(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                flexDirection: 'column',
+              },
+            },
+
+            el(
+              'div',
+              {
+                style: {
+                  fontSize: 40,
+                  fontWeight: 900,
+                  letterSpacing: 1,
+                },
+              },
+              companyName
+            ),
+
+            el(
+              'div',
+              {
+                style: {
+                  fontSize: 22,
+                  fontWeight: 800,
+                  color: '#0891b2',
+                },
+              },
+              `STAFF ROTA · ${weekLabel}`
+            )
+          )
+        ),
+
+        el(
+          'div',
+          {
+            style: {
+              fontSize: 20,
               fontWeight: 900,
               background: '#0f172a',
               color: 'white',
               borderRadius: 999,
-              padding: '12px 22px',
+              padding: '10px 20px',
             },
           },
           'ROTA'
@@ -86,87 +178,189 @@ async function makeImage(companyName: string, weekLabel: string, days: RotaDay[]
         'div',
         {
           style: {
-            display: 'flex',
-            gap: 10,
             flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            border: '2px solid #cbd5e1',
+            borderRadius: 22,
+            overflow: 'hidden',
+            background: 'white',
           },
         },
-        ...days.map((day) =>
+
+        el(
+          'div',
+          {
+            style: {
+              display: 'flex',
+              minHeight: 82,
+              background: '#0f172a',
+              color: 'white',
+            },
+          },
+
           el(
             'div',
             {
-              key: `${day.day}-${day.date}`,
               style: {
-                flex: 1,
-                background: 'white',
-                border: '2px solid #e2e8f0',
-                borderRadius: 22,
-                padding: 14,
+                width: 150,
+                padding: 12,
+                borderRight: '2px solid #334155',
                 display: 'flex',
-                flexDirection: 'column',
-                gap: 9,
+                alignItems: 'center',
+                fontSize: 20,
+                fontWeight: 900,
               },
             },
-            el(
-              'div',
-              { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
-              el('div', { style: { fontSize: 28, fontWeight: 900 } }, day.day),
-              el('div', { style: { fontSize: 18, fontWeight: 800, color: '#64748b' } }, day.date),
-              el('div', { style: { fontSize: 19, fontWeight: 900, color: '#0891b2' } }, day.opening)
-            ),
+            'EMPLOYEE'
+          ),
 
+          ...days.map((day) =>
             el(
               'div',
-              { style: { display: 'flex', flexDirection: 'column', gap: 7 } },
-              day.shifts.length === 0
-                ? el(
+              {
+                key: `${day.day}-${day.date}`,
+                style: {
+                  flex: 1,
+                  padding: 10,
+                  borderRight: '2px solid #334155',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  gap: 2,
+                },
+              },
+              el(
+                'div',
+                {
+                  style: {
+                    fontSize: 21,
+                    fontWeight: 900,
+                  },
+                },
+                day.day
+              ),
+              el(
+                'div',
+                {
+                  style: {
+                    fontSize: 15,
+                    fontWeight: 800,
+                    color: '#cbd5e1',
+                  },
+                },
+                day.date
+              ),
+              el(
+                'div',
+                {
+                  style: {
+                    fontSize: 14,
+                    fontWeight: 900,
+                    color: '#67e8f9',
+                  },
+                },
+                day.opening
+              )
+            )
+          )
+        ),
+
+        employees.length === 0
+          ? el(
+              'div',
+              {
+                style: {
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 34,
+                  fontWeight: 900,
+                  color: '#94a3b8',
+                },
+              },
+              'No shifts added'
+            )
+          : el(
+              'div',
+              {
+                style: {
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                },
+              },
+
+              ...employees.map((employeeName, employeeIndex) =>
+                el(
+                  'div',
+                  {
+                    key: employeeName,
+                    style: {
+                      flex: 1,
+                      display: 'flex',
+                      background: employeeIndex % 2 === 0 ? '#ffffff' : '#f8fafc',
+                      borderTop: employeeIndex === 0 ? '0px solid transparent' : '2px solid #e2e8f0',
+                    },
+                  },
+
+                  el(
                     'div',
                     {
                       style: {
-                        borderRadius: 14,
-                        background: '#f1f5f9',
+                        width: 150,
                         padding: 12,
-                        fontSize: 18,
-                        fontWeight: 800,
-                        color: '#94a3b8',
+                        borderRight: '2px solid #e2e8f0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontSize: 21,
+                        fontWeight: 900,
                       },
                     },
-                    'No shifts'
-                  )
-                : day.shifts.map((shift, index) =>
-                    el(
+                    employeeName
+                  ),
+
+                  ...days.map((day) => {
+                    const shiftText = getShiftTextForEmployee(day, employeeName)
+                    const isHoliday = shiftText.includes('HOLIDAY')
+
+                    return el(
                       'div',
                       {
-                        key: `${shift.name}-${index}`,
+                        key: `${employeeName}-${day.day}`,
                         style: {
-                          borderRadius: 14,
-                          background: shift.type === 'holiday' ? '#fef3c7' : '#ecfeff',
-                          padding: 10,
+                          flex: 1,
+                          padding: 9,
+                          borderRight: '2px solid #e2e8f0',
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: 2,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          whiteSpace: 'pre-wrap',
+                          textAlign: 'center',
+                          fontSize: shiftText.includes('\n') ? 15 : 17,
+                          lineHeight: 1.2,
+                          fontWeight: 900,
+                          color: isHoliday ? '#b45309' : '#0e7490',
+                          background: shiftText
+                            ? isHoliday
+                              ? '#fef3c7'
+                              : '#ecfeff'
+                            : 'transparent',
                         },
                       },
-                      el('div', { style: { fontSize: 21, fontWeight: 900 } }, shift.name),
-                      el(
-                        'div',
-                        {
-                          style: {
-                            fontSize: 17,
-                            fontWeight: 900,
-                            color: shift.type === 'holiday' ? '#b45309' : '#0e7490',
-                          },
-                        },
-                        shift.type === 'holiday' ? `HOLIDAY · ${shift.time}` : shift.time
-                      )
+                      shiftText || ''
                     )
-                  )
+                  })
+                )
+              )
             )
-          )
-        )
       )
     ),
-    { width: 1200, height: 675 }
+    {
+      width: 1200,
+      height: 675,
+    }
   )
 }
 
@@ -175,47 +369,78 @@ export async function POST(request: Request) {
     const body = await request.json()
 
     const company = String(body.company || 'dohpe')
-    const companyName = String(body.companyName || 'Rota')
     const weekLabel = String(body.weekLabel || '')
     const days: RotaDay[] = Array.isArray(body.days) ? body.days : []
+
+    const companyName = getCompanyDisplayName(company)
 
     const botToken = process.env.TELEGRAM_BOT_TOKEN
     const chatId = getChatId(company)
 
     if (!botToken || !chatId) {
       return NextResponse.json(
-        { ok: false, message: 'Missing Telegram bot token or chat id.' },
-        { status: 500 }
+        {
+          ok: false,
+          message: 'Missing Telegram bot token or chat id.',
+        },
+        {
+          status: 500,
+        }
       )
     }
 
-    const imageResponse = await makeImage(companyName, weekLabel, days)
+    const imageResponse = await makeImage(company, weekLabel, days)
     const imageBlob = await imageResponse.blob()
 
     const formData = new FormData()
+
     formData.append('chat_id', chatId)
     formData.append('caption', `${companyName} rota · ${weekLabel}`)
-    formData.append('photo', imageBlob, `${company}-${weekLabel.replaceAll(' ', '-')}.png`)
 
-    const telegramResponse = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-      method: 'POST',
-      body: formData,
-    })
+    formData.append(
+      'photo',
+      imageBlob,
+      `${company}-${weekLabel.replaceAll(' ', '-')}.png`
+    )
+
+    const telegramResponse = await fetch(
+      `https://api.telegram.org/bot${botToken}/sendPhoto`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    )
 
     const telegramData = await telegramResponse.json().catch(() => null)
 
     if (!telegramResponse.ok || !telegramData?.ok) {
       return NextResponse.json(
-        { ok: false, message: 'Telegram send failed.', telegramData },
-        { status: 500 }
+        {
+          ok: false,
+          message: 'Telegram send failed.',
+          telegramData,
+        },
+        {
+          status: 500,
+        }
       )
     }
 
-    return NextResponse.json({ ok: true, sent: true, company, weekLabel })
+    return NextResponse.json({
+      ok: true,
+      sent: true,
+      company,
+      weekLabel,
+    })
   } catch (error: any) {
     return NextResponse.json(
-      { ok: false, message: error.message || 'Rota Telegram send failed.' },
-      { status: 500 }
+      {
+        ok: false,
+        message: error.message || 'Rota Telegram send failed.',
+      },
+      {
+        status: 500,
+      }
     )
   }
 }
