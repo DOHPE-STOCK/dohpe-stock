@@ -10,24 +10,20 @@ const supabase = createClient(
 
 export async function GET(request: NextRequest) {
   try {
-    const accessToken = request.cookies.get('sb-access-token')?.value
+    const authHeader = request.headers.get('authorization')
+    const accessToken = authHeader?.replace('Bearer ', '')
 
     if (!accessToken) {
-      return NextResponse.json(
-        { error: 'Not authenticated' },
-        { status: 401 }
-      )
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser(accessToken)
 
-    if (!user) {
-      return NextResponse.json(
-        { error: 'No user' },
-        { status: 401 }
-      )
+    if (userError || !user) {
+      return NextResponse.json({ error: 'No user' }, { status: 401 })
     }
 
     const { data: tokenRow, error } = await supabase
@@ -56,7 +52,6 @@ export async function GET(request: NextRequest) {
     })
 
     const now = new Date()
-
     const future = new Date()
     future.setDate(future.getDate() + 35)
 
@@ -73,10 +68,8 @@ export async function GET(request: NextRequest) {
       response.data.items?.map((event) => ({
         id: event.id,
         title: event.summary || 'Busy',
-        start:
-          event.start?.dateTime || event.start?.date || '',
-        end:
-          event.end?.dateTime || event.end?.date || '',
+        start: event.start?.dateTime || event.start?.date || '',
+        end: event.end?.dateTime || event.end?.date || '',
       })) || []
 
     return NextResponse.json({
