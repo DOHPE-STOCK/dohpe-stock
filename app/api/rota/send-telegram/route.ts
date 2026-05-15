@@ -109,20 +109,37 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
             style: {
               display: 'flex',
               alignItems: 'center',
-              gap: 18,
+              gap: 22,
             },
           },
 
-          el('img', {
-            src: logoUrl,
-            width: 76,
-            height: 76,
-            style: {
-              borderRadius: 999,
-              objectFit: 'cover',
-              border: '4px solid white',
+          el(
+            'div',
+            {
+              style: {
+                width: 98,
+                height: 98,
+                borderRadius: 999,
+                background: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+                boxShadow: '0 6px 18px rgba(15, 23, 42, 0.12)',
+              },
             },
-          }),
+            el('img', {
+              src: logoUrl,
+              width: 98,
+              height: 98,
+              style: {
+                width: 98,
+                height: 98,
+                borderRadius: 999,
+                objectFit: 'cover',
+              },
+            })
+          ),
 
           el(
             'div',
