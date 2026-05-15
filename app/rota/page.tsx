@@ -381,7 +381,7 @@ function telegramShiftTimeLabel(shift: Shift, opening?: OpeningTime, closed = fa
 
 function openingTimeLabel(opening: OpeningTime, mobileFull = false, closed = false) {
   if (closed) return 'Closed'
-  return mobileFull ? `${opening.open} - ${opening.close}` : `${shortTime(opening.open)}-${shortTime(opening.close)}`
+  return mobileFull ? `${opening.open}-${opening.close}` : `${shortTime(opening.open)}-${shortTime(opening.close)}`
 }
 
 function money(value: number) {
@@ -1304,9 +1304,10 @@ export default function RotaPage() {
   }
 
   function ShiftEditor() {
+    const endTimePickerRef = useRef<TimePickerFieldHandle | null>(null)
+
     if (!activeEditor || !draftShift) return null
 
-    const endTimePickerRef = useRef<TimePickerFieldHandle | null>(null)
     const week = getWeekFromId(activeEditor.weekId)
     const actualDate = addDays(week, activeEditor.dayIndex)
     const events = calendarEvents[getDayId(week, activeEditor.dayIndex)] || []
@@ -1659,8 +1660,7 @@ export default function RotaPage() {
     const opening = getOpening(company, dayIndex)
     const closed = isDayClosed(company, week, dayIndex)
     const events = calendarEvents[getDayId(week, dayIndex)] || []
-    const openingShortLabel = openingTimeLabel(opening, false, closed)
-    const openingMobileLabel = openingTimeLabel(opening, true, closed)
+    const openingFullLabel = openingTimeLabel(opening, true, closed)
     const weekId = getWeekId(week)
     const expanded =
       expandedDay?.company === company &&
@@ -1686,11 +1686,8 @@ export default function RotaPage() {
         <div className="mb-2">
           <div className="flex min-w-0 items-baseline justify-between gap-2">
             <p className="text-sm font-black">{dayNames[dayIndex]}</p>
-            <span className="shrink-0 text-[11px] font-black text-cyan-700 xl:hidden">
-              {openingMobileLabel}
-            </span>
-            <span className="hidden shrink-0 text-[11px] font-black text-cyan-700 xl:inline">
-              {openingShortLabel}
+            <span className="shrink-0 text-[11px] font-black text-cyan-700">
+              {openingFullLabel}
             </span>
           </div>
           <p className="text-xs font-bold text-neutral-400">
