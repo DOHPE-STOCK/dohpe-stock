@@ -1003,9 +1003,16 @@ export default function RotaPage() {
     const current = getDayShiftsByWeekId(activeEditor.company, activeEditor.weekId, activeEditor.dayIndex)
     const savedShift = { ...draftShift, saved: true }
 
-    const next = activeEditor.isNew
-      ? [...current, savedShift]
-      : current.map((shift) => (shift.id === activeEditor.shiftId ? savedShift : shift))
+    const next = (
+  activeEditor.isNew
+    ? [...current, savedShift]
+    : current.map((shift) => (shift.id === activeEditor.shiftId ? savedShift : shift))
+).sort((a, b) => {
+  if (a.type === 'holiday' && b.type !== 'holiday') return 1
+  if (a.type !== 'holiday' && b.type === 'holiday') return -1
+
+  return timeToMinutes(a.start) - timeToMinutes(b.start)
+})
 
     setDayShifts(activeEditor.company, week, activeEditor.dayIndex, next)
     reopenSpecificDay(activeEditor.company, week, activeEditor.dayIndex)
@@ -1677,9 +1684,9 @@ export default function RotaPage() {
         onClick={() => toggleExpandedDay(company, week, dayIndex)}
       >
         <div className="mb-2">
-          <div className="flex min-w-0 items-baseline justify-between gap-2">
+          <div className="flex min-w-0 items-baseline justify-between gap-1">
             <p className="text-sm font-black">{dayNames[dayIndex]}</p>
-            <span className="shrink-0 text-[11px] font-black text-cyan-700">
+            <span className="shrink-0 pr-1 text-[11px] font-black text-cyan-700">
               {openingFullLabel}
             </span>
           </div>
