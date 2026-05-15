@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-export async function GET(request: Request) {
+export async function POST(request: Request) {
   try {
     const authHeader = request.headers.get('authorization') || ''
     const accessToken = authHeader.replace('Bearer ', '').trim()
@@ -15,6 +15,20 @@ export async function GET(request: Request) {
       return NextResponse.json(
         { ok: false, message: 'Missing auth token.' },
         { status: 401 }
+      )
+    }
+
+    const body = await request.json()
+
+    const title = String(body.title || '').trim()
+    const start = String(body.start || '')
+    const end = String(body.end || '')
+    const allDay = Boolean(body.allDay)
+
+    if (!title || !start || !end) {
+      return NextResponse.json(
+        { ok: false, message: 'Missing event fields.' },
+        { status: 400 }
       )
     }
 
@@ -39,48 +53,62 @@ export async function GET(request: Request) {
       )
     }
 
-    const calendarResponse = await fetch(
-      'https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=2500&singleEvents=true&orderBy=startTime',
+    const eventPayload = allDay
+      ? {
+          summary: title,
+          start: {
+            date: start,
+          },
+          end: {
+            date: end,
+          },
+        }
+      : {
+          summary: title,
+          start: {
+            dateTime: start,
+            timeZone: 'Europe/London',
+          },
+          end: {
+            dateTime: end,
+            timeZone: 'Europe/London',
+          },
+        }
+
+    const googleResponse = await fetch(
+      'https://www.googleapis.com/calendar/v3/calendars/primary/events',
       {
+        method: 'POST',
         headers: {
           Authorization: `Bearer ${providerToken}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify(eventPayload),
       }
     )
 
-    const calendarData = await calendarResponse.json()
+    const googleData = await googleResponse.json()
 
-    if (!calendarResponse.ok) {
+    if (!googleResponse.ok) {
       return NextResponse.json(
         {
           ok: false,
-          message: 'Google Calendar fetch failed.',
-          calendarData,
+          message: 'Google Calendar create failed.',
+          googleData,
         },
         { status: 500 }
       )
     }
 
-    const events =
-      Array.isArray(calendarData.items)
-        ? calendarData.items.map((event: any) => ({
-            id: event.id,
-            title: event.summary || 'Busy',
-            start: event.start?.dateTime || event.start?.date || '',
-            end: event.end?.dateTime || event.end?.date || '',
-          }))
-        : []
-
     return NextResponse.json({
       ok: true,
-      email: session?.user?.email || '',
-      events,
+      event: googleData,
     })
   } catch (error: any) {
     return NextResponse.json(
       {
         ok: false,
-        message: error.message || 'Calendar fetch failed.',
+        message: error.message || 'Create event failed.',
       },
       { status: 500 }
     )
