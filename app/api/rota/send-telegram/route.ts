@@ -28,6 +28,14 @@ function getChatId(company: string) {
 
 function getCompanyLogo(company: string) {
   if (company === 'dlretail') {
+    return 'https://hmeaanftisuhcdrzmpil.supabase.co/storage/v1/object/public/item-images/DLR%20logo%20Round.png'
+  }
+
+  return 'https://hmeaanftisuhcdrzmpil.supabase.co/storage/v1/object/public/item-images/DOHPE%20dragon%20logo%20round.png'
+}
+
+function getCompanyLogoFallback(company: string) {
+  if (company === 'dlretail') {
     return 'https://hmeaanftisuhcdrzmpil.supabase.co/storage/v1/object/public/item-images/thumbs/DLR%20logo%20Round.png'
   }
 
@@ -44,25 +52,29 @@ function el(type: string, props: any, ...children: any[]) {
 }
 
 async function getLogoDataUrl(company: string) {
-  try {
-    const logoUrl = getCompanyLogo(company)
-    const response = await fetch(logoUrl, { cache: 'no-store' })
+  const urls = [getCompanyLogo(company), getCompanyLogoFallback(company)]
 
-    if (!response.ok) return logoUrl
+  for (const logoUrl of urls) {
+    try {
+      const response = await fetch(logoUrl, { cache: 'no-store' })
+      if (!response.ok) continue
 
-    const contentType = response.headers.get('content-type') || 'image/png'
-    const arrayBuffer = await response.arrayBuffer()
-    const bytes = new Uint8Array(arrayBuffer)
+      const contentType = response.headers.get('content-type') || 'image/png'
+      const arrayBuffer = await response.arrayBuffer()
+      const bytes = new Uint8Array(arrayBuffer)
 
-    let binary = ''
-    for (let i = 0; i < bytes.length; i += 1) {
-      binary += String.fromCharCode(bytes[i])
+      let binary = ''
+      for (let i = 0; i < bytes.length; i += 1) {
+        binary += String.fromCharCode(bytes[i])
+      }
+
+      return `data:${contentType};base64,${btoa(binary)}`
+    } catch {
+      // try next logo url
     }
-
-    return `data:${contentType};base64,${btoa(binary)}`
-  } catch {
-    return getCompanyLogo(company)
   }
+
+  return getCompanyLogoFallback(company)
 }
 
 function getEmployeeNames(days: RotaDay[], staffNames: string[]) {
@@ -160,7 +172,7 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[], st
                 width: 98,
                 height: 98,
                 borderRadius: 999,
-                objectFit: 'cover',
+                objectFit: 'contain',
               },
             })
           ),
