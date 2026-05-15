@@ -173,13 +173,6 @@ function timeToMinutes(value: string) {
   return h * 60 + m
 }
 
-function shortTime(value: string) {
-  if (!value || !value.includes(':')) return value || ''
-  const [h, m] = value.split(':')
-  if (m === '00') return String(Number(h))
-  return `${Number(h)}:${m}`
-}
-
 function eventDateKey(value: string) {
   if (!value) return ''
 
@@ -293,7 +286,7 @@ const TimePickerField = forwardRef<
           setOpen(false)
 
           if (onAccepted) {
-            window.setTimeout(() => onAccepted(), 150)
+            window.setTimeout(() => onAccepted(), 350)
           }
         }}
         slotProps={{
@@ -366,14 +359,14 @@ function shiftTimeLabel(shift: Shift, opening?: OpeningTime, closed = false) {
     return `${opening.open}-${opening.close}`
   }
 
-  return `${shortTime(shift.start)}-${shortTime(shift.end)}`
+  return `${shift.start}-${shift.end}`
 }
 
 function telegramShiftTimeLabel(shift: Shift, opening?: OpeningTime, closed = false) {
   if (shift.type === 'holiday') return `${formatHours(rawShiftHours(shift))}h`
 
   if (opening && !closed && shift.start === opening.open && shift.end === opening.close) {
-    return 'FULL DAY'
+    return `${opening.open}-${opening.close}`
   }
 
   return `${shift.start}-${shift.end}`
@@ -381,7 +374,7 @@ function telegramShiftTimeLabel(shift: Shift, opening?: OpeningTime, closed = fa
 
 function openingTimeLabel(opening: OpeningTime, mobileFull = false, closed = false) {
   if (closed) return 'Closed'
-  return mobileFull ? `${opening.open}-${opening.close}` : `${shortTime(opening.open)}-${shortTime(opening.close)}`
+  return mobileFull ? `${opening.open}-${opening.close}` : `${opening.open}-${opening.close}`
 }
 
 function money(value: number) {
@@ -1246,7 +1239,7 @@ export default function RotaPage() {
       return {
         day: dayName,
         date: actualDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-        opening: closed ? 'Closed' : `${opening.open} - ${opening.close}`,
+        opening: closed ? 'Closed' : `${opening.open}-${opening.close}`,
         shifts: shifts.map((shift) => {
           const person = staff.find((x) => x.id === shift.staffId)
 
