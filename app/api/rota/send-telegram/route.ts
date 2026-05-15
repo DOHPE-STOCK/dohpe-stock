@@ -20,7 +20,7 @@ type RotaDay = {
 
 function getChatId(company: string) {
   if (company === 'dlretail') {
-    return process.env.TELEGRAM_CHAT_ID_DL_RETAIL || process.env.TELEGRAM_CHAT_ID
+    return process.env.TELEGRAM_CHAT_ID_DLRETAIL || process.env.TELEGRAM_CHAT_ID
   }
 
   return process.env.TELEGRAM_CHAT_ID
