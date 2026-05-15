@@ -1684,7 +1684,7 @@ export default function RotaPage() {
         onClick={() => toggleExpandedDay(company, week, dayIndex)}
       >
         <div className="mb-2">
-          <div className="flex min-w-0 items-baseline justify-between gap-3">
+          <div className="flex min-w-0 items-baseline justify-between gap-0.5">
             <p className="text-sm font-black">{dayNames[dayIndex]}</p>
             <span className="shrink-0 pr-1text-[11px] font-black text-cyan-700">
               {openingFullLabel}
