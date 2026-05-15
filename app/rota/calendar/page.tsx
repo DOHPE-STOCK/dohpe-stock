@@ -18,12 +18,23 @@ function addMonths(date: Date, months: number) {
   return new Date(date.getFullYear(), date.getMonth() + months, 1)
 }
 
+function addDays(date: Date, days: number) {
+  const d = new Date(date)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
 function pad(n: number) {
   return String(n).padStart(2, '0')
 }
 
 function dateKey(date: Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function parseLocalDate(value: string) {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
 }
 
 function eventDateKey(value: string) {
@@ -70,9 +81,11 @@ export default function RotaCalendarPage() {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [connected, setConnected] = useState(false)
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(new Date()))
 
+  const [entryOpen, setEntryOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState(today)
@@ -102,7 +115,6 @@ export default function RotaCalendarPage() {
 
       if (!supabaseToken) {
         setConnected(false)
-        setLoading(false)
         return
       }
 
@@ -133,6 +145,17 @@ export default function RotaCalendarPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  function openAddEntry(date = today) {
+    setTitle('')
+    setStartDate(date)
+    setEndDate(date)
+    setAllDay(true)
+    setStartTime('09:00')
+    setEndTime('10:00')
+    setEntryOpen(true)
+    setStatusMessage('')
   }
 
   async function createEvent() {
@@ -191,6 +214,7 @@ export default function RotaCalendarPage() {
         throw new Error(data?.message || 'Could not save calendar entry.')
       }
 
+      setEntryOpen(false)
       setTitle('')
       setStartDate(today)
       setEndDate(today)
@@ -207,6 +231,47 @@ export default function RotaCalendarPage() {
     }
   }
 
+  async function deleteEvent(eventId: string) {
+    const confirmed = window.confirm('Delete this Google Calendar entry?')
+    if (!confirmed) return
+
+    try {
+      setDeleting(true)
+      setStatusMessage('')
+
+      const supabaseToken = await getSupabaseAccessToken()
+
+      if (!supabaseToken) {
+        setStatusMessage('Log in again before deleting.')
+        setConnected(false)
+        return
+      }
+
+      const response = await fetch('/api/rota/google/delete-event', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${supabaseToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ eventId }),
+      })
+
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not delete calendar entry.')
+      }
+
+      setStatusMessage('Calendar entry deleted.')
+      await loadEvents()
+    } catch (error: any) {
+      console.error(error)
+      setStatusMessage(error.message || 'Could not delete calendar entry.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   function openGoogleCalendar() {
     window.open('https://calendar.google.com/calendar/u/0/r/month', '_blank')
   }
@@ -215,11 +280,27 @@ export default function RotaCalendarPage() {
     const grouped: Record<string, CalendarEvent[]> = {}
 
     for (const event of events) {
-      const key = eventDateKey(event.start)
-      if (!key) continue
+      const startKey = eventDateKey(event.start)
+      const endKey = eventDateKey(event.end)
 
-      if (!grouped[key]) grouped[key] = []
-      grouped[key].push(event)
+      if (!startKey) continue
+
+      const isAllDay = /^\d{4}-\d{2}-\d{2}$/.test(event.start)
+
+      if (isAllDay && endKey && endKey !== startKey) {
+        let current = parseLocalDate(startKey)
+        const exclusiveEnd = parseLocalDate(endKey)
+
+        while (current < exclusiveEnd) {
+          const key = dateKey(current)
+          if (!grouped[key]) grouped[key] = []
+          grouped[key].push(event)
+          current = addDays(current, 1)
+        }
+      } else {
+        if (!grouped[startKey]) grouped[startKey] = []
+        grouped[startKey].push(event)
+      }
     }
 
     for (const key of Object.keys(grouped)) {
@@ -248,6 +329,115 @@ export default function RotaCalendarPage() {
 
   return (
     <main className="min-h-screen bg-neutral-100 p-3 text-neutral-950 sm:p-6">
+      {entryOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-3 py-16">
+          <div className="w-[min(560px,94vw)] rounded-3xl bg-white p-4 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-600">
+                  Google Calendar
+                </p>
+                <h2 className="text-2xl font-black">Add calendar entry</h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setEntryOpen(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-red-100 text-sm font-black text-red-600"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Entry title"
+                className="w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
+              />
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="text-xs font-black text-neutral-500">
+                  Start date
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(event) => {
+                      setStartDate(event.target.value)
+                      if (endDate < event.target.value) setEndDate(event.target.value)
+                    }}
+                    className="mt-1 w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold text-neutral-900"
+                  />
+                </label>
+
+                <label className="text-xs font-black text-neutral-500">
+                  End date
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(event) => setEndDate(event.target.value)}
+                    className="mt-1 w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold text-neutral-900"
+                  />
+                </label>
+              </div>
+
+              <label className="flex items-center gap-2 rounded-2xl bg-neutral-100 px-4 py-3 text-sm font-black text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={allDay}
+                  onChange={(event) => setAllDay(event.target.checked)}
+                />
+                All day
+              </label>
+
+              {!allDay && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-black text-neutral-500">
+                    Start time
+                    <input
+                      type="time"
+                      value={startTime}
+                      onChange={(event) => setStartTime(event.target.value)}
+                      className="mt-1 w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold text-neutral-900"
+                    />
+                  </label>
+
+                  <label className="text-xs font-black text-neutral-500">
+                    End time
+                    <input
+                      type="time"
+                      value={endTime}
+                      onChange={(event) => setEndTime(event.target.value)}
+                      className="mt-1 w-full rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold text-neutral-900"
+                    />
+                  </label>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={createEvent}
+                  disabled={!connected || saving}
+                  className="flex-1 rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
+                >
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setEntryOpen(false)}
+                  className="rounded-2xl bg-neutral-100 px-5 py-3 text-sm font-black text-neutral-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mx-auto max-w-7xl space-y-4">
         <div className="rounded-3xl bg-black p-5 text-white shadow-2xl sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -267,6 +457,15 @@ export default function RotaCalendarPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => openAddEntry()}
+                disabled={!connected}
+                className="rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:bg-neutral-600 disabled:text-neutral-300"
+              >
+                Add entry
+              </button>
+
               <a
                 href="/api/rota/google/connect"
                 className="rounded-2xl bg-blue-500 px-5 py-3 text-sm font-black text-white"
@@ -302,84 +501,13 @@ export default function RotaCalendarPage() {
               </a>
             </div>
           </div>
-        </div>
-
-        <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
-          <div className="mb-3">
-            <h2 className="text-xl font-black">Add calendar entry</h2>
-            <p className="text-sm font-bold text-neutral-500">
-              Saves directly to Google Calendar. For one day, use the same start and end date.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_180px_180px_120px_140px]">
-            <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Entry title"
-              className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
-            />
-
-            <input
-              type="date"
-              value={startDate}
-              onChange={(event) => {
-                setStartDate(event.target.value)
-                if (endDate < event.target.value) setEndDate(event.target.value)
-              }}
-              className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
-            />
-
-            <input
-              type="date"
-              value={endDate}
-              onChange={(event) => setEndDate(event.target.value)}
-              className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
-            />
-
-            <label className="flex items-center justify-center gap-2 rounded-2xl bg-neutral-100 px-4 py-3 text-sm font-black text-neutral-700">
-              <input
-                type="checkbox"
-                checked={allDay}
-                onChange={(event) => setAllDay(event.target.checked)}
-              />
-              All day
-            </label>
-
-            <button
-              type="button"
-              onClick={createEvent}
-              disabled={!connected || saving}
-              className="rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
-            >
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-
-          {!allDay && (
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 md:w-[374px]">
-              <input
-                type="time"
-                value={startTime}
-                onChange={(event) => setStartTime(event.target.value)}
-                className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
-              />
-
-              <input
-                type="time"
-                value={endTime}
-                onChange={(event) => setEndTime(event.target.value)}
-                className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
-              />
-            </div>
-          )}
 
           {statusMessage && (
-            <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-bold text-neutral-700">
+            <div className="mt-4 rounded-2xl bg-white/10 p-3 text-sm font-bold">
               {statusMessage}
             </div>
           )}
-        </section>
+        </div>
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-3 shadow-xl sm:p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -429,7 +557,8 @@ export default function RotaCalendarPage() {
               return (
                 <div
                   key={key}
-                  className={`min-h-28 rounded-2xl border p-2 sm:min-h-36 ${
+                  onDoubleClick={() => connected && openAddEntry(key)}
+                  className={`min-h-28 cursor-pointer rounded-2xl border p-2 sm:min-h-36 ${
                     isToday
                       ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200'
                       : isThisMonth
@@ -438,7 +567,19 @@ export default function RotaCalendarPage() {
                   }`}
                 >
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-xs font-black">{day.getDate()}</span>
+                    <button
+                      type="button"
+                      onClick={() => connected && openAddEntry(key)}
+                      className={`rounded-full px-2 py-0.5 text-xs font-black ${
+                        isToday
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : isThisMonth
+                            ? 'text-neutral-800 hover:bg-neutral-200'
+                            : 'text-neutral-300'
+                      }`}
+                    >
+                      {day.getDate()}
+                    </button>
 
                     {dayEvents.length > 0 && (
                       <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-black text-blue-700">
@@ -450,9 +591,19 @@ export default function RotaCalendarPage() {
                   <div className="space-y-1">
                     {dayEvents.slice(0, 4).map((event) => (
                       <div
-                        key={event.id}
-                        className="rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-black leading-tight text-blue-700"
+                        key={`${event.id}-${key}`}
+                        onClick={(clickEvent) => clickEvent.stopPropagation()}
+                        className="relative rounded-lg bg-blue-50 px-2 py-1 pr-6 text-[10px] font-black leading-tight text-blue-700"
                       >
+                        <button
+                          type="button"
+                          disabled={deleting}
+                          onClick={() => deleteEvent(event.id)}
+                          className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-100 text-[10px] font-black text-red-600 disabled:opacity-40"
+                        >
+                          ×
+                        </button>
+
                         <p className="truncate">{event.title || 'Busy'}</p>
                         <p className="truncate text-[9px] opacity-80">
                           {eventTime(event.start)}
@@ -473,6 +624,10 @@ export default function RotaCalendarPage() {
               )
             })}
           </div>
+
+          <p className="mt-3 text-xs font-bold text-neutral-400">
+            Click the date number or double-click a day to add an entry. Press × on an entry to delete it.
+          </p>
         </section>
       </div>
     </main>
