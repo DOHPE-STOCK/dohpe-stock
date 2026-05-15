@@ -5,12 +5,107 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 
+type StaffUser = {
+  id: string
+  name: string
+  pin_code: string
+  is_active: boolean
+  created_at?: string
+  must_change_pin?: boolean
+  pin_updated_at?: string | null
+  role?: string
+  permissions?: Record<string, boolean>
+}
+
+const permissionOptions = [
+  { key: 'working', label: 'Working' },
+  { key: 'review', label: 'Review' },
+  { key: 'finalised', label: 'Finalised' },
+  { key: 'reports', label: 'Reports' },
+  { key: 'settings', label: 'Settings' },
+  { key: 'scanner', label: 'Scanner' },
+  { key: 'checkout', label: 'Checkout' },
+  { key: 'integrations', label: 'Integrations' },
+]
+
+const roleOptions = ['admin', 'manager', 'staff', 'checkout', 'scanner']
+
+function defaultPermissions(role = 'staff') {
+  if (role === 'admin') {
+    return {
+      working: true,
+      review: true,
+      finalised: true,
+      reports: true,
+      settings: true,
+      scanner: true,
+      checkout: true,
+      integrations: true,
+    }
+  }
+
+  if (role === 'manager') {
+    return {
+      working: true,
+      review: true,
+      finalised: true,
+      reports: true,
+      settings: false,
+      scanner: true,
+      checkout: true,
+      integrations: false,
+    }
+  }
+
+  if (role === 'checkout') {
+    return {
+      working: false,
+      review: false,
+      finalised: false,
+      reports: false,
+      settings: false,
+      scanner: false,
+      checkout: true,
+      integrations: false,
+    }
+  }
+
+  if (role === 'scanner') {
+    return {
+      working: true,
+      review: false,
+      finalised: false,
+      reports: false,
+      settings: false,
+      scanner: true,
+      checkout: false,
+      integrations: false,
+    }
+  }
+
+  return {
+    working: true,
+    review: false,
+    finalised: false,
+    reports: false,
+    settings: false,
+    scanner: true,
+    checkout: false,
+    integrations: false,
+  }
+}
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<any>(null)
+  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([])
   const [message, setMessage] = useState('')
+  const [newStaffName, setNewStaffName] = useState('')
+  const [newStaffPin, setNewStaffPin] = useState('')
+  const [savingStaffId, setSavingStaffId] = useState('')
 
   useEffect(() => {
     fetchSettings()
+    fetchStaffUsers()
   }, [])
 
   useEffect(() => {
@@ -38,6 +133,26 @@ export default function SettingsPage() {
     setSettings(data)
   }
 
+  async function fetchStaffUsers() {
+    const { data, error } = await supabase
+      .from('staff_users')
+      .select('*')
+      .order('name', { ascending: true })
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    setStaffUsers(
+      (data || []).map((user: StaffUser) => ({
+        ...user,
+        role: user.role || 'staff',
+        permissions: user.permissions || defaultPermissions(user.role || 'staff'),
+      }))
+    )
+  }
+
   async function saveSettings() {
     const { error } = await supabase
       .from('app_settings')
@@ -59,6 +174,126 @@ export default function SettingsPage() {
     }
 
     setMessage('Settings saved')
+  }
+
+  async function addStaffUser() {
+    const name = newStaffName.trim()
+    const pin = newStaffPin.trim()
+
+    if (!name) {
+      setMessage('Enter a staff name')
+      return
+    }
+
+    if (!pin || pin.length < 4) {
+      setMessage('Enter a PIN of at least 4 digits')
+      return
+    }
+
+    const role = 'staff'
+
+    const { error } = await supabase.from('staff_users').insert({
+      name,
+      pin_code: pin,
+      is_active: true,
+      must_change_pin: true,
+      pin_updated_at: new Date().toISOString(),
+      role,
+      permissions: defaultPermissions(role),
+    })
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    setNewStaffName('')
+    setNewStaffPin('')
+    setMessage(`Staff user ${name} added`)
+    fetchStaffUsers()
+  }
+
+  async function saveStaffUser(user: StaffUser) {
+    setSavingStaffId(user.id)
+
+    const { error } = await supabase
+      .from('staff_users')
+      .update({
+        name: user.name,
+        pin_code: user.pin_code,
+        is_active: user.is_active,
+        must_change_pin: Boolean(user.must_change_pin),
+        role: user.role || 'staff',
+        permissions: user.permissions || {},
+        pin_updated_at: new Date().toISOString(),
+      })
+      .eq('id', user.id)
+
+    setSavingStaffId('')
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    setMessage(`${user.name} saved`)
+    fetchStaffUsers()
+  }
+
+  async function resetPin(user: StaffUser) {
+    const newPin = window.prompt(`Enter new PIN for ${user.name}`)
+
+    if (!newPin) return
+
+    if (newPin.trim().length < 4) {
+      setMessage('PIN must be at least 4 digits')
+      return
+    }
+
+    const updatedUser = {
+      ...user,
+      pin_code: newPin.trim(),
+      must_change_pin: true,
+      pin_updated_at: new Date().toISOString(),
+    }
+
+    await saveStaffUser(updatedUser)
+  }
+
+  function updateStaffUser(id: string, patch: Partial<StaffUser>) {
+    setStaffUsers((current) =>
+      current.map((user) => (user.id === id ? { ...user, ...patch } : user))
+    )
+  }
+
+  function updateStaffRole(id: string, role: string) {
+    setStaffUsers((current) =>
+      current.map((user) =>
+        user.id === id
+          ? {
+              ...user,
+              role,
+              permissions: defaultPermissions(role),
+            }
+          : user
+      )
+    )
+  }
+
+  function togglePermission(id: string, permissionKey: string) {
+    setStaffUsers((current) =>
+      current.map((user) => {
+        if (user.id !== id) return user
+
+        return {
+          ...user,
+          permissions: {
+            ...(user.permissions || {}),
+            [permissionKey]: !Boolean(user.permissions?.[permissionKey]),
+          },
+        }
+      })
+    )
   }
 
   function updateField(field: string, value: any) {
@@ -177,7 +412,7 @@ export default function SettingsPage() {
             <h1 className="text-2xl font-bold">Settings</h1>
 
             <p className="text-sm text-zinc-400">
-              AI rules, image export defaults and workflow settings
+              AI rules, image export defaults, users, permissions and workflow settings
             </p>
           </div>
 
@@ -222,7 +457,223 @@ export default function SettingsPage() {
             </span>
           </div>
         </Link>
+
+        <section className="rounded-xl border border-emerald-800 bg-emerald-950 p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-black text-emerald-100">
+                Users & Roles
+              </h2>
+
+              <p className="mt-1 text-sm text-emerald-200">
+                Manage staff PINs, active users, roles and page permissions.
+              </p>
+            </div>
+
+            <span className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-black text-white">
+              Below
+            </span>
+          </div>
+        </section>
       </div>
+
+      <section className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+              Users & Roles
+            </h2>
+
+            <p className="mt-1 text-sm text-zinc-500">
+              Email login controls device/app access. Staff PIN controls who is using the app and what they can access.
+            </p>
+          </div>
+
+          <button
+            onClick={fetchStaffUsers}
+            className="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-bold hover:bg-zinc-700"
+          >
+            Refresh Users
+          </button>
+        </div>
+
+        <div className="mb-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+          <h3 className="mb-3 text-sm font-bold text-zinc-300">
+            Add Staff User
+          </h3>
+
+          <div className="grid gap-3 md:grid-cols-[1fr_180px_160px]">
+            <input
+              value={newStaffName}
+              onChange={(e) => setNewStaffName(e.target.value)}
+              placeholder="Staff name"
+              className="h-10 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-white"
+            />
+
+            <input
+              value={newStaffPin}
+              onChange={(e) => setNewStaffPin(e.target.value)}
+              placeholder="PIN"
+              type="password"
+              className="h-10 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-white"
+            />
+
+            <button
+              onClick={addStaffUser}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500"
+            >
+              Add User
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {staffUsers.length === 0 ? (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-sm font-bold text-zinc-500">
+              No staff users found.
+            </div>
+          ) : (
+            staffUsers.map((user) => (
+              <div
+                key={user.id}
+                className={`rounded-xl border p-4 ${
+                  user.is_active
+                    ? 'border-zinc-800 bg-zinc-950'
+                    : 'border-red-900 bg-red-950/30'
+                }`}
+              >
+                <div className="grid gap-3 xl:grid-cols-[1fr_160px_120px_160px]">
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                      Name
+                    </label>
+
+                    <input
+                      value={user.name || ''}
+                      onChange={(e) =>
+                        updateStaffUser(user.id, { name: e.target.value })
+                      }
+                      className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-white outline-none focus:border-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                      Role
+                    </label>
+
+                    <select
+                      value={user.role || 'staff'}
+                      onChange={(e) => updateStaffRole(user.id, e.target.value)}
+                      className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-white outline-none focus:border-white"
+                    >
+                      {roleOptions.map((role) => (
+                        <option key={role} value={role}>
+                          {role}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                      Active
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateStaffUser(user.id, {
+                          is_active: !user.is_active,
+                        })
+                      }
+                      className={`h-10 w-full rounded-lg px-3 text-sm font-black ${
+                        user.is_active
+                          ? 'bg-green-700 text-white'
+                          : 'bg-red-800 text-white'
+                      }`}
+                    >
+                      {user.is_active ? 'Active' : 'Disabled'}
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                      Actions
+                    </label>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => resetPin(user)}
+                        className="h-10 flex-1 rounded-lg bg-yellow-700 px-3 text-xs font-black text-white hover:bg-yellow-600"
+                      >
+                        Reset PIN
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => saveStaffUser(user)}
+                        disabled={savingStaffId === user.id}
+                        className="h-10 flex-1 rounded-lg bg-blue-600 px-3 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-40"
+                      >
+                        {savingStaffId === user.id ? 'Saving' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-500">
+                    Permissions
+                  </p>
+
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    {permissionOptions.map((permission) => {
+                      const enabled = Boolean(user.permissions?.[permission.key])
+
+                      return (
+                        <button
+                          key={permission.key}
+                          type="button"
+                          onClick={() =>
+                            togglePermission(user.id, permission.key)
+                          }
+                          className={`rounded-lg px-3 py-2 text-left text-xs font-black ${
+                            enabled
+                              ? 'bg-emerald-900 text-emerald-100'
+                              : 'bg-zinc-800 text-zinc-500'
+                          }`}
+                        >
+                          {enabled ? '✓ ' : '— '}
+                          {permission.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-zinc-500">
+                  <span>ID: {user.id}</span>
+
+                  {user.must_change_pin && (
+                    <span className="rounded bg-yellow-950 px-2 py-1 text-yellow-300">
+                      Must change PIN
+                    </span>
+                  )}
+
+                  {user.pin_updated_at && (
+                    <span>
+                      PIN updated:{' '}
+                      {new Date(user.pin_updated_at).toLocaleString('en-GB')}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
