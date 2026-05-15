@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import dayjs, { Dayjs } from 'dayjs'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
@@ -79,6 +79,10 @@ type ExpandedDay = {
   company: CompanyKey
   weekId: string
   dayIndex: number
+}
+
+type TimePickerFieldHandle = {
+  openPicker: () => void
 }
 
 const ROTA_SETTINGS_TABLE = 'rota_settings'
@@ -230,15 +234,15 @@ function parsePickerTime(value: string) {
   return parsed.isValid() ? parsed : null
 }
 
-function TimePickerField({
-  value,
-  onChange,
-  disabled = false,
-}: {
-  value: string
-  onChange: (value: string) => void
-  disabled?: boolean
-}) {
+const TimePickerField = forwardRef<
+  TimePickerFieldHandle,
+  {
+    value: string
+    onChange: (value: string) => void
+    disabled?: boolean
+    onAccepted?: () => void
+  }
+>(function TimePickerField({ value, onChange, disabled = false, onAccepted }, ref) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<'hours' | 'minutes'>('hours')
   const [tempValue, setTempValue] = useState<Dayjs | null>(parsePickerTime(value))
@@ -249,6 +253,10 @@ function TimePickerField({
     setView('hours')
     setOpen(true)
   }
+
+  useImperativeHandle(ref, () => ({
+    openPicker,
+  }))
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -264,12 +272,6 @@ function TimePickerField({
         disabled={disabled}
         onOpen={openPicker}
         onClose={() => {
-          if (view === 'hours') {
-            setView('minutes')
-            window.setTimeout(() => setOpen(true), 0)
-            return
-          }
-
           setOpen(false)
         }}
         onViewChange={(newView) => {
@@ -289,6 +291,10 @@ function TimePickerField({
           if (!newValue || !newValue.isValid()) return
           onChange(newValue.format('HH:mm'))
           setOpen(false)
+
+          if (onAccepted) {
+            window.setTimeout(() => onAccepted(), 150)
+          }
         }}
         slotProps={{
           actionBar: {
@@ -322,7 +328,7 @@ function TimePickerField({
       />
     </LocalizationProvider>
   )
-}
+})
 
 function rawShiftHours(shift: Shift) {
   if (shift.type === 'holiday') return Number(shift.holidayHours || 0)
@@ -357,7 +363,7 @@ function shiftTimeLabel(shift: Shift, opening?: OpeningTime, closed = false) {
   if (shift.type === 'holiday') return `HOLIDAY ${formatHours(rawShiftHours(shift))}h`
 
   if (opening && !closed && shift.start === opening.open && shift.end === opening.close) {
-    return 'FULL DAY'
+    return `${opening.open}-${opening.close}`
   }
 
   return `${shortTime(shift.start)}-${shortTime(shift.end)}`
@@ -1300,6 +1306,7 @@ export default function RotaPage() {
   function ShiftEditor() {
     if (!activeEditor || !draftShift) return null
 
+    const endTimePickerRef = useRef<TimePickerFieldHandle | null>(null)
     const week = getWeekFromId(activeEditor.weekId)
     const actualDate = addDays(week, activeEditor.dayIndex)
     const events = calendarEvents[getDayId(week, activeEditor.dayIndex)] || []
@@ -1411,8 +1418,10 @@ export default function RotaPage() {
               <TimePickerField
                 value={draftShift.start}
                 onChange={(value) => updateDraftShift({ start: value })}
+                onAccepted={() => endTimePickerRef.current?.openPicker()}
               />
               <TimePickerField
+                ref={endTimePickerRef}
                 value={draftShift.end}
                 onChange={(value) => updateDraftShift({ end: value })}
               />
@@ -1625,6 +1634,25 @@ export default function RotaPage() {
     )
   }
 
+  function CalendarEventPill({ event }: { event: CalendarEvent }) {
+    return (
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="group relative z-10 min-h-8 rounded-lg bg-blue-50 px-1.5 py-1 text-[10px] font-black leading-tight text-blue-700 transition-all duration-150 hover:z-30 hover:min-h-20 hover:scale-[1.03] hover:bg-blue-100 hover:p-2 hover:shadow-2xl"
+      >
+        <div className="flex min-h-6 flex-col justify-center">
+          <span className="truncate group-hover:whitespace-normal group-hover:break-words">
+            {event.title}
+          </span>
+          <span className="truncate text-[9px] opacity-80 group-hover:whitespace-normal">
+            {event.start}
+            {event.end && event.end !== 'All day' ? `–${event.end}` : ''}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
   function DayCard({ company, week, dayIndex }: { company: CompanyKey; week: Date; dayIndex: number }) {
     const actualDate = addDays(week, dayIndex)
     const shifts = getDayShifts(company, week, dayIndex)
@@ -1702,16 +1730,7 @@ export default function RotaPage() {
           })}
 
           {events.slice(0, 2).map((event) => (
-            <div
-              key={event.id}
-              className="flex min-h-8 flex-col justify-center rounded-lg bg-blue-50 px-1.5 py-1 text-[10px] font-black leading-tight text-blue-700"
-            >
-              <span className="truncate">{event.title}</span>
-              <span className="truncate text-[9px] opacity-80">
-                {event.start}
-                {event.end && event.end !== 'All day' ? `–${event.end}` : ''}
-              </span>
-            </div>
+            <CalendarEventPill key={event.id} event={event} />
           ))}
 
           {events.length > 2 && (
