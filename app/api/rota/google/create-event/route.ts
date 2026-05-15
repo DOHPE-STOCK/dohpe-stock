@@ -1,19 +1,27 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+function addDaysToDateString(value: string, days: number) {
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  date.setDate(date.getDate() + days)
+
+  const yyyy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+
+  return `${yyyy}-${mm}-${dd}`
+}
 
 export async function POST(request: Request) {
   try {
     const authHeader = request.headers.get('authorization') || ''
-    const accessToken = authHeader.replace('Bearer ', '').trim()
+    const googleToken = authHeader.replace('Bearer ', '').trim()
 
-    if (!accessToken) {
+    if (!googleToken) {
       return NextResponse.json(
-        { ok: false, message: 'Missing auth token.' },
+        { ok: false, message: 'Missing Google token.' },
         { status: 401 }
       )
     }
@@ -21,73 +29,39 @@ export async function POST(request: Request) {
     const body = await request.json()
 
     const title = String(body.title || '').trim()
-    const start = String(body.start || '')
-    const end = String(body.end || '')
-    const allDay = Boolean(body.allDay)
+    const startDate = String(body.startDate || '')
+    const endDate = String(body.endDate || '')
 
-    if (!title || !start || !end) {
+    if (!title || !startDate || !endDate) {
       return NextResponse.json(
-        { ok: false, message: 'Missing event fields.' },
+        { ok: false, message: 'Missing title, start date, or end date.' },
         { status: 400 }
       )
     }
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+    const googlePayload = {
+      summary: title,
+      start: {
+        date: startDate,
       },
-    })
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
-    const providerToken = session?.provider_token
-
-    if (!providerToken) {
-      return NextResponse.json(
-        { ok: false, message: 'Missing Google provider token.' },
-        { status: 401 }
-      )
+      end: {
+        date: addDaysToDateString(endDate, 1),
+      },
     }
-
-    const eventPayload = allDay
-      ? {
-          summary: title,
-          start: {
-            date: start,
-          },
-          end: {
-            date: end,
-          },
-        }
-      : {
-          summary: title,
-          start: {
-            dateTime: start,
-            timeZone: 'Europe/London',
-          },
-          end: {
-            dateTime: end,
-            timeZone: 'Europe/London',
-          },
-        }
 
     const googleResponse = await fetch(
       'https://www.googleapis.com/calendar/v3/calendars/primary/events',
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${providerToken}`,
+          Authorization: `Bearer ${googleToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(eventPayload),
+        body: JSON.stringify(googlePayload),
       }
     )
 
-    const googleData = await googleResponse.json()
+    const googleData = await googleResponse.json().catch(() => null)
 
     if (!googleResponse.ok) {
       return NextResponse.json(
@@ -96,7 +70,7 @@ export async function POST(request: Request) {
           message: 'Google Calendar create failed.',
           googleData,
         },
-        { status: 500 }
+        { status: googleResponse.status }
       )
     }
 
@@ -108,7 +82,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        message: error.message || 'Create event failed.',
+        message: error.message || 'Create calendar entry failed.',
       },
       { status: 500 }
     )
