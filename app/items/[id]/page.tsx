@@ -26,6 +26,7 @@ const reportingCategories = [
   'Hoodie',
   'Jacket',
   'Jeans',
+  'Jersey',
   'Jewellery',
   'Jorts',
   'Knitwear',
@@ -137,6 +138,7 @@ const measurementMap: Record<string, string[]> = {
   'Polo Shirt': sleevedTopMeasurements,
   'Rugby Shirt': sleevedTopMeasurements,
   'Football Shirt': sleevedTopMeasurements,
+  Jersey: sleevedTopMeasurements,
   Blazer: sleevedTopMeasurements,
   'Workwear Jacket': sleevedTopMeasurements,
 
@@ -789,10 +791,15 @@ export default function ItemPage() {
 
     if (!confirmed) return
 
+    const now = new Date().toISOString()
+
     const updatedItem = {
       ...item,
       status: 'review',
       last_saved_by: staff.id,
+      sent_to_review_by: staff.id,
+      sent_to_review_at: now,
+      updated_at: now,
     }
 
     const { error } = await supabase
