@@ -72,9 +72,14 @@ export default function RotaCalendarPage() {
   const [saving, setSaving] = useState(false)
   const [connected, setConnected] = useState(false)
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(new Date()))
+
   const [title, setTitle] = useState('')
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState(today)
+  const [allDay, setAllDay] = useState(true)
+  const [startTime, setStartTime] = useState('09:00')
+  const [endTime, setEndTime] = useState('10:00')
+
   const [statusMessage, setStatusMessage] = useState('')
 
   useEffect(() => {
@@ -150,6 +155,11 @@ export default function RotaCalendarPage() {
         return
       }
 
+      if (!allDay && (!startTime || !endTime)) {
+        setStatusMessage('Enter start and end times.')
+        return
+      }
+
       setSaving(true)
 
       const supabaseToken = await getSupabaseAccessToken()
@@ -170,6 +180,9 @@ export default function RotaCalendarPage() {
           title: title.trim(),
           startDate,
           endDate,
+          allDay,
+          startTime,
+          endTime,
         }),
       })
 
@@ -182,6 +195,9 @@ export default function RotaCalendarPage() {
       setTitle('')
       setStartDate(today)
       setEndDate(today)
+      setAllDay(true)
+      setStartTime('09:00')
+      setEndTime('10:00')
       setStatusMessage('Calendar entry saved.')
       await loadEvents()
     } catch (error: any) {
@@ -297,7 +313,7 @@ export default function RotaCalendarPage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_180px_180px_140px]">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_180px_180px_120px_140px]">
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
@@ -322,6 +338,15 @@ export default function RotaCalendarPage() {
               className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
             />
 
+            <label className="flex items-center justify-center gap-2 rounded-2xl bg-neutral-100 px-4 py-3 text-sm font-black text-neutral-700">
+              <input
+                type="checkbox"
+                checked={allDay}
+                onChange={(event) => setAllDay(event.target.checked)}
+              />
+              All day
+            </label>
+
             <button
               type="button"
               onClick={createEvent}
@@ -331,6 +356,24 @@ export default function RotaCalendarPage() {
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
+
+          {!allDay && (
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 md:w-[374px]">
+              <input
+                type="time"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+                className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
+              />
+
+              <input
+                type="time"
+                value={endTime}
+                onChange={(event) => setEndTime(event.target.value)}
+                className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm font-bold"
+              />
+            </div>
+          )}
 
           {statusMessage && (
             <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-bold text-neutral-700">
