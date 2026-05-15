@@ -1270,6 +1270,7 @@ export default function RotaPage() {
           companyName,
           weekLabel,
           days,
+          staffNames: staff.map((person) => person.name),
         }),
       })
 

@@ -43,14 +43,16 @@ function el(type: string, props: any, ...children: any[]) {
   return React.createElement(type, props, ...children)
 }
 
-function getEmployeeNames(days: RotaDay[]) {
+function getEmployeeNames(days: RotaDay[], staffNames: string[]) {
   const names: string[] = []
+
+  for (const name of staffNames) {
+    if (name && !names.includes(name)) names.push(name)
+  }
 
   for (const day of days) {
     for (const shift of day.shifts) {
-      if (shift.name && !names.includes(shift.name)) {
-        names.push(shift.name)
-      }
+      if (shift.name && !names.includes(shift.name)) names.push(shift.name)
     }
   }
 
@@ -71,10 +73,10 @@ function getShiftTextForEmployee(day: RotaDay, employeeName: string) {
     .join('\n')
 }
 
-async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
+async function makeImage(company: string, weekLabel: string, days: RotaDay[], staffNames: string[]) {
   const companyName = getCompanyDisplayName(company)
   const logoUrl = getCompanyLogo(company)
-  const employees = getEmployeeNames(days)
+  const employees = getEmployeeNames(days, staffNames)
 
   return new ImageResponse(
     el(
@@ -143,13 +145,7 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
 
           el(
             'div',
-            {
-              style: {
-                display: 'flex',
-                flexDirection: 'column',
-              },
-            },
-
+            { style: { display: 'flex', flexDirection: 'column' } },
             el(
               'div',
               {
@@ -161,7 +157,6 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
               },
               companyName
             ),
-
             el(
               'div',
               {
@@ -216,7 +211,6 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
               color: 'white',
             },
           },
-
           el(
             'div',
             {
@@ -248,16 +242,7 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
                   gap: 2,
                 },
               },
-              el(
-                'div',
-                {
-                  style: {
-                    fontSize: 21,
-                    fontWeight: 900,
-                  },
-                },
-                day.day
-              ),
+              el('div', { style: { fontSize: 21, fontWeight: 900 } }, day.day),
               el(
                 'div',
                 {
@@ -298,7 +283,7 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
                   color: '#94a3b8',
                 },
               },
-              'No shifts added'
+              'No staff added'
             )
           : el(
               'div',
@@ -309,7 +294,6 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
                   flexDirection: 'column',
                 },
               },
-
               ...employees.map((employeeName, employeeIndex) =>
                 el(
                   'div',
@@ -322,7 +306,6 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
                       borderTop: employeeIndex === 0 ? '0px solid transparent' : '2px solid #e2e8f0',
                     },
                   },
-
                   el(
                     'div',
                     {
@@ -358,8 +341,8 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
                           textAlign: 'center',
                           fontSize: shiftText.includes('\n') ? 15 : 17,
                           lineHeight: 1.2,
-                          fontWeight: 900,
-                          color: isHoliday ? '#b45309' : '#0e7490',
+                          fontWeight: shiftText ? 900 : 700,
+                          color: isHoliday ? '#b45309' : shiftText ? '#0e7490' : '#cbd5e1',
                           background: shiftText
                             ? isHoliday
                               ? '#fef3c7'
@@ -367,7 +350,7 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
                             : 'transparent',
                         },
                       },
-                      shiftText || ''
+                      shiftText || '—'
                     )
                   })
                 )
@@ -375,10 +358,7 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[]) {
             )
       )
     ),
-    {
-      width: 1200,
-      height: 675,
-    }
+    { width: 1200, height: 675 }
   )
 }
 
@@ -389,6 +369,9 @@ export async function POST(request: Request) {
     const company = String(body.company || 'dohpe')
     const weekLabel = String(body.weekLabel || '')
     const days: RotaDay[] = Array.isArray(body.days) ? body.days : []
+    const staffNames: string[] = Array.isArray(body.staffNames)
+      ? body.staffNames.map((name: any) => String(name || '')).filter(Boolean)
+      : []
 
     const companyName = getCompanyDisplayName(company)
 
@@ -401,33 +384,23 @@ export async function POST(request: Request) {
           ok: false,
           message: 'Missing Telegram bot token or chat id.',
         },
-        {
-          status: 500,
-        }
+        { status: 500 }
       )
     }
 
-    const imageResponse = await makeImage(company, weekLabel, days)
+    const imageResponse = await makeImage(company, weekLabel, days, staffNames)
     const imageBlob = await imageResponse.blob()
 
     const formData = new FormData()
 
     formData.append('chat_id', chatId)
     formData.append('caption', `${companyName} rota · ${weekLabel}`)
+    formData.append('photo', imageBlob, `${company}-${weekLabel.replaceAll(' ', '-')}.png`)
 
-    formData.append(
-      'photo',
-      imageBlob,
-      `${company}-${weekLabel.replaceAll(' ', '-')}.png`
-    )
-
-    const telegramResponse = await fetch(
-      `https://api.telegram.org/bot${botToken}/sendPhoto`,
-      {
-        method: 'POST',
-        body: formData,
-      }
-    )
+    const telegramResponse = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+      method: 'POST',
+      body: formData,
+    })
 
     const telegramData = await telegramResponse.json().catch(() => null)
 
@@ -438,9 +411,7 @@ export async function POST(request: Request) {
           message: 'Telegram send failed.',
           telegramData,
         },
-        {
-          status: 500,
-        }
+        { status: 500 }
       )
     }
 
@@ -456,9 +427,7 @@ export async function POST(request: Request) {
         ok: false,
         message: error.message || 'Rota Telegram send failed.',
       },
-      {
-        status: 500,
-      }
+      { status: 500 }
     )
   }
 }
