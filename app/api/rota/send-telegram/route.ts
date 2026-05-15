@@ -43,6 +43,28 @@ function el(type: string, props: any, ...children: any[]) {
   return React.createElement(type, props, ...children)
 }
 
+async function getLogoDataUrl(company: string) {
+  try {
+    const logoUrl = getCompanyLogo(company)
+    const response = await fetch(logoUrl, { cache: 'no-store' })
+
+    if (!response.ok) return logoUrl
+
+    const contentType = response.headers.get('content-type') || 'image/png'
+    const arrayBuffer = await response.arrayBuffer()
+    const bytes = new Uint8Array(arrayBuffer)
+
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i])
+    }
+
+    return `data:${contentType};base64,${btoa(binary)}`
+  } catch {
+    return getCompanyLogo(company)
+  }
+}
+
 function getEmployeeNames(days: RotaDay[], staffNames: string[]) {
   const names: string[] = []
 
@@ -75,7 +97,7 @@ function getShiftTextForEmployee(day: RotaDay, employeeName: string) {
 
 async function makeImage(company: string, weekLabel: string, days: RotaDay[], staffNames: string[]) {
   const companyName = getCompanyDisplayName(company)
-  const logoUrl = getCompanyLogo(company)
+  const logoSrc = await getLogoDataUrl(company)
   const employees = getEmployeeNames(days, staffNames)
 
   return new ImageResponse(
@@ -131,7 +153,7 @@ async function makeImage(company: string, weekLabel: string, days: RotaDay[], st
               },
             },
             el('img', {
-              src: logoUrl,
+              src: logoSrc,
               width: 98,
               height: 98,
               style: {
