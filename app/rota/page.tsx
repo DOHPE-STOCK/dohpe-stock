@@ -31,6 +31,15 @@ type Shift = {
 }
 
 type CalendarEvent = { id: string; title: string; start: string; end: string }
+
+type GoogleCalendarApiEvent = {
+  id: string
+  title?: string
+  summary?: string
+  start: string
+  end: string
+}
+
 type Company = { key: CompanyKey; name: string; telegramGroup: string; logoUrl?: string }
 
 type WeeklyReport = {
@@ -165,6 +174,54 @@ function shortTime(value: string) {
   const [h, m] = value.split(':')
   if (m === '00') return String(Number(h))
   return `${Number(h)}:${m}`
+}
+
+function eventDateKey(value: string) {
+  if (!value) return ''
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map(Number)
+    return dateKey(new Date(year, month - 1, day))
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+
+  return dateKey(parsed)
+}
+
+function eventTimeLabel(value: string) {
+  if (!value) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'All day'
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+
+  return parsed.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+function groupGoogleEvents(events: GoogleCalendarApiEvent[]): CalendarData {
+  const grouped: CalendarData = {}
+
+  for (const event of events) {
+    const dayId = eventDateKey(event.start)
+    if (!dayId) continue
+
+    if (!grouped[dayId]) grouped[dayId] = []
+
+    grouped[dayId].push({
+      id: event.id,
+      title: event.title || event.summary || 'Busy',
+      start: eventTimeLabel(event.start),
+      end: eventTimeLabel(event.end),
+    })
+  }
+
+  return grouped
 }
 
 function parsePickerTime(value: string) {
@@ -452,18 +509,7 @@ export default function RotaPage() {
   const [calendarUserKey, setCalendarUserKey] = useState('calendar:default')
   const [calendarLoaded, setCalendarLoaded] = useState(false)
   const [closedDays, setClosedDays] = useState<ClosedDays>({ dohpe: {}, dlretail: {} })
-
-  const [calendarEvents, setCalendarEvents] = useState<CalendarData>(() => {
-    const todayWeek = startOfWeek(new Date())
-    return {
-      [dateKey(addDays(todayWeek, 0))]: [
-        { id: 'cal-1', title: 'Calendar sync preview', start: '09:30', end: '10:00' },
-      ],
-      [dateKey(addDays(todayWeek, 4))]: [
-        { id: 'cal-2', title: 'Busy / unavailable', start: '15:00', end: '16:00' },
-      ],
-    }
-  })
+  const [calendarEvents, setCalendarEvents] = useState<CalendarData>({})
 
   const futureWeekStarts = useMemo(
     () => [1, 2, 3, 4].map((offset) => addWeeks(currentWeekStart, offset)),
@@ -616,6 +662,37 @@ export default function RotaPage() {
     }
 
     loadUserCalendarSettings()
+  }, [])
+
+  useEffect(() => {
+    async function loadLiveGoogleCalendarEvents() {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
+
+        if (!session?.access_token) return
+
+        const response = await fetch('/api/rota/google/events', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        })
+
+        if (!response.ok) return
+
+        const data = await response.json()
+
+        if (Array.isArray(data.events)) {
+          setCalendarEvents(groupGoogleEvents(data.events))
+          setGoogleCalendarSynced(true)
+        }
+      } catch (error) {
+        console.error('ROTA_LIVE_CALENDAR_LOAD_ERROR', error)
+      }
+    }
+
+    loadLiveGoogleCalendarEvents()
   }, [])
 
   useEffect(() => {
@@ -858,6 +935,7 @@ export default function RotaPage() {
 
     const shift = type === 'holiday' ? makeHolidayShift() : makeWorkShift()
 
+    setExpandedDay(null)
     setDraftShift(shift)
     setDraftDirty(false)
     setActiveEditor({
@@ -870,6 +948,7 @@ export default function RotaPage() {
   }
 
   function openExistingShift(company: CompanyKey, week: Date, dayIndex: number, shift: Shift) {
+    setExpandedDay(null)
     setDraftShift({ ...shift })
     setDraftDirty(false)
     setActiveEditor({
@@ -1388,6 +1467,164 @@ export default function RotaPage() {
     )
   }
 
+  function DayDetailPopup() {
+    if (!expandedDay) return null
+
+    const week = getWeekFromId(expandedDay.weekId)
+    const actualDate = addDays(week, expandedDay.dayIndex)
+    const shifts = getDayShiftsByWeekId(expandedDay.company, expandedDay.weekId, expandedDay.dayIndex)
+    const opening = getOpening(expandedDay.company, expandedDay.dayIndex)
+    const closed = isDayClosed(expandedDay.company, week, expandedDay.dayIndex)
+    const events = calendarEvents[getDayId(week, expandedDay.dayIndex)] || []
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 px-3 py-16" onClick={() => setExpandedDay(null)}>
+        <div
+          onClick={(event) => event.stopPropagation()}
+          className="w-[min(520px,94vw)] rounded-3xl border border-neutral-300 bg-white p-4 shadow-2xl"
+        >
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">
+                {getCompanyName(expandedDay.company)}
+              </p>
+              <h2 className="text-2xl font-black">{dayNames[expandedDay.dayIndex]}</h2>
+              <p className="text-sm font-bold text-neutral-500">
+                {actualDate.toLocaleDateString('en-GB', {
+                  weekday: 'long',
+                  day: '2-digit',
+                  month: 'long',
+                })}
+              </p>
+              <p className="mt-1 text-xs font-black text-cyan-700">
+                {openingTimeLabel(opening, true, closed)}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setExpandedDay(null)}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-red-100 text-sm font-black text-red-600"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="mb-4 flex flex-wrap gap-2">
+            {!closed ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => openNewShift(expandedDay.company, week, expandedDay.dayIndex, 'work')}
+                  className="rounded-xl bg-black px-4 py-2 text-xs font-black text-white"
+                >
+                  Add shift
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openNewShift(expandedDay.company, week, expandedDay.dayIndex, 'holiday')}
+                  className="rounded-xl bg-amber-300 px-4 py-2 text-xs font-black text-black"
+                >
+                  Holiday
+                </button>
+                <button
+                  type="button"
+                  onClick={() => closeSpecificDay(expandedDay.company, week, expandedDay.dayIndex)}
+                  className="rounded-xl bg-red-100 px-4 py-2 text-xs font-black text-red-600"
+                >
+                  Close day
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => reopenSpecificDay(expandedDay.company, week, expandedDay.dayIndex)}
+                className="rounded-xl bg-emerald-100 px-4 py-2 text-xs font-black text-emerald-700"
+              >
+                Reopen day
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-2xl bg-neutral-100 p-3">
+              <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-neutral-400">Shifts</p>
+
+              {shifts.length === 0 ? (
+                <p className="rounded-xl bg-white p-3 text-xs font-bold text-neutral-400">No shifts for this day.</p>
+              ) : (
+                <div className="space-y-2">
+                  {shifts.map((shift) => {
+                    const person = staff.find((x) => x.id === shift.staffId)
+
+                    return (
+                      <div
+                        key={shift.id}
+                        className={`relative rounded-xl p-3 pr-20 text-xs font-bold ${
+                          shift.type === 'holiday' ? 'bg-amber-100 text-amber-800' : 'bg-white text-neutral-800'
+                        }`}
+                      >
+                        <p className="font-black">{person?.name || 'Staff'}</p>
+                        <p className="mt-1 opacity-80">{shiftTimeLabel(shift, opening, closed)}</p>
+                        {shift.note && <p className="mt-1 opacity-70">{shift.note}</p>}
+
+                        <div className="absolute right-2 top-2 flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openExistingShift(expandedDay.company, week, expandedDay.dayIndex, shift)}
+                            className="rounded-lg bg-cyan-100 px-2 py-1 text-[10px] font-black text-cyan-800"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => quickDeleteShift(expandedDay.company, week, expandedDay.dayIndex, shift.id)}
+                            className="rounded-lg bg-red-100 px-2 py-1 text-[10px] font-black text-red-600"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-2xl bg-blue-50 p-3">
+              <p className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-blue-500">
+                <GoogleCalendarLogo />
+                Google Calendar
+              </p>
+
+              {!googleCalendarSynced ? (
+                <p className="rounded-xl bg-white p-3 text-xs font-bold text-blue-400">
+                  Sync Google Calendar to show events here.
+                </p>
+              ) : events.length === 0 ? (
+                <p className="rounded-xl bg-white p-3 text-xs font-bold text-blue-400">
+                  No calendar entries for this day.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {events.map((event) => (
+                    <div key={event.id} className="rounded-xl bg-white p-3 text-xs font-bold text-blue-700">
+                      <p className="font-black">{event.title}</p>
+                      <p className="mt-1 opacity-80">
+                        {event.start}
+                        {event.end && event.end !== 'All day' ? `–${event.end}` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   function DayCard({ company, week, dayIndex }: { company: CompanyKey; week: Date; dayIndex: number }) {
     const actualDate = addDays(week, dayIndex)
     const shifts = getDayShifts(company, week, dayIndex)
@@ -1409,12 +1646,12 @@ export default function RotaPage() {
 
     return (
       <div
-        className={`relative rounded-2xl border p-2 ${
-          expanded ? 'min-h-64 ring-2 ring-cyan-400' : 'min-h-44'
+        className={`relative min-h-44 cursor-pointer rounded-2xl border p-2 ${
+          expanded ? 'ring-2 ring-cyan-400' : ''
         } ${
           closed
-            ? 'cursor-pointer border-red-200 bg-red-50'
-            : 'cursor-pointer border-neutral-200 bg-neutral-50'
+            ? 'border-red-200 bg-red-50'
+            : 'border-neutral-200 bg-neutral-50'
         }`}
         onClick={() => toggleExpandedDay(company, week, dayIndex)}
       >
@@ -1464,6 +1701,25 @@ export default function RotaPage() {
             )
           })}
 
+          {events.slice(0, 2).map((event) => (
+            <div
+              key={event.id}
+              className="flex min-h-8 flex-col justify-center rounded-lg bg-blue-50 px-1.5 py-1 text-[10px] font-black leading-tight text-blue-700"
+            >
+              <span className="truncate">{event.title}</span>
+              <span className="truncate text-[9px] opacity-80">
+                {event.start}
+                {event.end && event.end !== 'All day' ? `–${event.end}` : ''}
+              </span>
+            </div>
+          ))}
+
+          {events.length > 2 && (
+            <div className="rounded-lg bg-blue-100 px-1.5 py-1 text-[10px] font-black text-blue-700">
+              +{events.length - 2} more calendar
+            </div>
+          )}
+
           {!closed && (
             <button
               type="button"
@@ -1477,70 +1733,6 @@ export default function RotaPage() {
             </button>
           )}
         </div>
-
-        {expanded && (
-          <div
-            className="mt-3 space-y-2 rounded-2xl bg-white p-2 text-xs font-bold"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex flex-wrap gap-2">
-              {!closed ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => openNewShift(company, week, dayIndex, 'work')}
-                    className="rounded-xl bg-black px-3 py-2 text-[10px] font-black text-white"
-                  >
-                    Add shift
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openNewShift(company, week, dayIndex, 'holiday')}
-                    className="rounded-xl bg-amber-300 px-3 py-2 text-[10px] font-black text-black"
-                  >
-                    Holiday
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => closeSpecificDay(company, week, dayIndex)}
-                    className="rounded-xl bg-red-100 px-3 py-2 text-[10px] font-black text-red-600"
-                  >
-                    Close day
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => reopenSpecificDay(company, week, dayIndex)}
-                  className="rounded-xl bg-emerald-100 px-3 py-2 text-[10px] font-black text-emerald-700"
-                >
-                  Reopen day
-                </button>
-              )}
-            </div>
-
-            <div className="rounded-xl bg-blue-50 p-2">
-              <p className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-blue-500">
-                <GoogleCalendarLogo />
-                Google Calendar
-              </p>
-
-              {!googleCalendarSynced ? (
-                <p className="text-[11px] font-bold text-blue-400">Sync Google Calendar to show events here.</p>
-              ) : events.length === 0 ? (
-                <p className="text-[11px] font-bold text-blue-400">No calendar entries for this day.</p>
-              ) : (
-                <div className="space-y-1">
-                  {events.map((event) => (
-                    <div key={event.id} className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-blue-700">
-                      {event.start}–{event.end} · {event.title}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
 
         {editorOpenHere && <ShiftEditor />}
       </div>
@@ -1672,6 +1864,7 @@ export default function RotaPage() {
   return (
     <main className="min-h-screen bg-neutral-100 text-neutral-950">
       {activeEditor && <div className="fixed inset-0 z-40 bg-transparent" onClick={requestCloseEditor} />}
+      <DayDetailPopup />
 
       <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4">
         <header className="rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
