@@ -1,26 +1,25 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
 import { createClient } from '@supabase/supabase-js'
 import { getGoogleOAuthClient } from '@/lib/googleCalendar'
 
-const supabase = createClient(
+export const dynamic = 'force-dynamic'
+
+const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-export async function GET(request: NextRequest) {
+export async function GET(request: Request) {
   try {
-    const code = request.nextUrl.searchParams.get('code')
-    const userId = request.nextUrl.searchParams.get('state')
+    const { searchParams } = new URL(request.url)
+
+    const code = searchParams.get('code')
+    const state = searchParams.get('state')
 
     if (!code) {
-      return NextResponse.json({ error: 'Missing code' }, { status: 400 })
-    }
-
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'Missing Supabase user state' },
-        { status: 400 }
+      return NextResponse.redirect(
+        `${process.env.NEXT_PUBLIC_SITE_URL}/rota/calendar?error=no_code`
       )
     }
 
@@ -35,32 +34,58 @@ export async function GET(request: NextRequest) {
       version: 'v2',
     })
 
-    const me = await oauth2.userinfo.get()
-    const googleEmail = me.data.email
+    const googleUser = await oauth2.userinfo.get()
 
-    await supabase.from('rota_google_tokens').upsert(
-      {
-        user_id: userId,
-        google_email: googleEmail,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: tokens.expiry_date
-          ? new Date(tokens.expiry_date).toISOString()
-          : null,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: 'user_id',
-      }
+    const email = googleUser.data.email
+
+    if (!email) {
+      return NextResponse.redirect(
+        `${process.env.NEXT_PUBLIC_SITE_URL}/rota/calendar?error=no_email`
+      )
+    }
+
+    const accessToken = tokens.access_token || ''
+    const refreshToken = tokens.refresh_token || ''
+
+    if (!refreshToken) {
+      return NextResponse.redirect(
+        `${process.env.NEXT_PUBLIC_SITE_URL}/rota/calendar?error=no_refresh_token`
+      )
+    }
+
+    const {
+      data: { users },
+    } = await supabaseAdmin.auth.admin.listUsers()
+
+    const matchedUser = users.find(
+      (user) => user.email?.toLowerCase() === email.toLowerCase()
     )
 
-    return NextResponse.redirect(new URL('/rota/calendar', request.url))
-  } catch (error) {
-    console.error(error)
+    if (!matchedUser) {
+      return NextResponse.redirect(
+        `${process.env.NEXT_PUBLIC_SITE_URL}/rota/calendar?error=user_not_found`
+      )
+    }
 
-    return NextResponse.json(
-      { error: 'Google auth failed' },
-      { status: 500 }
+    await supabaseAdmin.from('rota_google_tokens').upsert({
+      user_id: matchedUser.id,
+      email,
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_at: tokens.expiry_date
+        ? new Date(tokens.expiry_date).toISOString()
+        : null,
+      updated_at: new Date().toISOString(),
+    })
+
+    return NextResponse.redirect(
+      `${process.env.NEXT_PUBLIC_SITE_URL}/rota/calendar?connected=1`
+    )
+  } catch (error: any) {
+    return NextResponse.redirect(
+      `${process.env.NEXT_PUBLIC_SITE_URL}/rota/calendar?error=${encodeURIComponent(
+        error.message || 'callback_failed'
+      )}`
     )
   }
 }

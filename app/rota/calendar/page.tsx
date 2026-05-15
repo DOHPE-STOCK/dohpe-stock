@@ -119,7 +119,6 @@ export default function RotaCalendarPage() {
         setEvents([])
         setEmail('')
         setStatusMessage(data?.message || 'Google Calendar not connected.')
-        setLoading(false)
         return
       }
 
@@ -439,17 +438,7 @@ export default function RotaCalendarPage() {
                   }`}
                 >
                   <div className="mb-2 flex items-center justify-between">
-                    <span
-                      className={`text-xs font-black ${
-                        isToday
-                          ? 'text-emerald-700'
-                          : isThisMonth
-                            ? 'text-neutral-800'
-                            : 'text-neutral-300'
-                      }`}
-                    >
-                      {day.getDate()}
-                    </span>
+                    <span className="text-xs font-black">{day.getDate()}</span>
 
                     {dayEvents.length > 0 && (
                       <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-black text-blue-700">
