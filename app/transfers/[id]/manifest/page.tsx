@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import QRCode from 'react-qr-code'
 import { supabase } from '@/lib/supabase'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 
 type TransferItem = {
   id: string
@@ -73,9 +74,11 @@ export default function TransferManifestPage() {
 
   if (loading || !transfer) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-white text-black">
-        Loading manifest...
-      </main>
+      <StaffPermissionGate permission="scanner">
+        <main className="flex min-h-screen items-center justify-center bg-white text-black">
+          Loading manifest...
+        </main>
+      </StaffPermissionGate>
     )
   }
 
@@ -99,65 +102,67 @@ export default function TransferManifestPage() {
   )
 
   return (
-    <main className="min-h-screen bg-white p-8 text-black">
-      <div className="mx-auto max-w-4xl">
-        <div className="mb-8 flex items-start justify-between border-b-4 border-black pb-6">
-          <div>
-            <h1 className="text-5xl font-black tracking-tight">
-              TRANSFER MANIFEST
-            </h1>
+    <StaffPermissionGate permission="scanner">
+      <main className="min-h-screen bg-white p-8 text-black">
+        <div className="mx-auto max-w-4xl">
+          <div className="mb-8 flex items-start justify-between border-b-4 border-black pb-6">
+            <div>
+              <h1 className="text-5xl font-black tracking-tight">
+                TRANSFER MANIFEST
+              </h1>
 
-            <p className="mt-4 text-3xl font-black">
-              #{formatTransferNumber(transfer.transfer_number)}
-            </p>
-
-            <div className="mt-4 space-y-1 text-xl">
-              <p>
-                <strong>FROM:</strong> {transfer.from_location}
+              <p className="mt-4 text-3xl font-black">
+                #{formatTransferNumber(transfer.transfer_number)}
               </p>
 
-              <p>
-                <strong>TO:</strong> {transfer.to_location}
-              </p>
+              <div className="mt-4 space-y-1 text-xl">
+                <p>
+                  <strong>FROM:</strong> {transfer.from_location}
+                </p>
 
-              <p className="text-3xl font-black">
-                TOTAL ITEMS: {totalCount}
+                <p>
+                  <strong>TO:</strong> {transfer.to_location}
+                </p>
+
+                <p className="text-3xl font-black">
+                  TOTAL ITEMS: {totalCount}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border-4 border-black bg-white p-4">
+              <QRCode value={transferUrl} size={180} />
+
+              <p className="mt-3 text-center text-sm font-bold">
+                Scan to open transfer
               </p>
             </div>
           </div>
 
-          <div className="rounded-xl border-4 border-black bg-white p-4">
-            <QRCode value={transferUrl} size={180} />
+          <section>
+            <h2 className="mb-4 text-3xl font-black">
+              Category Summary
+            </h2>
 
-            <p className="mt-3 text-center text-sm font-bold">
-              Scan to open transfer
-            </p>
-          </div>
+            <div className="space-y-3">
+              {sortedCategoryCounts.map(([category, count]) => (
+                <div
+                  key={category}
+                  className="flex items-center justify-between border-2 border-black p-4"
+                >
+                  <p className="text-2xl font-black">
+                    {category}
+                  </p>
+
+                  <p className="text-3xl font-black">
+                    {count}x
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
-
-        <section>
-          <h2 className="mb-4 text-3xl font-black">
-            Category Summary
-          </h2>
-
-          <div className="space-y-3">
-            {sortedCategoryCounts.map(([category, count]) => (
-              <div
-                key={category}
-                className="flex items-center justify-between border-2 border-black p-4"
-              >
-                <p className="text-2xl font-black">
-                  {category}
-                </p>
-
-                <p className="text-3xl font-black">
-                  {count}x
-                </p>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-    </main>
+      </main>
+    </StaffPermissionGate>
   )
 }
