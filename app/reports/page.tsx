@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { supabase } from '@/lib/supabase'
 
 type StaffUser = {
@@ -207,190 +208,192 @@ export default function ReportsPage() {
   const totalMonth = staffReportRows.reduce((sum, row) => sum + row.monthCount, 0)
 
   return (
-    <main className="min-h-screen bg-zinc-950 p-5 text-white">
-      <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">Reports</h1>
-            <p className="text-sm text-zinc-400">
-              Staff output, sales reports, and profit/loss reports
-            </p>
-          </div>
-
-          <AppNav current={undefined} />
-        </div>
-
-        <div className="flex items-center gap-3">
-          {message && (
-            <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-              {message}
-            </span>
-          )}
-
-          <button
-            onClick={fetchReports}
-            className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold hover:bg-blue-500"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      <section className="mb-5 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-black">Staff Reports</h2>
-            <p className="text-sm text-zinc-400">
-              Counts items sent to review using sent_to_review_at and sent_to_review_by.
-            </p>
-          </div>
-
-          <select
-            value={historyDays}
-            onChange={(event) => setHistoryDays(Number(event.target.value))}
-            className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-bold text-white"
-          >
-            <option value={7}>Last 7 days</option>
-            <option value={14}>Last 14 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-          </select>
-        </div>
-
-        {loading ? (
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-8 text-center text-zinc-400">
-            Loading reports...
-          </div>
-        ) : (
-          <>
-            <div className="mb-4 grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-                <p className="text-xs font-bold uppercase text-zinc-500">Sent today</p>
-                <p className="mt-1 text-4xl font-black">{totalToday}</p>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-                <p className="text-xs font-bold uppercase text-zinc-500">Sent this week</p>
-                <p className="mt-1 text-4xl font-black">{totalWeek}</p>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-                <p className="text-xs font-bold uppercase text-zinc-500">Sent this month</p>
-                <p className="mt-1 text-4xl font-black">{totalMonth}</p>
-              </div>
+    <StaffPermissionGate permission="reports">
+      <main className="min-h-screen bg-zinc-950 p-5 text-white">
+        <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">Reports</h1>
+              <p className="text-sm text-zinc-400">
+                Staff output, sales reports, and profit/loss reports
+              </p>
             </div>
 
-            <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              {staffReportRows.length === 0 ? (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-sm font-bold text-zinc-400">
-                  No staff review history yet.
+            <AppNav current={undefined} />
+          </div>
+
+          <div className="flex items-center gap-3">
+            {message && (
+              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+                {message}
+              </span>
+            )}
+
+            <button
+              onClick={fetchReports}
+              className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold hover:bg-blue-500"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <section className="mb-5 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-black">Staff Reports</h2>
+              <p className="text-sm text-zinc-400">
+                Counts items sent to review using sent_to_review_at and sent_to_review_by.
+              </p>
+            </div>
+
+            <select
+              value={historyDays}
+              onChange={(event) => setHistoryDays(Number(event.target.value))}
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-bold text-white"
+            >
+              <option value={7}>Last 7 days</option>
+              <option value={14}>Last 14 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+            </select>
+          </div>
+
+          {loading ? (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-8 text-center text-zinc-400">
+              Loading reports...
+            </div>
+          ) : (
+            <>
+              <div className="mb-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                  <p className="text-xs font-bold uppercase text-zinc-500">Sent today</p>
+                  <p className="mt-1 text-4xl font-black">{totalToday}</p>
                 </div>
-              ) : (
-                staffReportRows.map((row) => (
-                  <div key={row.staffId} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <p className="truncate text-lg font-black">{row.staffName}</p>
-                      <span className="rounded-full bg-blue-950 px-3 py-1 text-xs font-black text-blue-300">
-                        {row.todayCount} today
-                      </span>
-                    </div>
 
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs font-bold">
-                      <div className="rounded-lg bg-zinc-900 p-2">
-                        <p className="text-zinc-500">Week</p>
-                        <p className="text-lg text-white">{row.weekCount}</p>
-                      </div>
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                  <p className="text-xs font-bold uppercase text-zinc-500">Sent this week</p>
+                  <p className="mt-1 text-4xl font-black">{totalWeek}</p>
+                </div>
 
-                      <div className="rounded-lg bg-zinc-900 p-2">
-                        <p className="text-zinc-500">Month</p>
-                        <p className="text-lg text-white">{row.monthCount}</p>
-                      </div>
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                  <p className="text-xs font-bold uppercase text-zinc-500">Sent this month</p>
+                  <p className="mt-1 text-4xl font-black">{totalMonth}</p>
+                </div>
+              </div>
 
-                      <div className="rounded-lg bg-zinc-900 p-2">
-                        <p className="text-zinc-500">Total</p>
-                        <p className="text-lg text-white">{row.totalCount}</p>
-                      </div>
-                    </div>
-
-                    <p className="mt-3 text-sm font-bold text-zinc-300">
-                      {row.staffName} sent {row.todayCount} item{row.todayCount === 1 ? '' : 's'} for review today.
-                    </p>
+              <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {staffReportRows.length === 0 ? (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-sm font-bold text-zinc-400">
+                    No staff review history yet.
                   </div>
-                ))
-              )}
-            </div>
-
-            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-              <h3 className="mb-3 text-sm font-black uppercase tracking-wide text-zinc-500">
-                Review history
-              </h3>
-
-              {Object.keys(historyByDate).length === 0 ? (
-                <p className="text-sm font-bold text-zinc-500">No history for this period.</p>
-              ) : (
-                <div className="space-y-3">
-                  {Object.entries(historyByDate).map(([date, staffRows]) => (
-                    <div key={date} className="rounded-lg bg-zinc-900 p-3">
-                      <p className="mb-2 text-sm font-black text-white">{date}</p>
-
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(staffRows).map(([staffName, count]) => (
-                          <span
-                            key={`${date}-${staffName}`}
-                            className="rounded-lg bg-blue-950 px-3 py-2 text-xs font-black text-blue-300"
-                          >
-                            {staffName}: {count}
-                          </span>
-                        ))}
+                ) : (
+                  staffReportRows.map((row) => (
+                    <div key={row.staffId} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <p className="truncate text-lg font-black">{row.staffName}</p>
+                        <span className="rounded-full bg-blue-950 px-3 py-1 text-xs font-black text-blue-300">
+                          {row.todayCount} today
+                        </span>
                       </div>
+
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs font-bold">
+                        <div className="rounded-lg bg-zinc-900 p-2">
+                          <p className="text-zinc-500">Week</p>
+                          <p className="text-lg text-white">{row.weekCount}</p>
+                        </div>
+
+                        <div className="rounded-lg bg-zinc-900 p-2">
+                          <p className="text-zinc-500">Month</p>
+                          <p className="text-lg text-white">{row.monthCount}</p>
+                        </div>
+
+                        <div className="rounded-lg bg-zinc-900 p-2">
+                          <p className="text-zinc-500">Total</p>
+                          <p className="text-lg text-white">{row.totalCount}</p>
+                        </div>
+                      </div>
+
+                      <p className="mt-3 text-sm font-bold text-zinc-300">
+                        {row.staffName} sent {row.todayCount} item{row.todayCount === 1 ? '' : 's'} for review today.
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                <h3 className="mb-3 text-sm font-black uppercase tracking-wide text-zinc-500">
+                  Review history
+                </h3>
+
+                {Object.keys(historyByDate).length === 0 ? (
+                  <p className="text-sm font-bold text-zinc-500">No history for this period.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {Object.entries(historyByDate).map(([date, staffRows]) => (
+                      <div key={date} className="rounded-lg bg-zinc-900 p-3">
+                        <p className="mb-2 text-sm font-black text-white">{date}</p>
+
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(staffRows).map(([staffName, count]) => (
+                            <span
+                              key={`${date}-${staffName}`}
+                              className="rounded-lg bg-blue-950 px-3 py-2 text-xs font-black text-blue-300"
+                            >
+                              {staffName}: {count}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                <h3 className="mb-3 text-sm font-black uppercase tracking-wide text-zinc-500">
+                  Latest review submissions
+                </h3>
+
+                <div className="space-y-2">
+                  {historyItems.slice(0, 30).map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-zinc-900 p-3 text-sm"
+                    >
+                      <div>
+                        <p className="font-black">SKU: {item.sku}</p>
+                        <p className="text-xs font-bold text-zinc-500">
+                          {staffNameById[item.sent_to_review_by || ''] || 'Unknown staff'} · {formatDateTime(item.sent_to_review_at)}
+                        </p>
+                      </div>
+
+                      <p className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-black text-zinc-300">
+                        {item.status}
+                      </p>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
-
-            <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-              <h3 className="mb-3 text-sm font-black uppercase tracking-wide text-zinc-500">
-                Latest review submissions
-              </h3>
-
-              <div className="space-y-2">
-                {historyItems.slice(0, 30).map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-zinc-900 p-3 text-sm"
-                  >
-                    <div>
-                      <p className="font-black">SKU: {item.sku}</p>
-                      <p className="text-xs font-bold text-zinc-500">
-                        {staffNameById[item.sent_to_review_by || ''] || 'Unknown staff'} · {formatDateTime(item.sent_to_review_at)}
-                      </p>
-                    </div>
-
-                    <p className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-black text-zinc-300">
-                      {item.status}
-                    </p>
-                  </div>
-                ))}
               </div>
-            </div>
-          </>
-        )}
-      </section>
+            </>
+          )}
+        </section>
 
-      <section className="mb-5 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        <h2 className="text-xl font-black">Sales Report</h2>
-        <p className="mt-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-950 p-6 text-sm font-bold text-zinc-500">
-          Placeholder. Later this can show POS/eBay/Shopify/Vinted sales, revenue by channel, units sold, refunds, and sell-through.
-        </p>
-      </section>
+        <section className="mb-5 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <h2 className="text-xl font-black">Sales Report</h2>
+          <p className="mt-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-950 p-6 text-sm font-bold text-zinc-500">
+            Placeholder. Later this can show POS/eBay/Shopify/Vinted sales, revenue by channel, units sold, refunds, and sell-through.
+          </p>
+        </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        <h2 className="text-xl font-black">Profit / Loss Report</h2>
-        <p className="mt-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-950 p-6 text-sm font-bold text-zinc-500">
-          Placeholder. Later this can show gross profit, cost of goods sold, fees, wages, VAT estimate, and net profit.
-        </p>
-      </section>
-    </main>
+        <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <h2 className="text-xl font-black">Profit / Loss Report</h2>
+          <p className="mt-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-950 p-6 text-sm font-bold text-zinc-500">
+            Placeholder. Later this can show gross profit, cost of goods sold, fees, wages, VAT estimate, and net profit.
+          </p>
+        </section>
+      </main>
+    </StaffPermissionGate>
   )
 }
