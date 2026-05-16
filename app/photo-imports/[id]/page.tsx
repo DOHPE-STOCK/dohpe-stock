@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 
 type ImportImage = {
   id: string
@@ -418,192 +419,196 @@ export default function PhotoImportGroupPage() {
 
   if (!group) {
     return (
-      <main className="min-h-screen bg-neutral-950 text-white">
-        <div className="p-6">Loading photo import group...</div>
-      </main>
+      <StaffPermissionGate permission="working">
+        <main className="min-h-screen bg-neutral-950 text-white">
+          <div className="p-6">Loading photo import group...</div>
+        </main>
+      </StaffPermissionGate>
     )
   }
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-white">
-      <div className="mx-auto max-w-7xl space-y-5 p-4">
-        <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold">Photo Import: {group.sku}</h1>
+    <StaffPermissionGate permission="working">
+      <main className="min-h-screen bg-neutral-950 text-white">
+        <div className="mx-auto max-w-7xl space-y-5 p-4">
+          <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h1 className="text-2xl font-bold">Photo Import: {group.sku}</h1>
 
+                <p className="text-sm text-neutral-400">
+                  Review selected photos before attaching them to the item.
+                </p>
+              </div>
+
+              <AppNav current="photo-imports" />
+            </div>
+          </header>
+
+          {message && (
+            <div className="rounded-xl border border-yellow-800 bg-yellow-950 p-3 text-sm text-yellow-300">
+              {message}
+            </div>
+          )}
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+              <div>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h2 className="text-xl font-bold">SKU: {group.sku}</h2>
+
+                  <span className="rounded-full border border-yellow-800 bg-yellow-950 px-2 py-1 text-xs font-bold uppercase text-yellow-300">
+                    {group.status}
+                  </span>
+                </div>
+
+                <div className="grid gap-2 text-sm text-neutral-300 sm:grid-cols-2">
+                  <p>
+                    <strong className="text-neutral-500">Created:</strong>{' '}
+                    {formatDate(group.created_at)}
+                  </p>
+
+                  <p>
+                    <strong className="text-neutral-500">Approved:</strong>{' '}
+                    {formatDate(group.approved_at)}
+                  </p>
+
+                  <p>
+                    <strong className="text-neutral-500">Item ID:</strong>{' '}
+                    {group.item_id || 'Will match/create by SKU'}
+                  </p>
+
+                  <p>
+                    <strong className="text-neutral-500">Selected:</strong>{' '}
+                    {selectedImages.length} / {images.length}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={approveSelectedImages}
+                  disabled={busy || group.status === 'approved'}
+                  className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+                >
+                  Approve Selected
+                </button>
+
+                <button
+                  onClick={toggleAllItemPhotos}
+                  disabled={busy}
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-bold disabled:opacity-40"
+                >
+                  {allItemPhotosSelected ? 'Unselect All Photos' : 'Select All Photos'}
+                </button>
+
+                <button
+                  onClick={rejectGroup}
+                  disabled={busy || group.status === 'approved'}
+                  className="rounded-xl border border-red-800 bg-red-950 px-4 py-2 text-sm font-bold text-red-300 disabled:opacity-40"
+                >
+                  Reject Group
+                </button>
+
+                <Link
+                  href="/photo-imports"
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-center text-sm font-bold"
+                >
+                  Back to Imports
+                </Link>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            <div className="mb-3">
+              <h2 className="text-lg font-semibold">Move Selected Images</h2>
               <p className="text-sm text-neutral-400">
-                Review selected photos before attaching them to the item.
+                Use this if photos were assigned to the wrong SKU.
               </p>
             </div>
 
-            <AppNav current="photo-imports" />
-          </div>
-        </header>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                value={moveToSku}
+                onChange={(e) => setMoveToSku(e.target.value)}
+                placeholder="Move selected to SKU"
+                className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-2 text-sm outline-none focus:border-white"
+              />
 
-        {message && (
-          <div className="rounded-xl border border-yellow-800 bg-yellow-950 p-3 text-sm text-yellow-300">
-            {message}
-          </div>
-        )}
+              <button
+                onClick={moveSelectedImagesToSku}
+                disabled={busy || selectedImages.length === 0}
+                className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black disabled:opacity-40"
+              >
+                Move Selected
+              </button>
+            </div>
+          </section>
 
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
-            <div>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h2 className="text-xl font-bold">SKU: {group.sku}</h2>
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            <h2 className="mb-4 text-lg font-semibold">Images</h2>
 
-                <span className="rounded-full border border-yellow-800 bg-yellow-950 px-2 py-1 text-xs font-bold uppercase text-yellow-300">
-                  {group.status}
-                </span>
+            {images.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-neutral-800 p-8 text-center text-neutral-500">
+                No images found for this group.
               </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {images.map((image) => {
+                  const selected = selectedIds.includes(image.id)
 
-              <div className="grid gap-2 text-sm text-neutral-300 sm:grid-cols-2">
-                <p>
-                  <strong className="text-neutral-500">Created:</strong>{' '}
-                  {formatDate(group.created_at)}
-                </p>
+                  return (
+                    <button
+                      key={image.id}
+                      type="button"
+                      onClick={() => toggleImage(image.id)}
+                      className={`overflow-hidden rounded-2xl border bg-neutral-950 text-left ${
+                        selected ? 'border-white' : 'border-neutral-800'
+                      }`}
+                    >
+                      <div className="relative aspect-square bg-neutral-800">
+                        <img
+                          src={image.file_url}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
 
-                <p>
-                  <strong className="text-neutral-500">Approved:</strong>{' '}
-                  {formatDate(group.approved_at)}
-                </p>
-
-                <p>
-                  <strong className="text-neutral-500">Item ID:</strong>{' '}
-                  {group.item_id || 'Will match/create by SKU'}
-                </p>
-
-                <p>
-                  <strong className="text-neutral-500">Selected:</strong>{' '}
-                  {selectedImages.length} / {images.length}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={approveSelectedImages}
-                disabled={busy || group.status === 'approved'}
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
-              >
-                Approve Selected
-              </button>
-
-              <button
-                onClick={toggleAllItemPhotos}
-                disabled={busy}
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-bold disabled:opacity-40"
-              >
-                {allItemPhotosSelected ? 'Unselect All Photos' : 'Select All Photos'}
-              </button>
-
-              <button
-                onClick={rejectGroup}
-                disabled={busy || group.status === 'approved'}
-                className="rounded-xl border border-red-800 bg-red-950 px-4 py-2 text-sm font-bold text-red-300 disabled:opacity-40"
-              >
-                Reject Group
-              </button>
-
-              <Link
-                href="/photo-imports"
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-center text-sm font-bold"
-              >
-                Back to Imports
-              </Link>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="mb-3">
-            <h2 className="text-lg font-semibold">Move Selected Images</h2>
-            <p className="text-sm text-neutral-400">
-              Use this if photos were assigned to the wrong SKU.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              value={moveToSku}
-              onChange={(e) => setMoveToSku(e.target.value)}
-              placeholder="Move selected to SKU"
-              className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-2 text-sm outline-none focus:border-white"
-            />
-
-            <button
-              onClick={moveSelectedImagesToSku}
-              disabled={busy || selectedImages.length === 0}
-              className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black disabled:opacity-40"
-            >
-              Move Selected
-            </button>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="mb-4 text-lg font-semibold">Images</h2>
-
-          {images.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-neutral-800 p-8 text-center text-neutral-500">
-              No images found for this group.
-            </div>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {images.map((image) => {
-                const selected = selectedIds.includes(image.id)
-
-                return (
-                  <button
-                    key={image.id}
-                    type="button"
-                    onClick={() => toggleImage(image.id)}
-                    className={`overflow-hidden rounded-2xl border bg-neutral-950 text-left ${
-                      selected ? 'border-white' : 'border-neutral-800'
-                    }`}
-                  >
-                    <div className="relative aspect-square bg-neutral-800">
-                      <img
-                        src={image.file_url}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-
-                      <div className="absolute left-2 top-2">
-                        <span
-                          className={`rounded-full px-2 py-1 text-xs font-bold ${
-                            selected
-                              ? 'bg-white text-black'
-                              : 'bg-black/70 text-white'
-                          }`}
-                        >
-                          {selected ? 'Selected' : 'Not selected'}
-                        </span>
-                      </div>
-
-                      {image.is_barcode_frame && (
-                        <div className="absolute bottom-2 left-2">
-                          <span className="rounded-full bg-blue-950 px-2 py-1 text-xs font-bold text-blue-300">
-                            Barcode frame
+                        <div className="absolute left-2 top-2">
+                          <span
+                            className={`rounded-full px-2 py-1 text-xs font-bold ${
+                              selected
+                                ? 'bg-white text-black'
+                                : 'bg-black/70 text-white'
+                            }`}
+                          >
+                            {selected ? 'Selected' : 'Not selected'}
                           </span>
                         </div>
-                      )}
-                    </div>
 
-                    <div className="space-y-1 p-3">
-                      <p className="truncate text-sm font-bold">{image.file_name}</p>
-                      <p className="text-xs text-neutral-500">
-                        Order: {image.sort_order}
-                      </p>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </section>
-      </div>
-    </main>
+                        {image.is_barcode_frame && (
+                          <div className="absolute bottom-2 left-2">
+                            <span className="rounded-full bg-blue-950 px-2 py-1 text-xs font-bold text-blue-300">
+                              Barcode frame
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 p-3">
+                        <p className="truncate text-sm font-bold">{image.file_name}</p>
+                        <p className="text-xs text-neutral-500">
+                          Order: {image.sort_order}
+                        </p>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+      </main>
+    </StaffPermissionGate>
   )
 }
