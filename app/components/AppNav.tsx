@@ -30,7 +30,6 @@ type NavItem = {
   href: string
   iconOnly?: boolean
   permission?: string
-  adminOnly?: boolean
 }
 
 const navItems: NavItem[] = [
@@ -101,7 +100,6 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
     }
 
     if (staff.role === 'admin') return true
-
     if (!item.permission) return true
 
     return can(item.permission)
@@ -176,7 +174,7 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {staff && (
+        {staff ? (
           <>
             <span className="max-w-[150px] truncate rounded-lg bg-emerald-950 px-3 py-2 text-xs font-bold text-emerald-200">
               Staff: {staff.name}
@@ -190,6 +188,13 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
               Switch staff
             </button>
           </>
+        ) : (
+          <Link
+            href="/staff"
+            className="rounded-lg bg-yellow-300 px-3 py-2 text-xs font-black text-black hover:bg-yellow-200"
+          >
+            Staff PIN
+          </Link>
         )}
 
         {userLabel ? (
