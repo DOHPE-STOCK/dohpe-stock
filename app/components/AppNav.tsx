@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { useStaff } from '@/app/context/StaffContext'
 
 type NavKey =
   | 'settings'
@@ -28,24 +29,28 @@ type NavItem = {
   label: string
   href: string
   iconOnly?: boolean
+  permission?: string
+  adminOnly?: boolean
 }
 
 const navItems: NavItem[] = [
   { key: 'sku', label: 'SKU Search', href: '/' },
-  { key: 'checkout', label: 'Checkout', href: '/checkout' },
-  { key: 'working', label: 'Working', href: '/working' },
-  { key: 'review', label: 'Review', href: '/review' },
-  { key: 'finalised', label: 'Finalised', href: '/finalised' },
-  { key: 'photo-imports', label: 'Photo Imports', href: '/photo-imports' },
-  { key: 'transfers', label: 'Transfers', href: '/transfers' },
-  { key: 'allocate', label: 'Allocate', href: '/scanner/allocate' },
-  { key: 'loan', label: 'Loan', href: '/scanner/loan' },
-  { key: 'rota', label: 'Rota', href: '/rota' },
-  { key: 'settings', label: '⚙', href: '/settings', iconOnly: true },
+  { key: 'checkout', label: 'Checkout', href: '/checkout', permission: 'checkout' },
+  { key: 'working', label: 'Working', href: '/working', permission: 'working' },
+  { key: 'review', label: 'Review', href: '/review', permission: 'review' },
+  { key: 'finalised', label: 'Finalised', href: '/finalised', permission: 'finalised' },
+  { key: 'photo-imports', label: 'Photo Imports', href: '/photo-imports', permission: 'working' },
+  { key: 'transfers', label: 'Transfers', href: '/transfers', permission: 'scanner' },
+  { key: 'allocate', label: 'Allocate', href: '/scanner/allocate', permission: 'scanner' },
+  { key: 'loan', label: 'Loan', href: '/scanner/loan', permission: 'scanner' },
+  { key: 'rota', label: 'Rota', href: '/rota', permission: 'reports' },
+  { key: 'settings', label: '⚙', href: '/settings', iconOnly: true, permission: 'settings' },
 ]
 
 export default function AppNav({ current, onNavigate }: AppNavProps) {
   const router = useRouter()
+  const { staff, can, clearStaff } = useStaff()
+
   const [userLabel, setUserLabel] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -90,17 +95,37 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
     }
   }, [])
 
+  function canSeeNavItem(item: NavItem) {
+    if (!staff || staff.is_active === false) {
+      return item.key === 'sku'
+    }
+
+    if (staff.role === 'admin') return true
+
+    if (!item.permission) return true
+
+    return can(item.permission)
+  }
+
+  function switchStaff() {
+    clearStaff()
+    router.push('/staff')
+  }
+
   async function signOut() {
     setBusy(true)
+    clearStaff()
     await supabase.auth.signOut()
     setBusy(false)
-    router.refresh()
+    router.push('/login')
   }
+
+  const visibleNavItems = navItems.filter(canSeeNavItem)
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isCurrent = current === item.key
 
           const normalClass =
@@ -150,7 +175,23 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
         })}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {staff && (
+          <>
+            <span className="max-w-[150px] truncate rounded-lg bg-emerald-950 px-3 py-2 text-xs font-bold text-emerald-200">
+              Staff: {staff.name}
+            </span>
+
+            <button
+              type="button"
+              onClick={switchStaff}
+              className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-bold text-zinc-200 hover:bg-zinc-700"
+            >
+              Switch staff
+            </button>
+          </>
+        )}
+
         {userLabel ? (
           <>
             <span className="max-w-[180px] truncate rounded-lg bg-zinc-900 px-3 py-2 text-xs font-bold text-zinc-300">
