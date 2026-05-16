@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
 const CHANNEL_ICONS = [
@@ -345,163 +346,165 @@ export default function FinalisedPage() {
   const allSelected = items.length > 0 && selectedItems.length === items.length
 
   return (
-    <main className="min-h-screen bg-zinc-950 p-5 text-white">
-      <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">Finalised Items</h1>
+    <StaffPermissionGate permission="finalised">
+      <main className="min-h-screen bg-zinc-950 p-5 text-white">
+        <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">Finalised Items</h1>
 
-            <p className="text-sm text-zinc-400">
-              {items.length} item(s) · {selectedItems.length} selected
-            </p>
+              <p className="text-sm text-zinc-400">
+                {items.length} item(s) · {selectedItems.length} selected
+              </p>
 
-            {staff ? (
-              <p className="mt-1 text-sm font-bold text-green-300">
-                Active staff: {staff.name}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm font-bold text-yellow-300">
-                No active staff selected
-              </p>
-            )}
+              {staff ? (
+                <p className="mt-1 text-sm font-bold text-green-300">
+                  Active staff: {staff.name}
+                </p>
+              ) : (
+                <p className="mt-1 text-sm font-bold text-yellow-300">
+                  No active staff selected
+                </p>
+              )}
+            </div>
+
+            <AppNav current="finalised" />
           </div>
 
-          <AppNav current="finalised" />
+          <div className="flex flex-wrap items-center gap-3">
+            {message && (
+              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+                {message}
+              </span>
+            )}
+
+            <button
+              onClick={exportSelectedToLinnworks}
+              disabled={!staff || selectedItems.length === 0 || exporting}
+              className="rounded-lg bg-white px-5 py-2 text-sm font-bold text-black hover:bg-zinc-200 disabled:opacity-50"
+            >
+              {exporting ? 'Exporting...' : 'Export to Linnworks'}
+            </button>
+
+            <button
+              onClick={saveExportSelection}
+              disabled={!staff || selectedItems.length === 0}
+              className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold hover:bg-green-500 disabled:opacity-50"
+            >
+              Save Export Selection
+            </button>
+
+            <button
+              onClick={fetchFinalisedItems}
+              disabled={loading || exporting}
+              className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold hover:bg-blue-500 disabled:opacity-50"
+            >
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {message && (
-            <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-              {message}
-            </span>
-          )}
+        {items.length > 0 && (
+          <div className="mb-2 flex items-center gap-3 px-2">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleAll}
+              className="h-5 w-5"
+            />
 
-          <button
-            onClick={exportSelectedToLinnworks}
-            disabled={!staff || selectedItems.length === 0 || exporting}
-            className="rounded-lg bg-white px-5 py-2 text-sm font-bold text-black hover:bg-zinc-200 disabled:opacity-50"
-          >
-            {exporting ? 'Exporting...' : 'Export to Linnworks'}
-          </button>
+            <span className="text-sm text-zinc-400">Select All</span>
+          </div>
+        )}
 
-          <button
-            onClick={saveExportSelection}
-            disabled={!staff || selectedItems.length === 0}
-            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold hover:bg-green-500 disabled:opacity-50"
-          >
-            Save Export Selection
-          </button>
+        {items.length === 0 ? (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-8 text-center text-zinc-400">
+            No finalised items.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {items.map((item) => {
+              const thumbnailUrl = imagesByItem[item.id]
+              const selected = selectedItems.includes(item.id)
+              const processedCount = processedImagesByItem[item.id]?.length || 0
 
-          <button
-            onClick={fetchFinalisedItems}
-            disabled={loading || exporting}
-            className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold hover:bg-blue-500 disabled:opacity-50"
-          >
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-      </div>
+              return (
+                <section
+                  key={item.id}
+                  className={`w-full rounded-xl border p-3 transition ${
+                    selected
+                      ? 'border-green-500 bg-green-950/20'
+                      : 'border-zinc-800 bg-zinc-900'
+                  }`}
+                >
+                  <div className="grid grid-cols-[40px_64px_1fr_56px_90px] items-center gap-3">
+                    <div className="flex justify-center">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleItem(item.id)}
+                        className="h-5 w-5"
+                      />
+                    </div>
 
-      {items.length > 0 && (
-        <div className="mb-2 flex items-center gap-3 px-2">
-          <input
-            type="checkbox"
-            checked={allSelected}
-            onChange={toggleAll}
-            className="h-5 w-5"
-          />
+                    <div className="h-14 w-14 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950">
+                      {thumbnailUrl ? (
+                        <img src={thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-[10px] text-zinc-500">
+                          No image
+                        </div>
+                      )}
+                    </div>
 
-          <span className="text-sm text-zinc-400">Select All</span>
-        </div>
-      )}
+                    <div className="min-w-0">
+                      <h2 className="truncate text-sm font-bold">{item.sku}</h2>
 
-      {items.length === 0 ? (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-8 text-center text-zinc-400">
-          No finalised items.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {items.map((item) => {
-            const thumbnailUrl = imagesByItem[item.id]
-            const selected = selectedItems.includes(item.id)
-            const processedCount = processedImagesByItem[item.id]?.length || 0
-
-            return (
-              <section
-                key={item.id}
-                className={`w-full rounded-xl border p-3 transition ${
-                  selected
-                    ? 'border-green-500 bg-green-950/20'
-                    : 'border-zinc-800 bg-zinc-900'
-                }`}
-              >
-                <div className="grid grid-cols-[40px_64px_1fr_56px_90px] items-center gap-3">
-                  <div className="flex justify-center">
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() => toggleItem(item.id)}
-                      className="h-5 w-5"
-                    />
-                  </div>
-
-                  <div className="h-14 w-14 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950">
-                    {thumbnailUrl ? (
-                      <img src={thumbnailUrl} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[10px] text-zinc-500">
-                        No image
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="min-w-0">
-                    <h2 className="truncate text-sm font-bold">{item.sku}</h2>
-
-                    <p className="truncate text-xs text-zinc-400">
-                      {item.brand || 'No brand'} · {item.reporting_category || 'No category'} · £
-                      {item.selling_price ?? '-'} · {processedCount} processed image(s)
-                    </p>
-
-                    <p className="mt-1 truncate text-xs text-zinc-500">
-                      {getExportTitle(item)}
-                    </p>
-
-                    {item.linnworks_sync_error && (
-                      <p className="mt-1 truncate text-xs font-bold text-red-300">
-                        {item.linnworks_sync_error}
+                      <p className="truncate text-xs text-zinc-400">
+                        {item.brand || 'No brand'} · {item.reporting_category || 'No category'} · £
+                        {item.selling_price ?? '-'} · {processedCount} processed image(s)
                       </p>
-                    )}
-                  </div>
 
-                  <div className="flex flex-col gap-1 rounded-lg bg-zinc-950 p-1">
-                    {[0, 2, 4, 6].map((start) => (
-                      <div key={start} className="flex gap-1">
-                        {CHANNEL_ICONS.slice(start, start + 2).map((icon) => (
-                          <img
-                            key={icon.name}
-                            src={icon.src}
-                            title={`${icon.name}: ${String(item[icon.key] || 'not_synced')}`}
-                            className={`h-4 w-4 rounded-sm ${channelOpacity(item[icon.key])}`}
-                            alt=""
-                          />
-                        ))}
-                      </div>
-                    ))}
-                  </div>
+                      <p className="mt-1 truncate text-xs text-zinc-500">
+                        {getExportTitle(item)}
+                      </p>
 
-                  <Link
-                    href={`/items/${item.id}`}
-                    className="rounded-lg bg-zinc-800 px-3 py-2 text-center text-xs font-bold hover:bg-zinc-700"
-                  >
-                    Open
-                  </Link>
-                </div>
-              </section>
-            )
-          })}
-        </div>
-      )}
-    </main>
+                      {item.linnworks_sync_error && (
+                        <p className="mt-1 truncate text-xs font-bold text-red-300">
+                          {item.linnworks_sync_error}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col gap-1 rounded-lg bg-zinc-950 p-1">
+                      {[0, 2, 4, 6].map((start) => (
+                        <div key={start} className="flex gap-1">
+                          {CHANNEL_ICONS.slice(start, start + 2).map((icon) => (
+                            <img
+                              key={icon.name}
+                              src={icon.src}
+                              title={`${icon.name}: ${String(item[icon.key] || 'not_synced')}`}
+                              className={`h-4 w-4 rounded-sm ${channelOpacity(item[icon.key])}`}
+                              alt=""
+                            />
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+
+                    <Link
+                      href={`/items/${item.id}`}
+                      className="rounded-lg bg-zinc-800 px-3 py-2 text-center text-xs font-bold hover:bg-zinc-700"
+                    >
+                      Open
+                    </Link>
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        )}
+      </main>
+    </StaffPermissionGate>
   )
 }
