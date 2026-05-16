@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 
 type ItemRow = {
   id: string
@@ -702,359 +703,361 @@ export default function CheckoutPage() {
   }
 
   return (
-    <main className={pageClass}>
-      <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 p-3 sm:p-5">
-        <section className={`${panelClass} p-4`}>
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-black tracking-tight">
-                {mode === 'refund' ? 'Refund' : mode === 'exchange' ? 'Exchange' : 'Checkout'}
-              </h1>
-              <p className={`text-sm ${mutedText}`}>
-                {mode === 'refund'
-                  ? 'Select items and quantities to refund.'
-                  : selectedLine
-                    ? `Discount target: ${selectedLine.sku}`
-                    : 'Discount target: whole basket'}
-              </p>
+    <StaffPermissionGate permission="checkout">
+      <main className={pageClass}>
+        <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 p-3 sm:p-5">
+          <section className={`${panelClass} p-4`}>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-black tracking-tight">
+                  {mode === 'refund' ? 'Refund' : mode === 'exchange' ? 'Exchange' : 'Checkout'}
+                </h1>
+                <p className={`text-sm ${mutedText}`}>
+                  {mode === 'refund'
+                    ? 'Select items and quantities to refund.'
+                    : selectedLine
+                      ? `Discount target: ${selectedLine.sku}`
+                      : 'Discount target: whole basket'}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <input
+                  value={checkoutLocation}
+                  onChange={(event) => setCheckoutLocation(event.target.value)}
+                  onBlur={(event) => saveCheckoutLocation(event.target.value)}
+                  placeholder="Location"
+                  className="w-24 rounded-xl border border-neutral-300 bg-white px-2 py-2 text-xs font-bold uppercase outline-none focus:border-black"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => saveCheckoutLocation(checkoutLocation)}
+                  className="rounded-xl bg-black px-3 py-2 text-xs font-black text-white"
+                >
+                  Save
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                addScannedSku()
+              }}
+              className="flex gap-2"
+            >
               <input
-                value={checkoutLocation}
-                onChange={(event) => setCheckoutLocation(event.target.value)}
-                onBlur={(event) => saveCheckoutLocation(event.target.value)}
-                placeholder="Location"
-                className="w-24 rounded-xl border border-neutral-300 bg-white px-2 py-2 text-xs font-bold uppercase outline-none focus:border-black"
+                ref={inputRef}
+                value={scanValue}
+                onChange={(event) => setScanValue(event.target.value)}
+                placeholder="Scan SKU or receipt barcode"
+                className={inputClass}
+                autoFocus
+                inputMode="text"
+                autoComplete="off"
               />
+              <button
+                type="submit"
+                disabled={!scanValue.trim() || Boolean(loadingSku)}
+                className="rounded-2xl bg-black px-5 py-3 font-black text-white disabled:opacity-40"
+              >
+                Add
+              </button>
+            </form>
 
+            {message && (
+              <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-semibold">
+                {message}
+              </div>
+            )}
+          </section>
+
+          <section className={`${panelClass} flex flex-1 flex-col overflow-hidden`}>
+            <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+              <div>
+                <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
+                <p className="text-base font-black">{totalItems} items</p>
+              </div>
               <button
                 type="button"
-                onClick={() => saveCheckoutLocation(checkoutLocation)}
-                className="rounded-xl bg-black px-3 py-2 text-xs font-black text-white"
+                onClick={() => clearSale()}
+                className="rounded-full bg-red-500 px-4 py-2 text-sm font-black text-white"
               >
-                Save
+                Clear
               </button>
             </div>
-          </div>
 
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              addScannedSku()
-            }}
-            className="flex gap-2"
-          >
-            <input
-              ref={inputRef}
-              value={scanValue}
-              onChange={(event) => setScanValue(event.target.value)}
-              placeholder="Scan SKU or receipt barcode"
-              className={inputClass}
-              autoFocus
-              inputMode="text"
-              autoComplete="off"
-            />
-            <button
-              type="submit"
-              disabled={!scanValue.trim() || Boolean(loadingSku)}
-              className="rounded-2xl bg-black px-5 py-3 font-black text-white disabled:opacity-40"
-            >
-              Add
-            </button>
-          </form>
+            <div className="flex-1 space-y-2 overflow-auto p-2">
+              {basket.length === 0 ? (
+                <div className={`rounded-3xl p-8 text-center ${mutedText}`}>
+                  <p className="text-lg font-bold">No items scanned yet</p>
+                  <p className="text-sm">Scan SKU or receipt barcode.</p>
+                </div>
+              ) : (
+                basket.map((line) => {
+                  const key = line.originalLineId || line.sku
+                  const isSelected = selectedSku === key
+                  const maxRefund = Number(line.maxRefundQuantity || 0)
 
-          {message && (
-            <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-semibold">
-              {message}
-            </div>
-          )}
-        </section>
-
-        <section className={`${panelClass} flex flex-1 flex-col overflow-hidden`}>
-          <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
-            <div>
-              <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
-              <p className="text-base font-black">{totalItems} items</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => clearSale()}
-              className="rounded-full bg-red-500 px-4 py-2 text-sm font-black text-white"
-            >
-              Clear
-            </button>
-          </div>
-
-          <div className="flex-1 space-y-2 overflow-auto p-2">
-            {basket.length === 0 ? (
-              <div className={`rounded-3xl p-8 text-center ${mutedText}`}>
-                <p className="text-lg font-bold">No items scanned yet</p>
-                <p className="text-sm">Scan SKU or receipt barcode.</p>
-              </div>
-            ) : (
-              basket.map((line) => {
-                const key = line.originalLineId || line.sku
-                const isSelected = selectedSku === key
-                const maxRefund = Number(line.maxRefundQuantity || 0)
-
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setSelectedSku(isSelected ? '' : key)}
-                    className={`w-full rounded-2xl p-2 text-left ${
-                      isSelected
-                        ? 'bg-emerald-100 ring-2 ring-emerald-400'
-                        : 'bg-neutral-100'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-neutral-200">
-                        {line.thumbnailUrl ? (
-                          <img
-                            src={line.thumbnailUrl}
-                            alt={line.sku}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-neutral-400">
-                            NO IMG
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-black">
-                              {line.brand || 'Unknown Brand'}
-                            </p>
-                            <p className={`truncate text-xs ${mutedText}`}>
-                              {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') || line.title}
-                            </p>
-                            <p className={`truncate text-[11px] ${mutedText}`}>{line.sku}</p>
-                          </div>
-
-                          <div className="shrink-0 text-right">
-                            <p className="text-base font-black">
-                              {line.isReturnLine ? '-' : ''}
-                              {money(line.price * line.quantity)}
-                            </p>
-                            <p className={`text-[11px] ${mutedText}`}>{money(line.price)} each</p>
-                          </div>
-                        </div>
-
-                        <div className="mt-2 flex items-center justify-between gap-2">
-                          <div className="flex items-center rounded-full border border-neutral-300">
-                            <span
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                updateQty(line, line.quantity - 1)
-                              }}
-                              className="px-3 py-1 text-lg font-black"
-                            >
-                              −
-                            </span>
-                            <span className="min-w-8 text-center text-sm font-black">{line.quantity}</span>
-                            <span
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                updateQty(line, line.quantity + 1)
-                              }}
-                              className="px-3 py-1 text-lg font-black"
-                            >
-                              +
-                            </span>
-                          </div>
-
-                          {line.isReturnLine && (
-                            <span className={`text-xs font-bold ${mutedText}`}>Max {maxRefund}</span>
-                          )}
-
-                          {line.lineDiscountPercent > 0 && (
-                            <span className="text-xs font-black text-emerald-600">
-                              {line.lineDiscountPercent}% off
-                            </span>
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSelectedSku(isSelected ? '' : key)}
+                      className={`w-full rounded-2xl p-2 text-left ${
+                        isSelected
+                          ? 'bg-emerald-100 ring-2 ring-emerald-400'
+                          : 'bg-neutral-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-neutral-200">
+                          {line.thumbnailUrl ? (
+                            <img
+                              src={line.thumbnailUrl}
+                              alt={line.sku}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-neutral-400">
+                              NO IMG
+                            </div>
                           )}
                         </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-black">
+                                {line.brand || 'Unknown Brand'}
+                              </p>
+                              <p className={`truncate text-xs ${mutedText}`}>
+                                {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') || line.title}
+                              </p>
+                              <p className={`truncate text-[11px] ${mutedText}`}>{line.sku}</p>
+                            </div>
+
+                            <div className="shrink-0 text-right">
+                              <p className="text-base font-black">
+                                {line.isReturnLine ? '-' : ''}
+                                {money(line.price * line.quantity)}
+                              </p>
+                              <p className={`text-[11px] ${mutedText}`}>{money(line.price)} each</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <div className="flex items-center rounded-full border border-neutral-300">
+                              <span
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  updateQty(line, line.quantity - 1)
+                                }}
+                                className="px-3 py-1 text-lg font-black"
+                              >
+                                −
+                              </span>
+                              <span className="min-w-8 text-center text-sm font-black">{line.quantity}</span>
+                              <span
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  updateQty(line, line.quantity + 1)
+                                }}
+                                className="px-3 py-1 text-lg font-black"
+                              >
+                                +
+                              </span>
+                            </div>
+
+                            {line.isReturnLine && (
+                              <span className={`text-xs font-bold ${mutedText}`}>Max {maxRefund}</span>
+                            )}
+
+                            {line.lineDiscountPercent > 0 && (
+                              <span className="text-xs font-black text-emerald-600">
+                                {line.lineDiscountPercent}% off
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </button>
-                )
-              })
-            )}
-          </div>
-        </section>
-
-        <section className={`${panelClass} p-4`}>
-          {mode === 'sale' && (
-            <div className="mb-3 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => applyPercentDiscount(5)}
-                className="rounded-2xl border border-neutral-300 py-3 font-black"
-              >
-                5% off
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPercentDiscount(10)}
-                className="rounded-2xl border border-neutral-300 py-3 font-black"
-              >
-                10% off
-              </button>
+                    </button>
+                  )
+                })
+              )}
             </div>
-          )}
+          </section>
 
-          <div className="space-y-1 text-sm">
-            {mode === 'exchange' && (
-              <div className="flex justify-between">
-                <span className={mutedText}>Exchange credit</span>
-                <span className="font-bold">−{money(exchangeCredit)}</span>
-              </div>
-            )}
-
-            <div className="flex justify-between">
-              <span className={mutedText}>Subtotal</span>
-              <span className="font-bold">{money(mode === 'refund' ? returnSubtotal : saleSubtotal)}</span>
-            </div>
-
-            <div className="flex justify-between">
-              <span className={mutedText}>Discount</span>
-              <span className="font-bold">−{money(totalDiscount)}</span>
-            </div>
-
-            <div className="flex justify-between">
-              <span className={mutedText}>Net</span>
-              <span className="font-bold">{money(netAmount)}</span>
-            </div>
-
-            <div className="flex justify-between">
-              <span className={mutedText}>VAT included at 20%</span>
-              <span className="font-bold">{money(vatAmount)}</span>
-            </div>
-
-            {mode === 'exchange' && refundDue > 0 && (
-              <div className="flex justify-between text-red-500">
-                <span>Refund due</span>
-                <span className="font-black">{money(refundDue)}</span>
-              </div>
-            )}
-
-            <div className="flex items-end justify-between pt-2">
-              <span className="text-lg font-black">
-                {mode === 'refund' ? 'Refund total' : mode === 'exchange' ? 'Balance due' : 'Total'}
-              </span>
-              <span className="text-4xl font-black tracking-tight">{money(displayedTotal)}</span>
-            </div>
-          </div>
-
-          {mode === 'refund' ? (
-            <div className="mt-4 grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => completeSale('cash')}
-                className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black"
-              >
-                CASH REFUND
-              </button>
-              <button
-                type="button"
-                onClick={() => completeSale('card')}
-                className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black"
-              >
-                CARD REFUND
-              </button>
-              <button
-                type="button"
-                onClick={beginExchange}
-                className="rounded-3xl bg-amber-100 py-4 text-sm font-black text-black"
-              >
-                EXCHANGE
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 grid grid-cols-2 gap-3">
+          <section className={`${panelClass} p-4`}>
+            {mode === 'sale' && (
+              <div className="mb-3 grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod('cash')}
-                  className={`rounded-3xl py-4 text-xl font-black ${
-                    paymentMethod === 'cash'
-                      ? 'bg-green-300 text-black ring-4 ring-green-500/40'
-                      : 'bg-green-100 text-black'
-                  }`}
+                  onClick={() => applyPercentDiscount(5)}
+                  className="rounded-2xl border border-neutral-300 py-3 font-black"
                 >
-                  CASH <span className="text-2xl">💷</span>
+                  5% off
                 </button>
-
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod('card')}
-                  className={`rounded-3xl py-4 text-xl font-black ${
-                    paymentMethod === 'card'
-                      ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
-                      : 'bg-sky-100 text-black'
-                  }`}
+                  onClick={() => applyPercentDiscount(10)}
+                  className="rounded-2xl border border-neutral-300 py-3 font-black"
                 >
-                  <span className="inline-flex items-center justify-center gap-2">
-                    CARD
-                    <CardLogos />
-                  </span>
+                  10% off
                 </button>
               </div>
+            )}
 
-              {paymentMethod === 'cash' && displayedTotal > 0 && (
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <input
-                    value={cashTendered}
-                    onChange={(event) => setCashTendered(event.target.value)}
-                    placeholder="Cash tendered"
-                    className={inputClass}
-                    inputMode="decimal"
-                  />
-                  <div className="rounded-2xl bg-neutral-100 p-3 text-right">
-                    <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
-                    <p className="text-2xl font-black">{money(changeDue)}</p>
-                  </div>
+            <div className="space-y-1 text-sm">
+              {mode === 'exchange' && (
+                <div className="flex justify-between">
+                  <span className={mutedText}>Exchange credit</span>
+                  <span className="font-bold">−{money(exchangeCredit)}</span>
                 </div>
               )}
 
+              <div className="flex justify-between">
+                <span className={mutedText}>Subtotal</span>
+                <span className="font-bold">{money(mode === 'refund' ? returnSubtotal : saleSubtotal)}</span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className={mutedText}>Discount</span>
+                <span className="font-bold">−{money(totalDiscount)}</span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className={mutedText}>Net</span>
+                <span className="font-bold">{money(netAmount)}</span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className={mutedText}>VAT included at 20%</span>
+                <span className="font-bold">{money(vatAmount)}</span>
+              </div>
+
+              {mode === 'exchange' && refundDue > 0 && (
+                <div className="flex justify-between text-red-500">
+                  <span>Refund due</span>
+                  <span className="font-black">{money(refundDue)}</span>
+                </div>
+              )}
+
+              <div className="flex items-end justify-between pt-2">
+                <span className="text-lg font-black">
+                  {mode === 'refund' ? 'Refund total' : mode === 'exchange' ? 'Balance due' : 'Total'}
+                </span>
+                <span className="text-4xl font-black tracking-tight">{money(displayedTotal)}</span>
+              </div>
+            </div>
+
+            {mode === 'refund' ? (
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => completeSale('cash')}
+                  className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black"
+                >
+                  CASH REFUND
+                </button>
+                <button
+                  type="button"
+                  onClick={() => completeSale('card')}
+                  className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black"
+                >
+                  CARD REFUND
+                </button>
+                <button
+                  type="button"
+                  onClick={beginExchange}
+                  className="rounded-3xl bg-amber-100 py-4 text-sm font-black text-black"
+                >
+                  EXCHANGE
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('cash')}
+                    className={`rounded-3xl py-4 text-xl font-black ${
+                      paymentMethod === 'cash'
+                        ? 'bg-green-300 text-black ring-4 ring-green-500/40'
+                        : 'bg-green-100 text-black'
+                    }`}
+                  >
+                    CASH <span className="text-2xl">💷</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('card')}
+                    className={`rounded-3xl py-4 text-xl font-black ${
+                      paymentMethod === 'card'
+                        ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
+                        : 'bg-sky-100 text-black'
+                    }`}
+                  >
+                    <span className="inline-flex items-center justify-center gap-2">
+                      CARD
+                      <CardLogos />
+                    </span>
+                  </button>
+                </div>
+
+                {paymentMethod === 'cash' && displayedTotal > 0 && (
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <input
+                      value={cashTendered}
+                      onChange={(event) => setCashTendered(event.target.value)}
+                      placeholder="Cash tendered"
+                      className={inputClass}
+                      inputMode="decimal"
+                    />
+                    <div className="rounded-2xl bg-neutral-100 p-3 text-right">
+                      <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
+                      <p className="text-2xl font-black">{money(changeDue)}</p>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={!paymentMethod || basket.length === 0 || saleBusy}
+                  onClick={() => paymentMethod && completeSale(paymentMethod)}
+                  className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-2xl font-black text-black disabled:opacity-40"
+                >
+                  {saleBusy
+                    ? 'Saving…'
+                    : mode === 'exchange'
+                      ? 'Complete Exchange'
+                      : paymentMethod === 'cash'
+                        ? 'Complete Cash Sale'
+                        : paymentMethod === 'card'
+                          ? 'Record Card Sale'
+                          : 'Select Payment'}
+                </button>
+              </>
+            )}
+
+            <div className="mt-4 flex justify-center">
               <button
                 type="button"
-                disabled={!paymentMethod || basket.length === 0 || saleBusy}
-                onClick={() => paymentMethod && completeSale(paymentMethod)}
-                className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-2xl font-black text-black disabled:opacity-40"
+                onClick={() => {
+                  const receipt = window.prompt('Scan or enter receipt barcode')
+                  if (!receipt) return
+                  loadSaleForRefund(receipt.trim().toUpperCase())
+                }}
+                className="text-xs font-bold text-red-500 underline"
               >
-                {saleBusy
-                  ? 'Saving…'
-                  : mode === 'exchange'
-                    ? 'Complete Exchange'
-                    : paymentMethod === 'cash'
-                      ? 'Complete Cash Sale'
-                      : paymentMethod === 'card'
-                        ? 'Record Card Sale'
-                        : 'Select Payment'}
+                Refund / exchange receipt
               </button>
-            </>
-          )}
-
-          <div className="mt-4 flex justify-center">
-            <button
-              type="button"
-              onClick={() => {
-                const receipt = window.prompt('Scan or enter receipt barcode')
-                if (!receipt) return
-                loadSaleForRefund(receipt.trim().toUpperCase())
-              }}
-              className="text-xs font-bold text-red-500 underline"
-            >
-              Refund / exchange receipt
-            </button>
-          </div>
-        </section>
-      </div>
-    </main>
+            </div>
+          </section>
+        </div>
+      </main>
+    </StaffPermissionGate>
   )
 }
