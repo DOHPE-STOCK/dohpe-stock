@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
 const reportingCategories = [
@@ -155,24 +156,9 @@ const measurementMap: Record<string, string[]> = {
 
   Shorts: ['waist_in', 'rise_in', 'hem_width_in'],
   Skirt: ['waist_in', 'collar_to_hem_in'],
-  Dress: [
-    'pit_to_pit_in',
-    'collar_to_hem_in',
-    'pit_to_cuff_in',
-    'waist_in',
-  ],
-  Dungarees: [
-    'pit_to_pit_in',
-    'collar_to_hem_in',
-    'waist_in',
-    'inside_leg_in',
-  ],
-  Overalls: [
-    'pit_to_pit_in',
-    'collar_to_hem_in',
-    'waist_in',
-    'inside_leg_in',
-  ],
+  Dress: ['pit_to_pit_in', 'collar_to_hem_in', 'pit_to_cuff_in', 'waist_in'],
+  Dungarees: ['pit_to_pit_in', 'collar_to_hem_in', 'waist_in', 'inside_leg_in'],
+  Overalls: ['pit_to_pit_in', 'collar_to_hem_in', 'waist_in', 'inside_leg_in'],
   'Boiler Suit': [
     'pit_to_pit_in',
     'collar_to_hem_in',
@@ -220,9 +206,7 @@ const measurementLabels: Record<string, string> = {
 function Field({ label, value, onChange }: any) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-zinc-400">
-        {label}
-      </span>
+      <span className="mb-1 block text-xs font-medium text-zinc-400">{label}</span>
 
       <input
         value={value || ''}
@@ -236,9 +220,7 @@ function Field({ label, value, onChange }: any) {
 function SelectField({ label, value, onChange, options }: any) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-zinc-400">
-        {label}
-      </span>
+      <span className="mb-1 block text-xs font-medium text-zinc-400">{label}</span>
 
       <select
         value={value || ''}
@@ -267,9 +249,7 @@ function DatalistField({
 }: any) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-zinc-400">
-        {label}
-      </span>
+      <span className="mb-1 block text-xs font-medium text-zinc-400">{label}</span>
 
       <input
         list={listId}
@@ -291,9 +271,7 @@ function DatalistField({
 function TextArea({ label, value, onChange }: any) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-zinc-400">
-        {label}
-      </span>
+      <span className="mb-1 block text-xs font-medium text-zinc-400">{label}</span>
 
       <textarea
         value={value || ''}
@@ -907,298 +885,302 @@ export default function ItemPage() {
 
   if (!item) {
     return (
-      <main className="min-h-screen bg-zinc-950 p-6 text-white">
-        Loading...
-      </main>
+      <StaffPermissionGate permission="working">
+        <main className="min-h-screen bg-zinc-950 p-6 text-white">
+          Loading...
+        </main>
+      </StaffPermissionGate>
     )
   }
 
   const visibleMeasurements = measurementMap[item.reporting_category] || []
 
   return (
-    <main className="min-h-screen bg-zinc-950 p-5 text-white">
-      <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">SKU: {item.sku}</h1>
+    <StaffPermissionGate permission="working">
+      <main className="min-h-screen bg-zinc-950 p-5 text-white">
+        <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">SKU: {item.sku}</h1>
 
-            <p className="text-sm text-zinc-400">
-              Status: {item.status}
-              {hasUnsavedChanges ? ' · Unsaved changes' : ''}
-            </p>
+              <p className="text-sm text-zinc-400">
+                Status: {item.status}
+                {hasUnsavedChanges ? ' · Unsaved changes' : ''}
+              </p>
 
-            {staff ? (
-              <p className="mt-1 text-sm font-bold text-green-300">
-                Active staff: {staff.name}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm font-bold text-yellow-300">
-                No active staff selected
-              </p>
-            )}
+              {staff ? (
+                <p className="mt-1 text-sm font-bold text-green-300">
+                  Active staff: {staff.name}
+                </p>
+              ) : (
+                <p className="mt-1 text-sm font-bold text-yellow-300">
+                  No active staff selected
+                </p>
+              )}
+            </div>
+
+            <AppNav current={undefined} onNavigate={confirmNavigation} />
           </div>
 
-          <AppNav current={undefined} onNavigate={confirmNavigation} />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {message && (
+              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+                {message}
+              </span>
+            )}
+
+            <button
+              onClick={saveItem}
+              disabled={!staff || processingImages}
+              className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
+            >
+              Save Item
+            </button>
+
+            <button
+              onClick={sendToReview}
+              disabled={!staff || processingImages}
+              className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
+            >
+              Send to Review
+            </button>
+
+            <button
+              onClick={finaliseItem}
+              disabled={!staff || processingImages}
+              className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
+            >
+              {processingImages ? 'Finalising...' : 'Finalise'}
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          {message && (
-            <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-              {message}
-            </span>
-          )}
-
-          <button
-            onClick={saveItem}
-            disabled={!staff || processingImages}
-            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
-          >
-            Save Item
-          </button>
-
-          <button
-            onClick={sendToReview}
-            disabled={!staff || processingImages}
-            className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
-          >
-            Send to Review
-          </button>
-
-          <button
-            onClick={finaliseItem}
-            disabled={!staff || processingImages}
-            className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
-          >
-            {processingImages ? 'Finalising...' : 'Finalise'}
-          </button>
-        </div>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
-        <div className="space-y-4">
-          <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
-              Item Details
-            </h2>
-
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-              <Field
-                label="Brand"
-                value={item.brand}
-                onChange={(v: string) => updateField('brand', v)}
-              />
-
-              <DatalistField
-                label="Reporting Category"
-                value={item.reporting_category}
-                onChange={(v: string) => updateReportingCategory(v)}
-                options={reportingCategories}
-                listId="reporting-categories"
-                placeholder="Type or select category"
-              />
-
-              <Field
-                label="Sub Type"
-                value={item.sub_type}
-                onChange={(v: string) => updateField('sub_type', v)}
-              />
-
-              <SelectField
-                label="Gender"
-                value={item.gender}
-                onChange={(v: string) => updateField('gender', v)}
-                options={genderOptions}
-              />
-
-              <Field
-                label="Tagged Size"
-                value={item.tagged_size}
-                onChange={(v: string) => updateField('tagged_size', v)}
-              />
-
-              <Field
-                label="Primary Colour"
-                value={item.colour_primary}
-                onChange={(v: string) => updateField('colour_primary', v)}
-              />
-
-              <Field
-                label="Secondary Colour"
-                value={item.colour_secondary}
-                onChange={(v: string) => updateField('colour_secondary', v)}
-              />
-
-              <SelectField
-                label="Condition"
-                value={item.condition}
-                onChange={(v: string) => updateField('condition', v)}
-                options={conditionOptions}
-              />
-
-              <DatalistField
-                label="Material"
-                value={item.material}
-                onChange={(v: string) => updateField('material', v)}
-                options={materialOptions}
-                listId="material-options"
-                placeholder="Type or select material"
-              />
-
-              <Field
-                label="Era"
-                value={item.era}
-                onChange={(v: string) => updateField('era', v)}
-              />
-
-              <Field
-                label="Style"
-                value={item.style}
-                onChange={(v: string) => updateField('style', v)}
-              />
-
-              <Field
-                label="Staff Notes"
-                value={item.staff_notes}
-                onChange={(v: string) => updateField('staff_notes', v)}
-              />
-            </div>
-          </section>
-
-          {visibleMeasurements.length > 0 && (
+        <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
+          <div className="space-y-4">
             <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
               <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
-                Measurements - Inches
+                Item Details
               </h2>
 
               <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-                {visibleMeasurements.map((field) => (
-                  <Field
-                    key={field}
-                    label={measurementLabels[field]}
-                    value={item[field]}
-                    onChange={(v: string) => updateField(field, v)}
-                  />
-                ))}
+                <Field
+                  label="Brand"
+                  value={item.brand}
+                  onChange={(v: string) => updateField('brand', v)}
+                />
+
+                <DatalistField
+                  label="Reporting Category"
+                  value={item.reporting_category}
+                  onChange={(v: string) => updateReportingCategory(v)}
+                  options={reportingCategories}
+                  listId="reporting-categories"
+                  placeholder="Type or select category"
+                />
 
                 <Field
-                  label="Weight (g)"
-                  value={item.weight_grams}
-                  onChange={(v: string) => updateField('weight_grams', v)}
+                  label="Sub Type"
+                  value={item.sub_type}
+                  onChange={(v: string) => updateField('sub_type', v)}
+                />
+
+                <SelectField
+                  label="Gender"
+                  value={item.gender}
+                  onChange={(v: string) => updateField('gender', v)}
+                  options={genderOptions}
+                />
+
+                <Field
+                  label="Tagged Size"
+                  value={item.tagged_size}
+                  onChange={(v: string) => updateField('tagged_size', v)}
+                />
+
+                <Field
+                  label="Primary Colour"
+                  value={item.colour_primary}
+                  onChange={(v: string) => updateField('colour_primary', v)}
+                />
+
+                <Field
+                  label="Secondary Colour"
+                  value={item.colour_secondary}
+                  onChange={(v: string) => updateField('colour_secondary', v)}
+                />
+
+                <SelectField
+                  label="Condition"
+                  value={item.condition}
+                  onChange={(v: string) => updateField('condition', v)}
+                  options={conditionOptions}
+                />
+
+                <DatalistField
+                  label="Material"
+                  value={item.material}
+                  onChange={(v: string) => updateField('material', v)}
+                  options={materialOptions}
+                  listId="material-options"
+                  placeholder="Type or select material"
+                />
+
+                <Field
+                  label="Era"
+                  value={item.era}
+                  onChange={(v: string) => updateField('era', v)}
+                />
+
+                <Field
+                  label="Style"
+                  value={item.style}
+                  onChange={(v: string) => updateField('style', v)}
+                />
+
+                <Field
+                  label="Staff Notes"
+                  value={item.staff_notes}
+                  onChange={(v: string) => updateField('staff_notes', v)}
                 />
               </div>
             </section>
-          )}
 
-          <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
-                Descriptions / AI Copy
+            {visibleMeasurements.length > 0 && (
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
+                  Measurements - Inches
+                </h2>
+
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                  {visibleMeasurements.map((field) => (
+                    <Field
+                      key={field}
+                      label={measurementLabels[field]}
+                      value={item[field]}
+                      onChange={(v: string) => updateField(field, v)}
+                    />
+                  ))}
+
+                  <Field
+                    label="Weight (g)"
+                    value={item.weight_grams}
+                    onChange={(v: string) => updateField('weight_grams', v)}
+                  />
+                </div>
+              </section>
+            )}
+
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+                  Descriptions / AI Copy
+                </h2>
+
+                <button
+                  type="button"
+                  onClick={generateAiCopy}
+                  disabled={generatingAi}
+                  className="rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold"
+                >
+                  {generatingAi ? 'Generating...' : 'Generate AI Copy'}
+                </button>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="space-y-3">
+                  <Field
+                    label="Basic Title"
+                    value={item.basic_title}
+                    onChange={(v: string) => updateField('basic_title', v)}
+                  />
+
+                  <TextArea
+                    label="Basic Description"
+                    value={item.basic_description}
+                    onChange={(v: string) => updateField('basic_description', v)}
+                  />
+
+                  <TextArea
+                    label="Flaws"
+                    value={item.flaws}
+                    onChange={(v: string) => updateField('flaws', v)}
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <Field
+                    label="AI Marketplace Title"
+                    value={item.ai_title}
+                    onChange={(v: string) => updateField('ai_title', v)}
+                  />
+
+                  <Field
+                    label="Website Title"
+                    value={item.website_title}
+                    onChange={(v: string) => updateField('website_title', v)}
+                  />
+
+                  <TextArea
+                    label="AI Description"
+                    value={item.ai_description}
+                    onChange={(v: string) => updateField('ai_description', v)}
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <aside className="space-y-4">
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+              <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
+                Photos
               </h2>
+
+              <PhotoPreview itemId={id} refreshKey={photoRefreshKey} />
 
               <button
                 type="button"
-                onClick={generateAiCopy}
-                disabled={generatingAi}
-                className="rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold"
+                onClick={() => confirmNavigation(`/items/${id}/photos`)}
+                className="mt-3 block w-full rounded-lg bg-blue-600 px-4 py-2 text-center text-sm font-bold"
               >
-                {generatingAi ? 'Generating...' : 'Generate AI Copy'}
+                Upload / Edit Photos
               </button>
-            </div>
+            </section>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-3">
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+              <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
+                Pricing / Status
+              </h2>
+
+              <div className="grid grid-cols-2 gap-3">
                 <Field
-                  label="Basic Title"
-                  value={item.basic_title}
-                  onChange={(v: string) => updateField('basic_title', v)}
+                  label="Cost Price (£)"
+                  value={item.cost_price}
+                  onChange={(v: string) => updateField('cost_price', v)}
                 />
 
-                <TextArea
-                  label="Basic Description"
-                  value={item.basic_description}
-                  onChange={(v: string) => updateField('basic_description', v)}
+                <Field
+                  label="Selling Price (£)"
+                  value={item.selling_price}
+                  onChange={(v: string) => updateField('selling_price', v)}
                 />
 
-                <TextArea
-                  label="Flaws"
-                  value={item.flaws}
-                  onChange={(v: string) => updateField('flaws', v)}
+                <Field
+                  label="Stock Level"
+                  value={item.stock_level}
+                  onChange={(v: string) => updateField('stock_level', v)}
+                />
+
+                <Field
+                  label="Status"
+                  value={item.status}
+                  onChange={(v: string) => updateField('status', v)}
                 />
               </div>
-
-              <div className="space-y-3">
-                <Field
-                  label="AI Marketplace Title"
-                  value={item.ai_title}
-                  onChange={(v: string) => updateField('ai_title', v)}
-                />
-
-                <Field
-                  label="Website Title"
-                  value={item.website_title}
-                  onChange={(v: string) => updateField('website_title', v)}
-                />
-
-                <TextArea
-                  label="AI Description"
-                  value={item.ai_description}
-                  onChange={(v: string) => updateField('ai_description', v)}
-                />
-              </div>
-            </div>
-          </section>
+            </section>
+          </aside>
         </div>
-
-        <aside className="space-y-4">
-          <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
-              Photos
-            </h2>
-
-            <PhotoPreview itemId={id} refreshKey={photoRefreshKey} />
-
-            <button
-              type="button"
-              onClick={() => confirmNavigation(`/items/${id}/photos`)}
-              className="mt-3 block w-full rounded-lg bg-blue-600 px-4 py-2 text-center text-sm font-bold"
-            >
-              Upload / Edit Photos
-            </button>
-          </section>
-
-          <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
-              Pricing / Status
-            </h2>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field
-                label="Cost Price (£)"
-                value={item.cost_price}
-                onChange={(v: string) => updateField('cost_price', v)}
-              />
-
-              <Field
-                label="Selling Price (£)"
-                value={item.selling_price}
-                onChange={(v: string) => updateField('selling_price', v)}
-              />
-
-              <Field
-                label="Stock Level"
-                value={item.stock_level}
-                onChange={(v: string) => updateField('stock_level', v)}
-              />
-
-              <Field
-                label="Status"
-                value={item.status}
-                onChange={(v: string) => updateField('status', v)}
-              />
-            </div>
-          </section>
-        </aside>
-      </div>
-    </main>
+      </main>
+    </StaffPermissionGate>
   )
 }
