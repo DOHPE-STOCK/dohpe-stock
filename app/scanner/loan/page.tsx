@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
 type ReturnTarget = 'shop' | 'warehouse'
@@ -449,211 +450,213 @@ export default function LoanPage() {
   }
 
   return (
-    <main
-      className="min-h-screen bg-neutral-950 p-3 text-white select-none sm:p-5"
-      onClick={focusInput}
-    >
-      <div className="mx-auto max-w-5xl space-y-4">
-        <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold sm:text-3xl">Loans</h1>
-
-              <p className="text-sm text-neutral-400">
-                Scan SKU before removing the tag. Return items here to reprint
-                labels and put stock back live.
-              </p>
-
-              {staff ? (
-                <p className="mt-2 text-sm font-bold text-green-300">
-                  Active staff: {staff.name}
-                </p>
-              ) : (
-                <p className="mt-2 text-sm font-bold text-yellow-300">
-                  No active staff selected
-                </p>
-              )}
-            </div>
-
-            <AppNav current="loan" />
-          </div>
-        </header>
-
-        {pendingReturn && (
-          <section className="rounded-2xl border border-orange-700 bg-orange-950 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <StaffPermissionGate permission="scanner">
+      <main
+        className="min-h-screen bg-neutral-950 p-3 text-white select-none sm:p-5"
+        onClick={focusInput}
+      >
+        <div className="mx-auto max-w-5xl space-y-4">
+          <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <h2 className="text-xl font-black text-orange-200">
-                  Confirm Return Scan
-                </h2>
+                <h1 className="text-2xl font-bold sm:text-3xl">Loans</h1>
 
-                <p className="text-sm text-orange-200">
-                  Scan SKU{' '}
-                  <span className="font-mono font-black">
-                    {pendingReturn.item.sku}
-                  </span>{' '}
-                  to return to{' '}
-                  {pendingReturn.target === 'shop' ? 'SHOP' : 'WAREHOUSE'}.
+                <p className="text-sm text-neutral-400">
+                  Scan SKU before removing the tag. Return items here to reprint
+                  labels and put stock back live.
+                </p>
+
+                {staff ? (
+                  <p className="mt-2 text-sm font-bold text-green-300">
+                    Active staff: {staff.name}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-sm font-bold text-yellow-300">
+                    No active staff selected
+                  </p>
+                )}
+              </div>
+
+              <AppNav current="loan" />
+            </div>
+          </header>
+
+          {pendingReturn && (
+            <section className="rounded-2xl border border-orange-700 bg-orange-950 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-black text-orange-200">
+                    Confirm Return Scan
+                  </h2>
+
+                  <p className="text-sm text-orange-200">
+                    Scan SKU{' '}
+                    <span className="font-mono font-black">
+                      {pendingReturn.item.sku}
+                    </span>{' '}
+                    to return to{' '}
+                    {pendingReturn.target === 'shop' ? 'SHOP' : 'WAREHOUSE'}.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={cancelReturn}
+                  className="rounded-xl border border-orange-500 px-4 py-3 text-sm font-black text-orange-100"
+                >
+                  CANCEL RETURN
+                </button>
+              </div>
+            </section>
+          )}
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            <h2 className="mb-3 text-2xl font-black">
+              {pendingReturn ? 'Scan SKU to Confirm Return' : 'Scan Item Out on Loan'}
+            </h2>
+
+            <input
+              ref={inputRef}
+              value={scanValue}
+              onChange={(e) => setScanValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleScan()
+              }}
+              placeholder={
+                staff
+                  ? pendingReturn
+                    ? `Scan ${pendingReturn.item.sku} to confirm return`
+                    : 'Scan item SKU'
+                  : 'Go to staff PIN screen first'
+              }
+              disabled={busy || !staff}
+              inputMode="none"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-5 font-mono text-2xl font-bold outline-none focus:border-white disabled:opacity-50"
+              autoFocus
+            />
+
+            <button
+              onClick={handleScan}
+              disabled={busy || !scanValue.trim() || !staff}
+              className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
+            >
+              {busy
+                ? 'PROCESSING...'
+                : pendingReturn
+                  ? 'CONFIRM RETURN'
+                  : 'MARK ON LOAN'}
+            </button>
+          </section>
+
+          {message && (
+            <section className="rounded-2xl border border-yellow-800 bg-yellow-950 p-4">
+              <p className="text-lg font-bold text-yellow-300">{message}</p>
+            </section>
+          )}
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-2xl font-black">Currently On Loan</h2>
+
+                <p className="text-sm text-neutral-400">
+                  {loanItems.length} item(s) on loan · {selectedItems.length}{' '}
+                  selected
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={cancelReturn}
-                className="rounded-xl border border-orange-500 px-4 py-3 text-sm font-black text-orange-100"
-              >
-                CANCEL RETURN
-              </button>
-            </div>
-          </section>
-        )}
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="mb-3 text-2xl font-black">
-            {pendingReturn ? 'Scan SKU to Confirm Return' : 'Scan Item Out on Loan'}
-          </h2>
-
-          <input
-            ref={inputRef}
-            value={scanValue}
-            onChange={(e) => setScanValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleScan()
-            }}
-            placeholder={
-              staff
-                ? pendingReturn
-                  ? `Scan ${pendingReturn.item.sku} to confirm return`
-                  : 'Scan item SKU'
-                : 'Go to staff PIN screen first'
-            }
-            disabled={busy || !staff}
-            inputMode="none"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-5 font-mono text-2xl font-bold outline-none focus:border-white disabled:opacity-50"
-            autoFocus
-          />
-
-          <button
-            onClick={handleScan}
-            disabled={busy || !scanValue.trim() || !staff}
-            className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
-          >
-            {busy
-              ? 'PROCESSING...'
-              : pendingReturn
-                ? 'CONFIRM RETURN'
-                : 'MARK ON LOAN'}
-          </button>
-        </section>
-
-        {message && (
-          <section className="rounded-2xl border border-yellow-800 bg-yellow-950 p-4">
-            <p className="text-lg font-bold text-yellow-300">{message}</p>
-          </section>
-        )}
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-2xl font-black">Currently On Loan</h2>
-
-              <p className="text-sm text-neutral-400">
-                {loanItems.length} item(s) on loan · {selectedItems.length}{' '}
-                selected
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 sm:flex">
-              <button
-                onClick={fetchLoans}
-                disabled={busy}
-                className="rounded-xl border border-neutral-700 px-4 py-4 text-sm font-black disabled:opacity-40"
-              >
-                REFRESH
-              </button>
-
-              <button
-                onClick={reprintSelectedLabels}
-                disabled={selectedItems.length === 0}
-                className="rounded-xl bg-white px-4 py-4 text-sm font-black text-black disabled:opacity-40"
-              >
-                {selectedItems.length === 1
-                  ? 'PRINT SELECTED LABEL'
-                  : 'PRINT SELECTED LABELS'}
-              </button>
-            </div>
-          </div>
-
-          {loanItems.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-neutral-800 p-8 text-center text-neutral-500">
-              No items currently on loan.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {loanItems.map((item) => (
-                <div
-                  key={item.id}
-                  className={`rounded-xl border bg-neutral-950 p-4 ${
-                    selectedItems.includes(item.id)
-                      ? 'border-white'
-                      : 'border-neutral-800'
-                  }`}
+              <div className="grid grid-cols-2 gap-2 sm:flex">
+                <button
+                  onClick={fetchLoans}
+                  disabled={busy}
+                  className="rounded-xl border border-neutral-700 px-4 py-4 text-sm font-black disabled:opacity-40"
                 >
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex min-w-0 gap-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedItems.includes(item.id)}
-                        onChange={() => toggleSelected(item.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="mt-1 h-6 w-6 shrink-0"
-                      />
+                  REFRESH
+                </button>
 
-                      <div className="min-w-0">
-                        <p className="font-mono text-xl font-black">
-                          {item.sku}
-                        </p>
+                <button
+                  onClick={reprintSelectedLabels}
+                  disabled={selectedItems.length === 0}
+                  className="rounded-xl bg-white px-4 py-4 text-sm font-black text-black disabled:opacity-40"
+                >
+                  {selectedItems.length === 1
+                    ? 'PRINT SELECTED LABEL'
+                    : 'PRINT SELECTED LABELS'}
+                </button>
+              </div>
+            </div>
 
-                        <p className="truncate text-sm text-neutral-300">
-                          {item.ai_title || item.basic_title || 'Untitled item'}
-                        </p>
+            {loanItems.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-neutral-800 p-8 text-center text-neutral-500">
+                No items currently on loan.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {loanItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`rounded-xl border bg-neutral-950 p-4 ${
+                      selectedItems.includes(item.id)
+                        ? 'border-white'
+                        : 'border-neutral-800'
+                    }`}
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="flex min-w-0 gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.includes(item.id)}
+                          onChange={() => toggleSelected(item.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="mt-1 h-6 w-6 shrink-0"
+                        />
 
-                        <p className="mt-1 text-sm text-neutral-400">
-                          {item.brand || 'No brand'} ·{' '}
-                          {item.reporting_category || 'No category'} ·{' '}
-                          {getSizeText(item) || 'No size'} · Loaned:{' '}
-                          {formatDate(item.loaned_at)}
-                        </p>
+                        <div className="min-w-0">
+                          <p className="font-mono text-xl font-black">
+                            {item.sku}
+                          </p>
+
+                          <p className="truncate text-sm text-neutral-300">
+                            {item.ai_title || item.basic_title || 'Untitled item'}
+                          </p>
+
+                          <p className="mt-1 text-sm text-neutral-400">
+                            {item.brand || 'No brand'} ·{' '}
+                            {item.reporting_category || 'No category'} ·{' '}
+                            {getSizeText(item) || 'No size'} · Loaned:{' '}
+                            {formatDate(item.loaned_at)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2 sm:flex">
+                        <button
+                          onClick={() => startReturn(item, 'shop')}
+                          disabled={busy || !staff}
+                          className="rounded-xl bg-green-600 px-4 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
+                        >
+                          RETURN TO SHOP
+                        </button>
+
+                        <button
+                          onClick={() => startReturn(item, 'warehouse')}
+                          disabled={busy || !staff}
+                          className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-500 disabled:opacity-40"
+                        >
+                          RETURN TO WAREHOUSE
+                        </button>
                       </div>
                     </div>
-
-                    <div className="grid grid-cols-1 gap-2 sm:flex">
-                      <button
-                        onClick={() => startReturn(item, 'shop')}
-                        disabled={busy || !staff}
-                        className="rounded-xl bg-green-600 px-4 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
-                      >
-                        RETURN TO SHOP
-                      </button>
-
-                      <button
-                        onClick={() => startReturn(item, 'warehouse')}
-                        disabled={busy || !staff}
-                        className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-500 disabled:opacity-40"
-                      >
-                        RETURN TO WAREHOUSE
-                      </button>
-                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
-    </main>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </main>
+    </StaffPermissionGate>
   )
 }
