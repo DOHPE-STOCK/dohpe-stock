@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
@@ -39,7 +39,20 @@ const permissionOptions = [
 
 const roleOptions = ['admin', 'manager', 'staff', 'checkout', 'scanner']
 
-function defaultPermissions(role = 'staff') {
+function emptyPermissions() {
+  return {
+    working: false,
+    review: false,
+    finalised: false,
+    reports: false,
+    settings: false,
+    scanner: false,
+    checkout: false,
+    integrations: false,
+  }
+}
+
+function defaultPermissions(role = '') {
   if (role === 'admin') {
     return {
       working: true,
@@ -92,16 +105,38 @@ function defaultPermissions(role = 'staff') {
     }
   }
 
-  return {
-    working: true,
-    review: false,
-    finalised: false,
-    reports: false,
-    settings: false,
-    scanner: true,
-    checkout: false,
-    integrations: false,
+  if (role === 'staff') {
+    return {
+      working: true,
+      review: false,
+      finalised: false,
+      reports: false,
+      settings: false,
+      scanner: true,
+      checkout: true,
+      integrations: false,
+    }
   }
+
+  return emptyPermissions()
+}
+
+function normalisePermissions(role?: string, permissions?: Record<string, boolean>) {
+  if (role === 'admin') return defaultPermissions('admin')
+
+  const base = emptyPermissions()
+
+  for (const option of permissionOptions) {
+    base[option.key as keyof ReturnType<typeof emptyPermissions>] = Boolean(
+      permissions?.[option.key]
+    )
+  }
+
+  return base
+}
+
+function hasAnyPermission(permissions?: Record<string, boolean>) {
+  return permissionOptions.some((option) => Boolean(permissions?.[option.key]))
 }
 
 export default function SettingsPage() {
@@ -110,8 +145,20 @@ export default function SettingsPage() {
   const [message, setMessage] = useState('')
   const [newStaffName, setNewStaffName] = useState('')
   const [newStaffPin, setNewStaffPin] = useState('')
+  const [newStaffRole, setNewStaffRole] = useState('')
+  const [newStaffPermissions, setNewStaffPermissions] = useState<Record<string, boolean>>(emptyPermissions())
   const [savingStaffId, setSavingStaffId] = useState('')
   const [openSection, setOpenSection] = useState<OpenSection>(null)
+
+  const activeAdminCount = useMemo(() => {
+    return staffUsers.filter((user) => user.is_active && user.role === 'admin').length
+  }, [staffUsers])
+
+  const canAddNewStaff =
+    newStaffName.trim().length > 0 &&
+    newStaffPin.trim().length >= 4 &&
+    newStaffRole.trim().length > 0 &&
+    hasAnyPermission(newStaffPermissions)
 
   useEffect(() => {
     fetchSettings()
@@ -162,7 +209,7 @@ export default function SettingsPage() {
       (data || []).map((user: StaffUser) => ({
         ...user,
         role: user.role || 'staff',
-        permissions: user.permissions || defaultPermissions(user.role || 'staff'),
+        permissions: normalisePermissions(user.role || 'staff', user.permissions || {}),
       }))
     )
   }
@@ -190,9 +237,24 @@ export default function SettingsPage() {
     setMessage('Settings saved')
   }
 
+  function updateNewStaffRole(role: string) {
+    setNewStaffRole(role)
+    setNewStaffPermissions(defaultPermissions(role))
+  }
+
+  function toggleNewStaffPermission(permissionKey: string) {
+    if (newStaffRole === 'admin') return
+
+    setNewStaffPermissions((current) => ({
+      ...current,
+      [permissionKey]: !Boolean(current[permissionKey]),
+    }))
+  }
+
   async function addStaffUser() {
     const name = newStaffName.trim()
     const pin = newStaffPin.trim()
+    const role = newStaffRole.trim()
 
     if (!name) {
       setMessage('Enter a staff name')
@@ -204,7 +266,17 @@ export default function SettingsPage() {
       return
     }
 
-    const role = 'staff'
+    if (!role) {
+      setMessage('Select a role before creating the user')
+      return
+    }
+
+    const permissions = normalisePermissions(role, newStaffPermissions)
+
+    if (!hasAnyPermission(permissions)) {
+      setMessage('Select at least one permission before creating the user')
+      return
+    }
 
     const { error } = await supabase.from('staff_users').insert({
       name,
@@ -213,7 +285,7 @@ export default function SettingsPage() {
       must_change_pin: true,
       pin_updated_at: new Date().toISOString(),
       role,
-      permissions: defaultPermissions(role),
+      permissions,
     })
 
     if (error) {
@@ -223,11 +295,36 @@ export default function SettingsPage() {
 
     setNewStaffName('')
     setNewStaffPin('')
+    setNewStaffRole('')
+    setNewStaffPermissions(emptyPermissions())
     setMessage(`Staff user ${name} added`)
     fetchStaffUsers()
   }
 
+  function isLastActiveAdmin(user: StaffUser) {
+    return user.is_active && user.role === 'admin' && activeAdminCount <= 1
+  }
+
   async function saveStaffUser(user: StaffUser) {
+    if (isLastActiveAdmin(user)) {
+      if (user.role !== 'admin' || user.is_active === false) {
+        setMessage('Cannot disable or downgrade the last active admin')
+        return
+      }
+    }
+
+    const permissions = normalisePermissions(user.role || 'staff', user.permissions || {})
+
+    if (user.role === 'admin' && !permissions.settings) {
+      setMessage('Admin users must keep Settings access')
+      return
+    }
+
+    if (!hasAnyPermission(permissions)) {
+      setMessage('User must have at least one permission')
+      return
+    }
+
     setSavingStaffId(user.id)
 
     const { error } = await supabase
@@ -238,7 +335,7 @@ export default function SettingsPage() {
         is_active: user.is_active,
         must_change_pin: Boolean(user.must_change_pin),
         role: user.role || 'staff',
-        permissions: user.permissions || {},
+        permissions,
         pin_updated_at: new Date().toISOString(),
       })
       .eq('id', user.id)
@@ -276,21 +373,42 @@ export default function SettingsPage() {
 
   function updateStaffUser(id: string, patch: Partial<StaffUser>) {
     setStaffUsers((current) =>
-      current.map((user) => (user.id === id ? { ...user, ...patch } : user))
+      current.map((user) => {
+        if (user.id !== id) return user
+
+        const patched = { ...user, ...patch }
+
+        if (isLastActiveAdmin(user)) {
+          patched.is_active = true
+          patched.role = 'admin'
+          patched.permissions = defaultPermissions('admin')
+        }
+
+        return patched
+      })
     )
   }
 
   function updateStaffRole(id: string, role: string) {
     setStaffUsers((current) =>
-      current.map((user) =>
-        user.id === id
-          ? {
-              ...user,
-              role,
-              permissions: defaultPermissions(role),
-            }
-          : user
-      )
+      current.map((user) => {
+        if (user.id !== id) return user
+
+        if (isLastActiveAdmin(user) && role !== 'admin') {
+          setMessage('Cannot downgrade the last active admin')
+          return {
+            ...user,
+            role: 'admin',
+            permissions: defaultPermissions('admin'),
+          }
+        }
+
+        return {
+          ...user,
+          role,
+          permissions: defaultPermissions(role),
+        }
+      })
     )
   }
 
@@ -299,10 +417,17 @@ export default function SettingsPage() {
       current.map((user) => {
         if (user.id !== id) return user
 
+        if (user.role === 'admin') {
+          return {
+            ...user,
+            permissions: defaultPermissions('admin'),
+          }
+        }
+
         return {
           ...user,
           permissions: {
-            ...(user.permissions || {}),
+            ...normalisePermissions(user.role || 'staff', user.permissions || {}),
             [permissionKey]: !Boolean(user.permissions?.[permissionKey]),
           },
         }
@@ -564,7 +689,7 @@ export default function SettingsPage() {
                   Add Staff User
                 </h3>
 
-                <div className="grid gap-3 md:grid-cols-[1fr_180px_160px]">
+                <div className="grid gap-3 md:grid-cols-[1fr_180px_180px_160px]">
                   <input
                     value={newStaffName}
                     onChange={(e) => setNewStaffName(e.target.value)}
@@ -574,18 +699,64 @@ export default function SettingsPage() {
 
                   <input
                     value={newStaffPin}
-                    onChange={(e) => setNewStaffPin(e.target.value)}
+                    onChange={(e) => setNewStaffPin(e.target.value.replace(/\D/g, ''))}
                     placeholder="PIN"
                     type="password"
+                    inputMode="numeric"
                     className="h-10 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-white"
                   />
 
+                  <select
+                    value={newStaffRole}
+                    onChange={(e) => updateNewStaffRole(e.target.value)}
+                    className="h-10 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-white"
+                  >
+                    <option value="">Select role...</option>
+
+                    {roleOptions.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
+
                   <button
                     onClick={addStaffUser}
-                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500"
+                    disabled={!canAddNewStaff}
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
                   >
                     Add User
                   </button>
+                </div>
+
+                <div className="mt-4">
+                  <p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-500">
+                    New User Permissions
+                  </p>
+
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    {permissionOptions.map((permission) => {
+                      const enabled = Boolean(newStaffPermissions[permission.key])
+                      const locked = newStaffRole === 'admin'
+
+                      return (
+                        <button
+                          key={permission.key}
+                          type="button"
+                          onClick={() => toggleNewStaffPermission(permission.key)}
+                          disabled={locked || !newStaffRole}
+                          className={`rounded-lg px-3 py-2 text-left text-xs font-black disabled:cursor-not-allowed ${
+                            enabled
+                              ? 'bg-emerald-900 text-emerald-100'
+                              : 'bg-zinc-800 text-zinc-500'
+                          }`}
+                        >
+                          {enabled ? '✓ ' : '— '}
+                          {permission.label}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -595,144 +766,159 @@ export default function SettingsPage() {
                     No staff users found.
                   </div>
                 ) : (
-                  staffUsers.map((user) => (
-                    <div
-                      key={user.id}
-                      className={`rounded-xl border p-4 ${
-                        user.is_active
-                          ? 'border-zinc-800 bg-zinc-950'
-                          : 'border-red-900 bg-red-950/30'
-                      }`}
-                    >
-                      <div className="grid gap-3 xl:grid-cols-[1fr_160px_120px_160px]">
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                            Name
-                          </label>
+                  staffUsers.map((user) => {
+                    const lastAdmin = isLastActiveAdmin(user)
 
-                          <input
-                            value={user.name || ''}
-                            onChange={(e) =>
-                              updateStaffUser(user.id, { name: e.target.value })
-                            }
-                            className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-white outline-none focus:border-white"
-                          />
-                        </div>
+                    return (
+                      <div
+                        key={user.id}
+                        className={`rounded-xl border p-4 ${
+                          user.is_active
+                            ? 'border-zinc-800 bg-zinc-950'
+                            : 'border-red-900 bg-red-950/30'
+                        }`}
+                      >
+                        <div className="grid gap-3 xl:grid-cols-[1fr_160px_120px_160px]">
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                              Name
+                            </label>
 
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                            Role
-                          </label>
+                            <input
+                              value={user.name || ''}
+                              onChange={(e) =>
+                                updateStaffUser(user.id, { name: e.target.value })
+                              }
+                              className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-white outline-none focus:border-white"
+                            />
+                          </div>
 
-                          <select
-                            value={user.role || 'staff'}
-                            onChange={(e) => updateStaffRole(user.id, e.target.value)}
-                            className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-white outline-none focus:border-white"
-                          >
-                            {roleOptions.map((role) => (
-                              <option key={role} value={role}>
-                                {role}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                              Role
+                            </label>
 
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                            Active
-                          </label>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateStaffUser(user.id, {
-                                is_active: !user.is_active,
-                              })
-                            }
-                            className={`h-10 w-full rounded-lg px-3 text-sm font-black ${
-                              user.is_active
-                                ? 'bg-green-700 text-white'
-                                : 'bg-red-800 text-white'
-                            }`}
-                          >
-                            {user.is_active ? 'Active' : 'Disabled'}
-                          </button>
-                        </div>
-
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                            Actions
-                          </label>
-
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => resetPin(user)}
-                              className="h-10 flex-1 rounded-lg bg-yellow-700 px-3 text-xs font-black text-white hover:bg-yellow-600"
+                            <select
+                              value={user.role || 'staff'}
+                              onChange={(e) => updateStaffRole(user.id, e.target.value)}
+                              disabled={lastAdmin}
+                              className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-white outline-none focus:border-white disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              Reset PIN
-                            </button>
+                              {roleOptions.map((role) => (
+                                <option key={role} value={role}>
+                                  {role}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                              Active
+                            </label>
 
                             <button
                               type="button"
-                              onClick={() => saveStaffUser(user)}
-                              disabled={savingStaffId === user.id}
-                              className="h-10 flex-1 rounded-lg bg-blue-600 px-3 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-40"
+                              onClick={() =>
+                                updateStaffUser(user.id, {
+                                  is_active: !user.is_active,
+                                })
+                              }
+                              disabled={lastAdmin}
+                              className={`h-10 w-full rounded-lg px-3 text-sm font-black disabled:cursor-not-allowed disabled:opacity-60 ${
+                                user.is_active
+                                  ? 'bg-green-700 text-white'
+                                  : 'bg-red-800 text-white'
+                              }`}
                             >
-                              {savingStaffId === user.id ? 'Saving' : 'Save'}
+                              {user.is_active ? 'Active' : 'Disabled'}
                             </button>
                           </div>
-                        </div>
-                      </div>
 
-                      <div className="mt-4">
-                        <p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-500">
-                          Permissions
-                        </p>
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                              Actions
+                            </label>
 
-                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                          {permissionOptions.map((permission) => {
-                            const enabled = Boolean(user.permissions?.[permission.key])
-
-                            return (
+                            <div className="flex gap-2">
                               <button
-                                key={permission.key}
                                 type="button"
-                                onClick={() =>
-                                  togglePermission(user.id, permission.key)
-                                }
-                                className={`rounded-lg px-3 py-2 text-left text-xs font-black ${
-                                  enabled
-                                    ? 'bg-emerald-900 text-emerald-100'
-                                    : 'bg-zinc-800 text-zinc-500'
-                                }`}
+                                onClick={() => resetPin(user)}
+                                className="h-10 flex-1 rounded-lg bg-yellow-700 px-3 text-xs font-black text-white hover:bg-yellow-600"
                               >
-                                {enabled ? '✓ ' : '— '}
-                                {permission.label}
+                                Reset PIN
                               </button>
-                            )
-                          })}
+
+                              <button
+                                type="button"
+                                onClick={() => saveStaffUser(user)}
+                                disabled={savingStaffId === user.id}
+                                className="h-10 flex-1 rounded-lg bg-blue-600 px-3 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-40"
+                              >
+                                {savingStaffId === user.id ? 'Saving' : 'Save'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4">
+                          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-500">
+                            Permissions
+                          </p>
+
+                          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                            {permissionOptions.map((permission) => {
+                              const enabled = Boolean(user.permissions?.[permission.key])
+                              const locked = user.role === 'admin'
+
+                              return (
+                                <button
+                                  key={permission.key}
+                                  type="button"
+                                  onClick={() =>
+                                    togglePermission(user.id, permission.key)
+                                  }
+                                  disabled={locked}
+                                  className={`rounded-lg px-3 py-2 text-left text-xs font-black disabled:cursor-not-allowed disabled:opacity-80 ${
+                                    enabled
+                                      ? 'bg-emerald-900 text-emerald-100'
+                                      : 'bg-zinc-800 text-zinc-500'
+                                  }`}
+                                >
+                                  {enabled ? '✓ ' : '— '}
+                                  {permission.label}
+                                  {locked ? ' locked' : ''}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-zinc-500">
+                          <span>ID: {user.id}</span>
+
+                          {lastAdmin && (
+                            <span className="rounded bg-emerald-950 px-2 py-1 text-emerald-300">
+                              Protected last active admin
+                            </span>
+                          )}
+
+                          {user.must_change_pin && (
+                            <span className="rounded bg-yellow-950 px-2 py-1 text-yellow-300">
+                              Must change PIN
+                            </span>
+                          )}
+
+                          {user.pin_updated_at && (
+                            <span>
+                              PIN updated:{' '}
+                              {new Date(user.pin_updated_at).toLocaleString('en-GB')}
+                            </span>
+                          )}
                         </div>
                       </div>
-
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-zinc-500">
-                        <span>ID: {user.id}</span>
-
-                        {user.must_change_pin && (
-                          <span className="rounded bg-yellow-950 px-2 py-1 text-yellow-300">
-                            Must change PIN
-                          </span>
-                        )}
-
-                        {user.pin_updated_at && (
-                          <span>
-                            PIN updated:{' '}
-                            {new Date(user.pin_updated_at).toLocaleString('en-GB')}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))
+                    )
+                  })
                 )}
               </div>
             </section>
