@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useStaff } from '@/app/context/StaffContext'
@@ -16,7 +16,7 @@ type StaffRow = {
   permissions?: StaffPermissions | null
 }
 
-export default function StaffPage() {
+function StaffPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { setStaff, clearStaff } = useStaff()
@@ -253,5 +253,21 @@ export default function StaffPage() {
         </button>
       </div>
     </main>
+  )
+}
+
+export default function StaffPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-neutral-950 p-3 text-white">
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-6 text-sm font-bold">
+            Loading staff PIN...
+          </div>
+        </main>
+      }
+    >
+      <StaffPageContent />
+    </Suspense>
   )
 }
