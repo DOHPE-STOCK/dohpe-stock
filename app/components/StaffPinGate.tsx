@@ -2,25 +2,29 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import type { StaffPermissions, StaffUser } from '@/app/context/StaffContext'
 
-type StaffUser = {
+type StaffRow = {
   id: string
   name: string
   pin_code: string
+  is_active: boolean
   must_change_pin: boolean
+  role?: string | null
+  permissions?: StaffPermissions | null
 }
 
 type StaffPinGateProps = {
-  onStaffSelected?: (staff: { id: string; name: string }) => void
+  onStaffSelected?: (staff: StaffUser | null) => void
 }
 
 export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
-  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([])
+  const [staffUsers, setStaffUsers] = useState<StaffRow[]>([])
   const [selectedStaffId, setSelectedStaffId] = useState('')
   const [pin, setPin] = useState('')
   const [newPin, setNewPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
-  const [matchedStaff, setMatchedStaff] = useState<StaffUser | null>(null)
+  const [matchedStaff, setMatchedStaff] = useState<StaffRow | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -32,7 +36,7 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
   async function fetchStaff() {
     const { data, error } = await supabase
       .from('staff_users')
-      .select('id, name, pin_code, must_change_pin')
+      .select('id, name, pin_code, is_active, must_change_pin, role, permissions')
       .eq('is_active', true)
       .order('name', { ascending: true })
 
@@ -41,7 +45,17 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
       return
     }
 
-    setStaffUsers((data || []) as StaffUser[])
+    setStaffUsers((data || []) as StaffRow[])
+  }
+
+  function normaliseStaff(staff: StaffRow): StaffUser {
+    return {
+      id: staff.id,
+      name: staff.name,
+      role: staff.role || 'staff',
+      permissions: staff.permissions || {},
+      is_active: staff.is_active !== false,
+    }
   }
 
   function loadSavedStaff() {
@@ -51,20 +65,27 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
 
     try {
       const parsed = JSON.parse(saved)
-      onStaffSelected?.(parsed)
+
+      if (parsed?.id && parsed?.name) {
+        onStaffSelected?.({
+          id: parsed.id,
+          name: parsed.name,
+          role: parsed.role || 'staff',
+          permissions: parsed.permissions || {},
+          is_active: parsed.is_active !== false,
+        })
+      }
     } catch {
       window.localStorage.removeItem('active_staff_user')
     }
   }
 
-  function saveStaff(staff: StaffUser) {
-    const safeStaff = {
-      id: staff.id,
-      name: staff.name,
-    }
+  function saveStaff(staff: StaffRow) {
+    const safeStaff = normaliseStaff(staff)
 
     window.localStorage.setItem('active_staff_user', JSON.stringify(safeStaff))
     onStaffSelected?.(safeStaff)
+
     setMessage(`Signed in as ${staff.name}`)
   }
 
@@ -75,6 +96,11 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
 
     if (!staff) {
       setMessage('Select staff member.')
+      return
+    }
+
+    if (staff.is_active === false) {
+      setMessage('This staff user is disabled.')
       return
     }
 
@@ -151,6 +177,10 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
 
   function clearStaff() {
     window.localStorage.removeItem('active_staff_user')
+    document.cookie =
+      'active_staff_user=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+
+    onStaffSelected?.(null)
     setMessage('Staff cleared. Enter PIN again.')
   }
 
@@ -159,6 +189,7 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-black">Staff PIN</h2>
+
           <p className="text-sm text-neutral-400">
             Select who is using this device.
           </p>
@@ -181,6 +212,7 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
             className="rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-lg font-bold outline-none"
           >
             <option value="">Select staff</option>
+
             {staffUsers.map((staff) => (
               <option key={staff.id} value={staff.id}>
                 {staff.name}

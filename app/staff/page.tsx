@@ -1,27 +1,34 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useStaff } from '@/app/context/StaffContext'
+import type { StaffPermissions, StaffUser } from '@/app/context/StaffContext'
 
-type StaffUser = {
+type StaffRow = {
   id: string
   name: string
   pin_code: string
+  is_active: boolean
   must_change_pin: boolean
+  role?: string | null
+  permissions?: StaffPermissions | null
 }
 
 export default function StaffPage() {
   const router = useRouter()
-  const { setStaff } = useStaff()
+  const searchParams = useSearchParams()
+  const { setStaff, clearStaff } = useStaff()
 
-  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([])
+  const nextUrl = searchParams.get('next') || '/'
+
+  const [staffUsers, setStaffUsers] = useState<StaffRow[]>([])
   const [selectedStaffId, setSelectedStaffId] = useState('')
   const [pin, setPin] = useState('')
   const [newPin, setNewPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
-  const [matchedStaff, setMatchedStaff] = useState<StaffUser | null>(null)
+  const [matchedStaff, setMatchedStaff] = useState<StaffRow | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -32,7 +39,7 @@ export default function StaffPage() {
   async function fetchStaff() {
     const { data, error } = await supabase
       .from('staff_users')
-      .select('id, name, pin_code, must_change_pin')
+      .select('id, name, pin_code, is_active, must_change_pin, role, permissions')
       .eq('is_active', true)
       .order('name', { ascending: true })
 
@@ -41,7 +48,23 @@ export default function StaffPage() {
       return
     }
 
-    setStaffUsers((data || []) as StaffUser[])
+    setStaffUsers((data || []) as StaffRow[])
+  }
+
+  function normaliseStaff(staff: StaffRow): StaffUser {
+    return {
+      id: staff.id,
+      name: staff.name,
+      role: staff.role || 'staff',
+      permissions: staff.permissions || {},
+      is_active: staff.is_active !== false,
+    }
+  }
+
+  function finishLogin(staff: StaffRow) {
+    setStaff(normaliseStaff(staff))
+    setPin('')
+    router.push(nextUrl)
   }
 
   function checkPin() {
@@ -51,6 +74,11 @@ export default function StaffPage() {
 
     if (!staff) {
       setMessage('Select staff member.')
+      return
+    }
+
+    if (staff.is_active === false) {
+      setMessage('This staff user is disabled.')
       return
     }
 
@@ -70,12 +98,7 @@ export default function StaffPage() {
       return
     }
 
-    setStaff({
-      id: staff.id,
-      name: staff.name,
-    })
-
-    router.push('/')
+    finishLogin(staff)
   }
 
   async function changePin() {
@@ -116,16 +139,15 @@ export default function StaffPage() {
       return
     }
 
-    setStaff({
-      id: matchedStaff.id,
-      name: matchedStaff.name,
+    finishLogin({
+      ...matchedStaff,
+      pin_code: newPin,
+      must_change_pin: false,
     })
-
-    router.push('/')
   }
 
   async function logoutApp() {
-    setStaff(null)
+    clearStaff()
     await supabase.auth.signOut()
     router.push('/login')
   }
@@ -152,6 +174,7 @@ export default function StaffPage() {
               className="mb-4 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-lg font-bold outline-none"
             >
               <option value="">Select staff</option>
+
               {staffUsers.map((staff) => (
                 <option key={staff.id} value={staff.id}>
                   {staff.name}
@@ -200,9 +223,7 @@ export default function StaffPage() {
 
             <input
               value={confirmPin}
-              onChange={(e) =>
-                setConfirmPin(e.target.value.replace(/\D/g, ''))
-              }
+              onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
               placeholder="Confirm PIN"
               inputMode="numeric"
               type="password"
