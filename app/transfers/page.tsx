@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
 type TransferItem = {
@@ -214,171 +215,173 @@ export default function TransfersPage() {
   }
 
   return (
-    <main className="min-h-screen bg-neutral-950 p-5 text-white">
-      <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">Stock Transfers</h1>
+    <StaffPermissionGate permission="scanner">
+      <main className="min-h-screen bg-neutral-950 p-5 text-white">
+        <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">Stock Transfers</h1>
 
-            <p className="text-sm text-neutral-400">
-              View and receive warehouse/shop stock transfers.
-            </p>
+              <p className="text-sm text-neutral-400">
+                View and receive warehouse/shop stock transfers.
+              </p>
 
-            {staff ? (
-              <p className="mt-1 text-sm font-bold text-green-300">
-                Active staff: {staff.name}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm font-bold text-yellow-300">
-                No active staff selected
-              </p>
-            )}
+              {staff ? (
+                <p className="mt-1 text-sm font-bold text-green-300">
+                  Active staff: {staff.name}
+                </p>
+              ) : (
+                <p className="mt-1 text-sm font-bold text-yellow-300">
+                  No active staff selected
+                </p>
+              )}
+            </div>
+
+            <AppNav current="transfers" />
           </div>
 
-          <AppNav current="transfers" />
+          <div className="flex flex-wrap items-center gap-3">
+            {message && (
+              <span className="rounded-lg border border-yellow-800 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+                {message}
+              </span>
+            )}
+
+            <select
+              value={timePeriod}
+              onChange={(e) => setTimePeriod(e.target.value as TimePeriod)}
+              className="rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-white"
+            >
+              <option value="7days">Last 7 days</option>
+              <option value="month">Last month</option>
+              <option value="year">Last year</option>
+            </select>
+
+            <button
+              onClick={() => fetchTransfers()}
+              disabled={loading}
+              className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
+            >
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {message && (
-            <span className="rounded-lg border border-yellow-800 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-              {message}
-            </span>
-          )}
+        <section className="mb-5 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+          <h2 className="text-lg font-semibold">Transfer History</h2>
+          <p className="text-sm text-neutral-400">
+            Showing transfers from the {getPeriodLabel(timePeriod)}.
+          </p>
+        </section>
 
-          <select
-            value={timePeriod}
-            onChange={(e) => setTimePeriod(e.target.value as TimePeriod)}
-            className="rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-white"
-          >
-            <option value="7days">Last 7 days</option>
-            <option value="month">Last month</option>
-            <option value="year">Last year</option>
-          </select>
+        {transfers.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-neutral-800 bg-neutral-900 p-8 text-center text-neutral-500">
+            No stock transfers found for the {getPeriodLabel(timePeriod)}.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {transfers.map((transfer) => {
+              const counts = getCounts(transfer)
+              const isReceived = transfer.status === 'received'
+              const transferNo = formatTransferNumber(transfer.transfer_number)
 
-          <button
-            onClick={() => fetchTransfers()}
-            disabled={loading}
-            className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
-          >
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-      </div>
+              return (
+                <section
+                  key={transfer.id}
+                  className="w-full rounded-2xl border border-neutral-800 bg-neutral-900 p-4"
+                >
+                  <div className="grid gap-4 lg:grid-cols-[1fr_220px]">
+                    <div>
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <h2 className="text-xl font-bold">
+                          Transfer #{transferNo}
+                        </h2>
 
-      <section className="mb-5 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-        <h2 className="text-lg font-semibold">Transfer History</h2>
-        <p className="text-sm text-neutral-400">
-          Showing transfers from the {getPeriodLabel(timePeriod)}.
-        </p>
-      </section>
-
-      {transfers.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-neutral-800 bg-neutral-900 p-8 text-center text-neutral-500">
-          No stock transfers found for the {getPeriodLabel(timePeriod)}.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {transfers.map((transfer) => {
-            const counts = getCounts(transfer)
-            const isReceived = transfer.status === 'received'
-            const transferNo = formatTransferNumber(transfer.transfer_number)
-
-            return (
-              <section
-                key={transfer.id}
-                className="w-full rounded-2xl border border-neutral-800 bg-neutral-900 p-4"
-              >
-                <div className="grid gap-4 lg:grid-cols-[1fr_220px]">
-                  <div>
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <h2 className="text-xl font-bold">
-                        Transfer #{transferNo}
-                      </h2>
-
-                      <span
-                        className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusClass(
-                          transfer.status
-                        )}`}
-                      >
-                        {transfer.status.replace('_', ' ')}
-                      </span>
-                    </div>
-
-                    <div className="grid gap-2 text-sm text-neutral-300 sm:grid-cols-2">
-                      <p>
-                        <strong className="text-neutral-500">From:</strong>{' '}
-                        {transfer.from_location}
-                      </p>
-
-                      <p>
-                        <strong className="text-neutral-500">To:</strong>{' '}
-                        {transfer.to_location}
-                      </p>
-
-                      <p>
-                        <strong className="text-neutral-500">Created:</strong>{' '}
-                        {formatDate(transfer.created_at)}
-                      </p>
-
-                      <p>
-                        <strong className="text-neutral-500">Received:</strong>{' '}
-                        {formatDate(transfer.received_at)}
-                      </p>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full bg-neutral-950 px-3 py-1 text-neutral-300">
-                        Total: {counts.total}
-                      </span>
-
-                      <span className="rounded-full bg-blue-950 px-3 py-1 text-blue-300">
-                        In transfer: {counts.inTransfer}
-                      </span>
-
-                      <span className="rounded-full bg-green-950 px-3 py-1 text-green-300">
-                        Received: {counts.received}
-                      </span>
-
-                      {counts.missing > 0 && (
-                        <span className="rounded-full bg-red-950 px-3 py-1 text-red-300">
-                          Missing: {counts.missing}
+                        <span
+                          className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusClass(
+                            transfer.status
+                          )}`}
+                        >
+                          {transfer.status.replace('_', ' ')}
                         </span>
-                      )}
+                      </div>
+
+                      <div className="grid gap-2 text-sm text-neutral-300 sm:grid-cols-2">
+                        <p>
+                          <strong className="text-neutral-500">From:</strong>{' '}
+                          {transfer.from_location}
+                        </p>
+
+                        <p>
+                          <strong className="text-neutral-500">To:</strong>{' '}
+                          {transfer.to_location}
+                        </p>
+
+                        <p>
+                          <strong className="text-neutral-500">Created:</strong>{' '}
+                          {formatDate(transfer.created_at)}
+                        </p>
+
+                        <p>
+                          <strong className="text-neutral-500">Received:</strong>{' '}
+                          {formatDate(transfer.received_at)}
+                        </p>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                        <span className="rounded-full bg-neutral-950 px-3 py-1 text-neutral-300">
+                          Total: {counts.total}
+                        </span>
+
+                        <span className="rounded-full bg-blue-950 px-3 py-1 text-blue-300">
+                          In transfer: {counts.inTransfer}
+                        </span>
+
+                        <span className="rounded-full bg-green-950 px-3 py-1 text-green-300">
+                          Received: {counts.received}
+                        </span>
+
+                        {counts.missing > 0 && (
+                          <span className="rounded-full bg-red-950 px-3 py-1 text-red-300">
+                            Missing: {counts.missing}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col justify-center gap-2">
+                      <Link
+                        href={`/transfers/${transfer.id}`}
+                        className="rounded-xl bg-white px-4 py-2 text-center text-sm font-bold text-black"
+                      >
+                        Open Transfer
+                      </Link>
+
+                      <button
+                        type="button"
+                        onClick={() => printManifest(transfer)}
+                        className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-bold text-white hover:bg-neutral-800"
+                      >
+                        Print Manifest
+                      </button>
+
+                      <button
+                        onClick={() => markTransferReceived(transfer)}
+                        disabled={
+                          loading || !staff || isReceived || counts.inTransfer === 0
+                        }
+                        className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+                      >
+                        Mark as Received
+                      </button>
                     </div>
                   </div>
-
-                  <div className="flex flex-col justify-center gap-2">
-                    <Link
-                      href={`/transfers/${transfer.id}`}
-                      className="rounded-xl bg-white px-4 py-2 text-center text-sm font-bold text-black"
-                    >
-                      Open Transfer
-                    </Link>
-
-                    <button
-                      type="button"
-                      onClick={() => printManifest(transfer)}
-                      className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-bold text-white hover:bg-neutral-800"
-                    >
-                      Print Manifest
-                    </button>
-
-                    <button
-                      onClick={() => markTransferReceived(transfer)}
-                      disabled={
-                        loading || !staff || isReceived || counts.inTransfer === 0
-                      }
-                      className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
-                    >
-                      Mark as Received
-                    </button>
-                  </div>
-                </div>
-              </section>
-            )
-          })}
-        </div>
-      )}
-    </main>
+                </section>
+              )
+            })}
+          </div>
+        )}
+      </main>
+    </StaffPermissionGate>
   )
 }
