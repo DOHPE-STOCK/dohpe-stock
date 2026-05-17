@@ -2134,7 +2134,7 @@ export default function CheckoutPage() {
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={fetchHistory}
+                    onClick={() => fetchHistory()}
                     disabled={historyBusy}
                     className="rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:opacity-40"
                   >
@@ -2149,7 +2149,7 @@ export default function CheckoutPage() {
                       setHistoryDateTo('')
                       setHistoryPaymentMethod('')
                       setHistoryMode('')
-                      setTimeout(fetchHistory, 50)
+                      setTimeout(() => fetchHistory(), 50)
                     }}
                     disabled={historyBusy}
                     className="rounded-2xl border border-neutral-300 px-5 py-3 text-sm font-black disabled:opacity-40"
