@@ -60,6 +60,58 @@ type CardPaymentDetails = {
   manual_payment_reason?: string | null
 }
 
+type HistoryLine = {
+  id: string
+  sale_id: string
+  sku: string
+  title: string | null
+  brand: string | null
+  reporting_category: string | null
+  sub_type: string | null
+  colour: string | null
+  quantity: number
+  unit_price: number
+  line_total: number
+  discount_percent: number | null
+  discount_amount: number | null
+  original_line_id: string | null
+  refunded_quantity: number | null
+  max_refundable_quantity: number | null
+  created_at: string
+}
+
+type HistorySale = {
+  id: string
+  sale_number: string
+  mode: string | null
+  payment_method: string | null
+  subtotal: number | null
+  discount_amount: number | null
+  total: number | null
+  vat_amount: number | null
+  net_amount: number | null
+  cash_tendered: number | null
+  change_due: number | null
+  square_status: string | null
+  square_checkout_id: string | null
+  square_payment_id: string | null
+  square_payment_status: string | null
+  square_receipt_url: string | null
+  square_terminal_device_id: string | null
+  payment_provider: string | null
+  payment_reference: string | null
+  payment_confirmed_at: string | null
+  manual_payment_reason: string | null
+  status: string | null
+  original_sale_id: string | null
+  exchange_credit: number | null
+  refund_method: string | null
+  checkout_location: string | null
+  created_at: string
+  updated_at: string | null
+  lines: HistoryLine[]
+}
+
 const OFFLINE_TX_KEY = 'dohpe_pos_offline_transactions_v1'
 const CHECKOUT_LOCATION_KEY = 'dohpe_checkout_location_v1'
 
@@ -73,6 +125,17 @@ function money(value: number) {
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+
+  return new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(date)
 }
 
 function getSavedCheckoutLocation() {
@@ -165,6 +228,17 @@ export default function CheckoutPage() {
   const [paymentResultType, setPaymentResultType] = useState<PaymentResultType>(null)
   const [paymentResultTitle, setPaymentResultTitle] = useState('')
   const [paymentResultMessage, setPaymentResultMessage] = useState('')
+
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyBusy, setHistoryBusy] = useState(false)
+  const [historyMessage, setHistoryMessage] = useState('')
+  const [historyQuery, setHistoryQuery] = useState('')
+  const [historyDateFrom, setHistoryDateFrom] = useState('')
+  const [historyDateTo, setHistoryDateTo] = useState('')
+  const [historyPaymentMethod, setHistoryPaymentMethod] = useState('')
+  const [historyMode, setHistoryMode] = useState('')
+  const [historySales, setHistorySales] = useState<HistorySale[]>([])
+  const [expandedHistorySaleId, setExpandedHistorySaleId] = useState('')
 
   const saleLines = basket.filter((line) => !line.isReturnLine)
   const returnLines = basket.filter((line) => line.isReturnLine)
@@ -393,6 +467,7 @@ export default function CheckoutPage() {
       setBasket(refundLines)
       setMode('refund')
       setPaymentMethod(null)
+      setHistoryOpen(false)
 
       if (refundLines.length === 0) {
         setMessage('This receipt has no refundable items left.')
@@ -402,6 +477,48 @@ export default function CheckoutPage() {
     } catch (error: any) {
       setMessage(error.message || `Receipt not found: ${cleanSaleNumber}`)
     }
+  }
+
+  async function fetchHistory() {
+    setHistoryBusy(true)
+    setHistoryMessage('')
+
+    try {
+      const params = new URLSearchParams()
+      params.set('limit', '50')
+
+      if (historyQuery.trim()) params.set('query', historyQuery.trim())
+      if (historyDateFrom) params.set('date_from', historyDateFrom)
+      if (historyDateTo) params.set('date_to', historyDateTo)
+      if (historyPaymentMethod) params.set('payment_method', historyPaymentMethod)
+      if (historyMode) params.set('mode', historyMode)
+
+      const response = await fetch(`/api/pos/history?${params.toString()}`)
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not load POS history.')
+      }
+
+      const sales = Array.isArray(data.sales) ? data.sales : []
+      setHistorySales(sales)
+      setExpandedHistorySaleId(sales[0]?.id || '')
+
+      if (sales.length === 0) {
+        setHistoryMessage('No sales found.')
+      }
+    } catch (error: any) {
+      setHistoryMessage(error.message || 'Could not load POS history.')
+    } finally {
+      setHistoryBusy(false)
+    }
+  }
+
+  function openHistory() {
+    setHistoryOpen(true)
+    setTimeout(() => {
+      fetchHistory()
+    }, 50)
   }
 
   async function addScannedSku(rawSku?: string) {
@@ -781,6 +898,11 @@ export default function CheckoutPage() {
       setMessage(errorMessage)
 
       if (method === 'card') {
+        setCardPanelOpen(true)
+        setCardPanelState('unclear')
+        setCardPanelMessage(
+          `App offline / save failed. If the card payment has completed on the card reader, press Record Manual Sale so the sale is stored locally and synced later. Error: ${errorMessage}`
+        )
         showPaymentResult('failed', 'Payment Record Failed', errorMessage)
       }
     } finally {
@@ -807,7 +929,7 @@ export default function CheckoutPage() {
 
   async function completeManualCardSale() {
     const confirmed = window.confirm(
-      `Record this card sale manually for ${money(displayedTotal)}?\n\nOnly continue if payment has been taken on the card machine.`
+      `Record this card sale manually for ${money(displayedTotal)}?\n\nOnly continue if payment has definitely been taken on the card machine.`
     )
 
     if (!confirmed) return
@@ -893,7 +1015,9 @@ export default function CheckoutPage() {
         return
       }
 
-      if (['cancelled', 'canceled', 'cancelled_by_customer', 'canceled_by_customer'].includes(status)) {
+      if (
+        ['cancelled', 'canceled', 'cancelled_by_customer', 'canceled_by_customer'].includes(status)
+      ) {
         setCardPanelMessage('Square payment cancelled.')
         showPaymentResult('failed', 'Payment Cancelled', 'Square Terminal cancelled the payment.')
         closeCardPanel()
@@ -903,13 +1027,18 @@ export default function CheckoutPage() {
       setCardPanelState('unclear')
       setCardPanelMessage(
         data?.message ||
-          'Square Terminal did not return a clear paid/cancelled response. Check the terminal before recording manually.'
+          `App offline / Square response unclear. Add ${money(
+            displayedTotal
+          )} to the card reader manually. After payment completes, press Record Manual Sale. If payment did not complete, press Cancel Sale.`
       )
     } catch (error: any) {
       setCardPanelState('unclear')
       setCardPanelMessage(
-        error.message ||
-          'No response from Square Terminal. Check the terminal before recording manually.'
+        `App offline / Square unavailable. Add ${money(
+          displayedTotal
+        )} to the card reader manually. After payment completes, press Record Manual Sale. If payment did not complete, press Cancel Sale. ${
+          error?.message ? `Error: ${error.message}` : ''
+        }`
       )
     }
   }
@@ -952,6 +1081,14 @@ export default function CheckoutPage() {
               </div>
 
               <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={openHistory}
+                  className="rounded-xl bg-neutral-900 px-3 py-2 text-xs font-black text-white"
+                >
+                  History
+                </button>
+
                 <input
                   value={checkoutLocation}
                   onChange={(event) => setCheckoutLocation(event.target.value)}
@@ -1281,7 +1418,15 @@ export default function CheckoutPage() {
               </>
             )}
 
-            <div className="mt-4 flex justify-center">
+            <div className="mt-4 flex justify-center gap-4">
+              <button
+                type="button"
+                onClick={openHistory}
+                className="text-xs font-bold text-black underline"
+              >
+                History
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -1297,6 +1442,263 @@ export default function CheckoutPage() {
           </section>
         </div>
 
+        {historyOpen && (
+          <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 p-3">
+            <div className="flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white text-neutral-950 shadow-2xl">
+              <div className="border-b border-neutral-200 p-4">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-2xl font-black">POS History</h2>
+                    <p className="text-sm font-semibold text-neutral-500">
+                      Search by receipt, SKU, brand, category, Square payment ID or date.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistoryOpen(false)
+                      setTimeout(() => inputRef.current?.focus(), 50)
+                    }}
+                    className="rounded-2xl bg-black px-4 py-2 text-sm font-black text-white"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
+                  <input
+                    value={historyQuery}
+                    onChange={(event) => setHistoryQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') fetchHistory()
+                    }}
+                    placeholder="Receipt / SKU / text"
+                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black md:col-span-2"
+                  />
+
+                  <input
+                    value={historyDateFrom}
+                    onChange={(event) => setHistoryDateFrom(event.target.value)}
+                    type="date"
+                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                  />
+
+                  <input
+                    value={historyDateTo}
+                    onChange={(event) => setHistoryDateTo(event.target.value)}
+                    type="date"
+                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                  />
+
+                  <select
+                    value={historyPaymentMethod}
+                    onChange={(event) => setHistoryPaymentMethod(event.target.value)}
+                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                  >
+                    <option value="">All payments</option>
+                    <option value="cash">Cash</option>
+                    <option value="card">Card</option>
+                  </select>
+
+                  <select
+                    value={historyMode}
+                    onChange={(event) => setHistoryMode(event.target.value)}
+                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                  >
+                    <option value="">All modes</option>
+                    <option value="sale">Sale</option>
+                    <option value="refund">Refund</option>
+                    <option value="exchange">Exchange</option>
+                  </select>
+                </div>
+
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={fetchHistory}
+                    disabled={historyBusy}
+                    className="rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:opacity-40"
+                  >
+                    {historyBusy ? 'Searching…' : 'Search'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistoryQuery('')
+                      setHistoryDateFrom('')
+                      setHistoryDateTo('')
+                      setHistoryPaymentMethod('')
+                      setHistoryMode('')
+                      setTimeout(fetchHistory, 50)
+                    }}
+                    disabled={historyBusy}
+                    className="rounded-2xl border border-neutral-300 px-5 py-3 text-sm font-black disabled:opacity-40"
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                {historyMessage && (
+                  <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-bold">
+                    {historyMessage}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-auto p-3">
+                {historySales.length === 0 ? (
+                  <div className="rounded-3xl p-8 text-center text-neutral-500">
+                    <p className="text-lg font-bold">No history loaded</p>
+                    <p className="text-sm">Use search or reset to load recent sales.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {historySales.map((sale) => {
+                      const expanded = expandedHistorySaleId === sale.id
+                      const saleTotal = Number(sale.total || 0)
+                      const lineCount = sale.lines?.length || 0
+
+                      return (
+                        <div
+                          key={sale.id}
+                          className="overflow-hidden rounded-3xl border border-neutral-200 bg-neutral-50"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setExpandedHistorySaleId(expanded ? '' : sale.id)}
+                            className="w-full p-4 text-left"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-lg font-black">{sale.sale_number}</p>
+                                <p className="text-xs font-bold text-neutral-500">
+                                  {formatDateTime(sale.created_at)} · {sale.payment_method || 'unknown'} ·{' '}
+                                  {sale.mode || 'sale'} · {sale.status || 'unknown'}
+                                </p>
+                                <p className="mt-1 truncate text-xs font-semibold text-neutral-500">
+                                  {lineCount} line{lineCount === 1 ? '' : 's'}
+                                  {sale.square_payment_id ? ` · Square: ${sale.square_payment_id}` : ''}
+                                </p>
+                              </div>
+
+                              <div className="shrink-0 text-right">
+                                <p className="text-2xl font-black">{money(saleTotal)}</p>
+                                <p className="text-xs font-bold text-neutral-500">
+                                  {expanded ? 'Hide' : 'Open'}
+                                </p>
+                              </div>
+                            </div>
+                          </button>
+
+                          {expanded && (
+                            <div className="border-t border-neutral-200 bg-white p-4">
+                              <div className="mb-3 grid grid-cols-2 gap-2 text-xs font-bold text-neutral-600 md:grid-cols-4">
+                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                  <p className="uppercase tracking-widest text-neutral-400">Payment</p>
+                                  <p>{sale.payment_method || '-'}</p>
+                                </div>
+
+                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                  <p className="uppercase tracking-widest text-neutral-400">Square</p>
+                                  <p>{sale.square_status || sale.square_payment_status || '-'}</p>
+                                </div>
+
+                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                  <p className="uppercase tracking-widest text-neutral-400">Location</p>
+                                  <p>{sale.checkout_location || '-'}</p>
+                                </div>
+
+                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                  <p className="uppercase tracking-widest text-neutral-400">Provider</p>
+                                  <p>{sale.payment_provider || '-'}</p>
+                                </div>
+                              </div>
+
+                              <div className="space-y-2">
+                                {(sale.lines || []).map((line) => (
+                                  <div
+                                    key={line.id}
+                                    className="flex items-start justify-between gap-3 rounded-2xl bg-neutral-100 p-3"
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-black">
+                                        {line.brand || line.title || line.sku}
+                                      </p>
+                                      <p className="truncate text-xs font-semibold text-neutral-500">
+                                        {[line.reporting_category, line.sub_type, line.colour]
+                                          .filter(Boolean)
+                                          .join(' · ') || line.title || ''}
+                                      </p>
+                                      <p className="truncate text-xs font-bold text-neutral-500">
+                                        {line.sku}
+                                      </p>
+                                    </div>
+
+                                    <div className="shrink-0 text-right">
+                                      <p className="text-sm font-black">
+                                        {line.quantity} × {money(Number(line.unit_price || 0))}
+                                      </p>
+                                      <p className="text-base font-black">
+                                        {money(Number(line.line_total || 0))}
+                                      </p>
+                                      <p className="text-[11px] font-bold text-neutral-500">
+                                        Refundable:{' '}
+                                        {Math.max(
+                                          0,
+                                          Number(line.quantity || 0) -
+                                            Number(line.refunded_quantity || 0)
+                                        )}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+                                <button
+                                  type="button"
+                                  onClick={() => loadSaleForRefund(sale.sale_number)}
+                                  className="rounded-2xl bg-red-500 px-4 py-4 text-sm font-black text-white"
+                                >
+                                  Load Refund / Exchange
+                                </button>
+
+                                {sale.square_receipt_url && (
+                                  <a
+                                    href={sale.square_receipt_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded-2xl bg-sky-100 px-4 py-4 text-center text-sm font-black text-black"
+                                  >
+                                    Open Square Receipt
+                                  </a>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard?.writeText(sale.sale_number)
+                                    setHistoryMessage(`Copied ${sale.sale_number}`)
+                                  }}
+                                  className="rounded-2xl border border-neutral-300 px-4 py-4 text-sm font-black"
+                                >
+                                  Copy Receipt Number
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {cardPanelOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
@@ -1308,7 +1710,13 @@ export default function CheckoutPage() {
               </div>
 
               {cardPanelMessage && (
-                <div className="mb-4 rounded-2xl bg-neutral-100 p-3 text-sm font-bold">
+                <div
+                  className={`mb-4 rounded-2xl p-3 text-sm font-bold ${
+                    cardPanelState === 'unclear'
+                      ? 'bg-yellow-50 text-yellow-950'
+                      : 'bg-neutral-100 text-neutral-950'
+                  }`}
+                >
                   {cardPanelMessage}
                 </div>
               )}
@@ -1352,19 +1760,31 @@ export default function CheckoutPage() {
 
                   <button
                     type="button"
-                    onClick={() => setCardPanelState('unclear')}
+                    onClick={() => {
+                      setCardPanelState('unclear')
+                      setCardPanelMessage(
+                        `No Square response. Add ${money(
+                          displayedTotal
+                        )} to the card reader manually. After payment completes, press Record Manual Sale. If payment did not complete, press Cancel Sale.`
+                      )
+                    }}
                     disabled={saleBusy}
                     className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black disabled:opacity-40"
                   >
-                    No Response / Show Manual Options
+                    No Response / Manual Options
                   </button>
                 </div>
               )}
 
               {cardPanelState === 'unclear' && (
                 <div className="space-y-3">
-                  <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-bold text-yellow-900">
-                    Only record the sale manually if the payment definitely went through on the card terminal.
+                  <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-black text-yellow-950">
+                    APP OFFLINE / SQUARE UNCLEAR
+                    <br />
+                    <span className="font-bold">
+                      Add {money(displayedTotal)} to the card reader manually. Only record the sale
+                      after the card payment has completed.
+                    </span>
                   </div>
 
                   <button
@@ -1382,7 +1802,7 @@ export default function CheckoutPage() {
                     disabled={saleBusy}
                     className="w-full rounded-2xl bg-red-500 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
                   >
-                    Cancel Payment
+                    Cancel Sale
                   </button>
                 </div>
               )}
