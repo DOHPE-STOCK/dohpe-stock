@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
+import { createClient } from '@supabase/supabase-js'
+import { createServerClient } from '@supabase/ssr'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -11,6 +14,118 @@ type SquareCheckoutStatus =
   | 'CANCEL_REQUESTED'
   | 'CANCELED'
   | 'COMPLETED'
+
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!url || !serviceKey) {
+    throw new Error('Missing Supabase admin environment variables.')
+  }
+
+  return createClient(url, serviceKey)
+}
+
+type AccessResult =
+  | { ok: true; user?: any; staff?: any }
+  | { ok: false; status: number; message: string }
+
+async function requireAppLogin(): Promise<AccessResult> {
+  const cookieStore = await cookies()
+
+  const supabaseAuth = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll() {
+          // no-op: API auth check only
+        },
+      },
+    }
+  )
+
+  const {
+    data: { user },
+    error,
+  } = await supabaseAuth.auth.getUser()
+
+  if (error || !user) {
+    return { ok: false, status: 401, message: 'Login required.' }
+  }
+
+  return { ok: true, user }
+}
+
+function getActiveStaffFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_staff_user=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    return JSON.parse(decodeURIComponent(match[1]))
+  } catch {
+    return null
+  }
+}
+
+async function requireCheckoutPermission(request: Request, supabase: any): Promise<AccessResult> {
+  const staffCookie = getActiveStaffFromRequest(request)
+
+  if (!staffCookie?.id) {
+    return { ok: false, status: 401, message: 'Staff PIN required.' }
+  }
+
+  const { data: staff, error } = await supabase
+    .from('staff_users')
+    .select('id, name, role, permissions, is_active')
+    .eq('id', staffCookie.id)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  if (!staff || staff.is_active === false) {
+    return { ok: false, status: 403, message: 'Staff access denied.' }
+  }
+
+  const permissions = staff.permissions || {}
+  const allowed = staff.role === 'admin' || permissions.checkout === true
+
+  if (!allowed) {
+    return { ok: false, status: 403, message: 'Checkout permission required.' }
+  }
+
+  return { ok: true, staff }
+}
+
+async function requirePosAccess(request: Request, supabase: any): Promise<AccessResult> {
+  const login = await requireAppLogin()
+
+  if (!login.ok) return login
+
+  const staffAccess = await requireCheckoutPermission(request, supabase)
+
+  if (!staffAccess.ok) return staffAccess
+
+  return { ok: true, user: login.user, staff: staffAccess.staff }
+}
+
+function accessDeniedResponse(access: AccessResult) {
+  if (access.ok) {
+    return NextResponse.json({ ok: true })
+  }
+
+  return NextResponse.json(
+    { ok: false, message: access.message },
+    { status: access.status }
+  )
+}
 
 function getSquareBaseUrl() {
   const environment = (process.env.SQUARE_ENVIRONMENT || 'sandbox').toLowerCase()
@@ -25,17 +140,9 @@ function getSquareConfig() {
   const locationId = process.env.SQUARE_LOCATION_ID
   const deviceId = process.env.SQUARE_TERMINAL_DEVICE_ID
 
-  if (!accessToken) {
-    throw new Error('Missing SQUARE_ACCESS_TOKEN')
-  }
-
-  if (!locationId) {
-    throw new Error('Missing SQUARE_LOCATION_ID')
-  }
-
-  if (!deviceId) {
-    throw new Error('Missing SQUARE_TERMINAL_DEVICE_ID')
-  }
+  if (!accessToken) throw new Error('Missing SQUARE_ACCESS_TOKEN')
+  if (!locationId) throw new Error('Missing SQUARE_LOCATION_ID')
+  if (!deviceId) throw new Error('Missing SQUARE_TERMINAL_DEVICE_ID')
 
   return {
     accessToken,
@@ -239,15 +346,21 @@ async function waitForFinalCheckoutStatus({
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = getSupabaseAdmin()
+
+    const access = await requirePosAccess(request, supabase)
+
+    if (!access.ok) {
+      return accessDeniedResponse(access)
+    }
+
     const body = await request.json().catch(() => ({}))
     const action = body.action || 'create_and_wait'
 
     if (action === 'status') {
       const checkoutId = String(body.checkout_id || '')
 
-      if (!checkoutId) {
-        throw new Error('Missing checkout_id')
-      }
+      if (!checkoutId) throw new Error('Missing checkout_id')
 
       const checkout = await getTerminalCheckout(checkoutId)
 
@@ -263,9 +376,7 @@ export async function POST(request: NextRequest) {
     if (action === 'cancel') {
       const checkoutId = String(body.checkout_id || '')
 
-      if (!checkoutId) {
-        throw new Error('Missing checkout_id')
-      }
+      if (!checkoutId) throw new Error('Missing checkout_id')
 
       const config = getSquareConfig()
 

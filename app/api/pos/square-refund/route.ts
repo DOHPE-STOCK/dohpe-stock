@@ -1,14 +1,137 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
+import { createClient } from '@supabase/supabase-js'
+import { createServerClient } from '@supabase/ssr'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 const SQUARE_VERSION = '2026-01-22'
 
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!url || !serviceKey) {
+    throw new Error('Missing Supabase admin environment variables.')
+  }
+
+  return createClient(url, serviceKey)
+}
+
+type AccessResult =
+  | { ok: true; user?: any; staff?: any }
+  | { ok: false; status: number; message: string }
+
+async function requireAppLogin(): Promise<AccessResult> {
+  const cookieStore = await cookies()
+
+  const supabaseAuth = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll() {
+          // no-op: API auth check only
+        },
+      },
+    }
+  )
+
+  const {
+    data: { user },
+    error,
+  } = await supabaseAuth.auth.getUser()
+
+  if (error || !user) {
+    return { ok: false, status: 401, message: 'Login required.' }
+  }
+
+  return { ok: true, user }
+}
+
+function getActiveStaffFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_staff_user=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    return JSON.parse(decodeURIComponent(match[1]))
+  } catch {
+    return null
+  }
+}
+
+async function requireCheckoutPermission(request: Request, supabase: any): Promise<AccessResult> {
+  const staffCookie = getActiveStaffFromRequest(request)
+
+  if (!staffCookie?.id) {
+    return { ok: false, status: 401, message: 'Staff PIN required.' }
+  }
+
+  const { data: staff, error } = await supabase
+    .from('staff_users')
+    .select('id, name, role, permissions, is_active')
+    .eq('id', staffCookie.id)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  if (!staff || staff.is_active === false) {
+    return { ok: false, status: 403, message: 'Staff access denied.' }
+  }
+
+  const permissions = staff.permissions || {}
+  const allowed = staff.role === 'admin' || permissions.checkout === true
+
+  if (!allowed) {
+    return { ok: false, status: 403, message: 'Checkout permission required.' }
+  }
+
+  return { ok: true, staff }
+}
+
+async function requirePosAccess(request: Request, supabase: any): Promise<AccessResult> {
+  const login = await requireAppLogin()
+
+  if (!login.ok) return login
+
+  const staffAccess = await requireCheckoutPermission(request, supabase)
+
+  if (!staffAccess.ok) return staffAccess
+
+  return { ok: true, user: login.user, staff: staffAccess.staff }
+}
+
+function accessDeniedResponse(access: AccessResult) {
+  if (access.ok) {
+    return NextResponse.json({ ok: true })
+  }
+
+  return NextResponse.json(
+    { ok: false, message: access.message },
+    { status: access.status }
+  )
+}
+
 function getSquareBaseUrl() {
   return (process.env.SQUARE_ENVIRONMENT || 'sandbox').toLowerCase() === 'production'
     ? 'https://connect.squareup.com'
     : 'https://connect.squareupsandbox.com'
+}
+
+function getAccessToken() {
+  const token = process.env.SQUARE_ACCESS_TOKEN
+
+  if (!token) throw new Error('Missing SQUARE_ACCESS_TOKEN.')
+
+  return token
 }
 
 function poundsToMinorUnits(amount: any) {
@@ -21,23 +144,23 @@ function poundsToMinorUnits(amount: any) {
   return Math.round(value * 100)
 }
 
-function getAccessToken() {
-  const token = process.env.SQUARE_ACCESS_TOKEN
-
-  if (!token) {
-    throw new Error('Missing SQUARE_ACCESS_TOKEN.')
-  }
-
-  return token
-}
-
 export async function POST(request: Request) {
   try {
+    const supabase = getSupabaseAdmin()
+
+    const access = await requirePosAccess(request, supabase)
+
+    if (!access.ok) {
+      return accessDeniedResponse(access)
+    }
+
     const body = await request.json().catch(() => ({}))
 
     const paymentId = String(body.payment_id || '').trim()
     const amount = poundsToMinorUnits(body.amount)
     const currency = String(body.currency || 'GBP').toUpperCase()
+    const saleNumber = String(body.sale_number || '').trim()
+    const refundSaleId = String(body.refund_sale_id || '').trim()
     const reason = String(body.reason || 'POS refund').slice(0, 192)
 
     if (!paymentId) {
@@ -46,7 +169,7 @@ export async function POST(request: Request) {
 
     const idempotencyKey = String(
       body.idempotency_key ||
-        `refund-${paymentId}-${amount}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        `refund-${refundSaleId || saleNumber || paymentId}-${amount}`
     ).slice(0, 45)
 
     const response = await fetch(`${getSquareBaseUrl()}/v2/refunds`, {
