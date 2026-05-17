@@ -1102,7 +1102,7 @@ export default function CheckoutPage() {
             .center { text-align: center; }
             .logo-wrap {
               width: 62mm;
-              height: 16mm;
+              height: 24mm;
               margin: 0 auto 2px;
               overflow: hidden;
               display: flex;
