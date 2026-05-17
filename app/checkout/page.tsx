@@ -45,6 +45,20 @@ type BasketLine = {
 type PaymentMethod = 'cash' | 'card' | null
 type CheckoutMode = 'sale' | 'refund' | 'exchange'
 type CardPanelState = 'options' | 'waiting' | 'unclear'
+type PaymentResultType = 'success' | 'failed' | null
+
+type CardPaymentDetails = {
+  payment_provider?: string
+  square_status?: string
+  square_checkout_id?: string | null
+  square_payment_id?: string | null
+  square_payment_status?: string | null
+  square_receipt_url?: string | null
+  square_terminal_device_id?: string | null
+  payment_reference?: string | null
+  payment_confirmed_at?: string | null
+  manual_payment_reason?: string | null
+}
 
 const OFFLINE_TX_KEY = 'dohpe_pos_offline_transactions_v1'
 const CHECKOUT_LOCATION_KEY = 'dohpe_checkout_location_v1'
@@ -130,6 +144,7 @@ function CardLogos() {
 export default function CheckoutPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const retryingRef = useRef(false)
+  const paymentResultTimerRef = useRef<number | null>(null)
 
   const [mode, setMode] = useState<CheckoutMode>('sale')
   const [scanValue, setScanValue] = useState('')
@@ -147,6 +162,9 @@ export default function CheckoutPage() {
   const [cardPanelOpen, setCardPanelOpen] = useState(false)
   const [cardPanelState, setCardPanelState] = useState<CardPanelState>('options')
   const [cardPanelMessage, setCardPanelMessage] = useState('')
+  const [paymentResultType, setPaymentResultType] = useState<PaymentResultType>(null)
+  const [paymentResultTitle, setPaymentResultTitle] = useState('')
+  const [paymentResultMessage, setPaymentResultMessage] = useState('')
 
   const saleLines = basket.filter((line) => !line.isReturnLine)
   const returnLines = basket.filter((line) => line.isReturnLine)
@@ -196,6 +214,30 @@ export default function CheckoutPage() {
   useEffect(() => {
     setCheckoutLocation(getSavedCheckoutLocation())
   }, [])
+
+  useEffect(() => {
+    return () => {
+      if (paymentResultTimerRef.current) {
+        window.clearTimeout(paymentResultTimerRef.current)
+      }
+    }
+  }, [])
+
+  function showPaymentResult(type: Exclude<PaymentResultType, null>, title: string, body: string) {
+    if (paymentResultTimerRef.current) {
+      window.clearTimeout(paymentResultTimerRef.current)
+    }
+
+    setPaymentResultType(type)
+    setPaymentResultTitle(title)
+    setPaymentResultMessage(body)
+
+    paymentResultTimerRef.current = window.setTimeout(() => {
+      setPaymentResultType(null)
+      setPaymentResultTitle('')
+      setPaymentResultMessage('')
+    }, 6000)
+  }
 
   async function writeTransactionOnline(tx: any) {
     const response = await fetch('/api/pos/save-transaction', {
@@ -530,7 +572,11 @@ export default function CheckoutPage() {
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
-  function buildTransaction(method: 'cash' | 'card', action: 'sale' | 'refund' | 'exchange') {
+  function buildTransaction(
+    method: 'cash' | 'card',
+    action: 'sale' | 'refund' | 'exchange',
+    cardDetails?: CardPaymentDetails
+  ) {
     const saleNumber = makeSaleNumber()
     const saleId = crypto.randomUUID()
     const now = new Date().toISOString()
@@ -589,6 +635,27 @@ export default function CheckoutPage() {
       })
     }
 
+    const defaultCardDetails: CardPaymentDetails =
+      method === 'card'
+        ? {
+            payment_provider: 'square_manual',
+            square_status: 'manual_terminal_payment_recorded',
+            manual_payment_reason: 'manual_card_entry',
+            payment_confirmed_at: now,
+          }
+        : {
+            payment_provider: 'none',
+            square_status: 'not_required',
+          }
+
+    const finalCardDetails =
+      method === 'card'
+        ? {
+            ...defaultCardDetails,
+            ...(cardDetails || {}),
+          }
+        : defaultCardDetails
+
     return {
       id: saleId,
       sale_number: saleNumber,
@@ -604,7 +671,16 @@ export default function CheckoutPage() {
       change_due: method === 'cash' ? Number(changeDue.toFixed(2)) : null,
       exchange_credit: Number(exchangeCredit.toFixed(2)),
       refund_method: action === 'refund' ? method : null,
-      square_status: method === 'card' ? 'manual_terminal_payment_recorded' : 'not_required',
+      square_status: finalCardDetails.square_status || 'not_required',
+      square_checkout_id: finalCardDetails.square_checkout_id || null,
+      square_payment_id: finalCardDetails.square_payment_id || null,
+      square_payment_status: finalCardDetails.square_payment_status || null,
+      square_receipt_url: finalCardDetails.square_receipt_url || null,
+      square_terminal_device_id: finalCardDetails.square_terminal_device_id || null,
+      payment_provider: finalCardDetails.payment_provider || 'none',
+      payment_reference: finalCardDetails.payment_reference || null,
+      payment_confirmed_at: finalCardDetails.payment_confirmed_at || null,
+      manual_payment_reason: finalCardDetails.manual_payment_reason || null,
       status: 'completed',
       checkout_location: checkoutLocation || 'SHOP-1',
       created_at: now,
@@ -655,7 +731,7 @@ export default function CheckoutPage() {
     }
   }
 
-  async function completeSale(method: 'cash' | 'card') {
+  async function completeSale(method: 'cash' | 'card', cardDetails?: CardPaymentDetails) {
     if (basket.length === 0) {
       setMessage('Basket is empty.')
       return
@@ -675,7 +751,7 @@ export default function CheckoutPage() {
 
     try {
       const action: 'sale' | 'refund' | 'exchange' = mode
-      const tx = buildTransaction(method, action)
+      const tx = buildTransaction(method, action, cardDetails)
 
       await saveTransaction(tx)
 
@@ -691,9 +767,22 @@ export default function CheckoutPage() {
         setMessage(`Sale recorded. Receipt: ${tx.sale_number}`)
       }
 
+      if (method === 'card') {
+        showPaymentResult(
+          'success',
+          'Payment Succeeded',
+          `Card sale recorded. Receipt: ${tx.sale_number}`
+        )
+      }
+
       retryOfflineTransactions()
     } catch (error: any) {
-      setMessage(error.message || 'Could not complete transaction.')
+      const errorMessage = error.message || 'Could not complete transaction.'
+      setMessage(errorMessage)
+
+      if (method === 'card') {
+        showPaymentResult('failed', 'Payment Record Failed', errorMessage)
+      }
     } finally {
       setSaleBusy(false)
     }
@@ -723,8 +812,18 @@ export default function CheckoutPage() {
 
     if (!confirmed) return
 
+    const now = new Date().toISOString()
+
     setCardPanelMessage('Recording manual card sale...')
-    await completeSale('card')
+
+    await completeSale('card', {
+      payment_provider: 'square_manual',
+      square_status: 'manual_terminal_payment_recorded',
+      square_payment_status: 'MANUAL_CONFIRMED',
+      payment_reference: null,
+      payment_confirmed_at: now,
+      manual_payment_reason: 'manual_card_entry_confirmed_by_staff',
+    })
   }
 
   function cancelCardPayment() {
@@ -734,6 +833,7 @@ export default function CheckoutPage() {
 
     if (!confirmed) return
 
+    showPaymentResult('failed', 'Payment Cancelled', 'No sale was recorded.')
     closeCardPanel()
   }
 
@@ -770,13 +870,32 @@ export default function CheckoutPage() {
       const status = text(data.status || data.square_status || data.checkout_status).toLowerCase()
 
       if (['paid', 'completed', 'complete', 'success', 'succeeded'].includes(status)) {
+        const now = new Date().toISOString()
+
         setCardPanelMessage('Square payment confirmed. Recording sale...')
-        await completeSale('card')
+
+        await completeSale('card', {
+          payment_provider: 'square',
+          square_status: 'square_terminal_paid',
+          square_checkout_id: data.checkout_id || data.checkout?.id || null,
+          square_payment_id: data.payment_id || data.payment?.id || null,
+          square_payment_status: data.payment?.status || data.status || null,
+          square_receipt_url: data.payment?.receipt_url || null,
+          square_terminal_device_id:
+            data.checkout?.device_options?.device_id ||
+            data.checkout?.device_id ||
+            null,
+          payment_reference: data.payment_id || data.payment?.id || data.checkout_id || null,
+          payment_confirmed_at: now,
+          manual_payment_reason: null,
+        })
+
         return
       }
 
       if (['cancelled', 'canceled', 'cancelled_by_customer', 'canceled_by_customer'].includes(status)) {
         setCardPanelMessage('Square payment cancelled.')
+        showPaymentResult('failed', 'Payment Cancelled', 'Square Terminal cancelled the payment.')
         closeCardPanel()
         return
       }
@@ -1267,6 +1386,34 @@ export default function CheckoutPage() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {paymentResultType && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+            <div
+              className={`w-full max-w-md rounded-[2rem] p-8 text-center shadow-2xl ${
+                paymentResultType === 'success'
+                  ? 'bg-emerald-500 text-black'
+                  : 'bg-red-500 text-white'
+              }`}
+            >
+              <div className="mx-auto mb-5 flex h-28 w-28 items-center justify-center rounded-full bg-white text-7xl font-black text-black">
+                {paymentResultType === 'success' ? '✓' : '✕'}
+              </div>
+
+              <h2 className="text-3xl font-black">
+                {paymentResultTitle}
+              </h2>
+
+              <p className="mt-3 text-lg font-bold">
+                {paymentResultMessage}
+              </p>
+
+              <p className="mt-5 text-sm font-black opacity-80">
+                This message will close automatically.
+              </p>
             </div>
           </div>
         )}
