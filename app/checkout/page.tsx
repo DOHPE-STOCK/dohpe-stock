@@ -55,6 +55,8 @@ type CardPaymentDetails = {
   square_payment_status?: string | null
   square_receipt_url?: string | null
   square_terminal_device_id?: string | null
+  square_refund_id?: string | null
+  square_refund_status?: string | null
   payment_reference?: string | null
   payment_confirmed_at?: string | null
   manual_payment_reason?: string | null
@@ -98,6 +100,8 @@ type HistorySale = {
   square_payment_status: string | null
   square_receipt_url: string | null
   square_terminal_device_id: string | null
+  square_refund_id?: string | null
+  square_refund_status?: string | null
   payment_provider: string | null
   payment_reference: string | null
   payment_confirmed_at: string | null
@@ -689,6 +693,42 @@ export default function CheckoutPage() {
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
+  function getCardRefundAmount() {
+    if (mode === 'refund') return returnSubtotal
+    if (mode === 'exchange') return refundDue
+    return 0
+  }
+
+  async function callSquareRefund(amount: number) {
+    const originalPaymentId = text(originalSale?.square_payment_id)
+
+    if (!originalPaymentId) {
+      throw new Error('Original sale does not have a Square payment ID.')
+    }
+
+    const response = await fetch('/api/pos/square-refund', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        payment_id: originalPaymentId,
+        amount,
+        currency: 'GBP',
+        sale_number: originalSale?.sale_number || '',
+        reason: `POS refund for ${originalSale?.sale_number || originalPaymentId}`,
+      }),
+    })
+
+    const data = await response.json().catch(() => null)
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.message || 'Square refund failed.')
+    }
+
+    return data
+  }
+
   function buildTransaction(
     method: 'cash' | 'card',
     action: 'sale' | 'refund' | 'exchange',
@@ -794,6 +834,8 @@ export default function CheckoutPage() {
       square_payment_status: finalCardDetails.square_payment_status || null,
       square_receipt_url: finalCardDetails.square_receipt_url || null,
       square_terminal_device_id: finalCardDetails.square_terminal_device_id || null,
+      square_refund_id: finalCardDetails.square_refund_id || null,
+      square_refund_status: finalCardDetails.square_refund_status || null,
       payment_provider: finalCardDetails.payment_provider || 'none',
       payment_reference: finalCardDetails.payment_reference || null,
       payment_confirmed_at: finalCardDetails.payment_confirmed_at || null,
@@ -875,7 +917,7 @@ export default function CheckoutPage() {
       clearSale()
 
       if (method === 'card' && (mode === 'refund' || refundDue > 0)) {
-        setMessage('Card refund recorded. Square refund API still needs connecting.')
+        setMessage(`Card refund recorded. Receipt: ${tx.sale_number}`)
       } else if (mode === 'exchange') {
         setMessage(`Exchange recorded. Receipt: ${tx.sale_number}`)
       } else if (mode === 'refund') {
@@ -887,8 +929,8 @@ export default function CheckoutPage() {
       if (method === 'card') {
         showPaymentResult(
           'success',
-          'Payment Succeeded',
-          `Card sale recorded. Receipt: ${tx.sale_number}`
+          mode === 'refund' || refundDue > 0 ? 'Refund Succeeded' : 'Payment Succeeded',
+          `Card transaction recorded. Receipt: ${tx.sale_number}`
         )
       }
 
@@ -908,6 +950,79 @@ export default function CheckoutPage() {
     } finally {
       setSaleBusy(false)
     }
+  }
+
+  async function completeCardRefund() {
+    if (returnLines.every((line) => line.quantity <= 0)) {
+      setMessage('Select at least one item and quantity to refund.')
+      return
+    }
+
+    const refundAmount = getCardRefundAmount()
+
+    if (refundAmount <= 0) {
+      setMessage('Card refund amount must be more than £0.')
+      return
+    }
+
+    const originalPaymentId = text(originalSale?.square_payment_id)
+    const now = new Date().toISOString()
+
+    if (originalPaymentId) {
+      const confirmed = window.confirm(
+        `Refund ${money(refundAmount)} back to the original Square card payment?`
+      )
+
+      if (!confirmed) return
+
+      setSaleBusy(true)
+      setMessage('Sending refund to Square...')
+
+      try {
+        const squareRefund = await callSquareRefund(refundAmount)
+
+        await completeSale('card', {
+          payment_provider: 'square',
+          square_status: 'square_refund_completed',
+          square_payment_id: originalPaymentId,
+          square_payment_status: originalSale?.square_payment_status || null,
+          square_receipt_url: originalSale?.square_receipt_url || null,
+          square_terminal_device_id: originalSale?.square_terminal_device_id || null,
+          square_refund_id: squareRefund.refund_id || null,
+          square_refund_status: squareRefund.status || null,
+          payment_reference: squareRefund.refund_id || originalPaymentId,
+          payment_confirmed_at: now,
+          manual_payment_reason: null,
+        })
+      } catch (error: any) {
+        const errorMessage = error.message || 'Square refund failed.'
+        setMessage(errorMessage)
+        showPaymentResult('failed', 'Refund Failed', errorMessage)
+      } finally {
+        setSaleBusy(false)
+      }
+
+      return
+    }
+
+    const confirmedManual = window.confirm(
+      `This original sale does not have a Square payment ID, so the app cannot refund it automatically.\n\nRefund ${money(
+        refundAmount
+      )} manually using Square receipt/dashboard/terminal first, then press OK to record the refund in POS.`
+    )
+
+    if (!confirmedManual) return
+
+    await completeSale('card', {
+      payment_provider: 'square_manual',
+      square_status: 'manual_square_refund_recorded',
+      square_payment_status: 'MANUAL_REFUND_CONFIRMED',
+      square_refund_id: null,
+      square_refund_status: 'MANUAL',
+      payment_reference: null,
+      payment_confirmed_at: now,
+      manual_payment_reason: 'manual_card_refund_confirmed_by_staff',
+    })
   }
 
   function openCardPanel() {
@@ -1320,29 +1435,50 @@ export default function CheckoutPage() {
             </div>
 
             {mode === 'refund' ? (
-              <div className="mt-4 grid grid-cols-3 gap-2">
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => completeSale('cash')}
-                  className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black"
+                  disabled={saleBusy}
+                  className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
                 >
                   CASH REFUND
                 </button>
                 <button
                   type="button"
-                  onClick={() => completeSale('card')}
-                  className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black"
+                  onClick={completeCardRefund}
+                  disabled={saleBusy}
+                  className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
                 >
                   CARD REFUND
                 </button>
-                <button
-                  type="button"
-                  onClick={beginExchange}
-                  className="rounded-3xl bg-amber-100 py-4 text-sm font-black text-black"
-                >
-                  EXCHANGE
-                </button>
               </div>
+            ) : mode === 'exchange' && refundDue > 0 ? (
+              <>
+                <div className="mt-4 rounded-2xl bg-red-50 p-3 text-sm font-bold text-red-800">
+                  Replacement item is cheaper. Refund the customer {money(refundDue)}.
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => completeSale('cash')}
+                    disabled={saleBusy}
+                    className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  >
+                    CASH REFUND DIFFERENCE
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={completeCardRefund}
+                    disabled={saleBusy}
+                    className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  >
+                    CARD REFUND DIFFERENCE
+                  </button>
+                </div>
+              </>
             ) : (
               <>
                 <div className="mt-4 grid grid-cols-2 gap-3">
@@ -1416,6 +1552,19 @@ export default function CheckoutPage() {
                           : 'Select Payment'}
                 </button>
               </>
+            )}
+
+            {mode === 'refund' && (
+              <div className="mt-3 flex justify-center">
+                <button
+                  type="button"
+                  onClick={beginExchange}
+                  disabled={saleBusy}
+                  className="text-xs font-black text-amber-700 underline disabled:opacity-40"
+                >
+                  Exchange instead
+                </button>
+              </div>
             )}
 
             <div className="mt-4 flex justify-center gap-4">
