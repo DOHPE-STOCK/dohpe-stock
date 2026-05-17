@@ -22,10 +22,7 @@ function cleanText(value: string | null) {
 function cleanDate(value: string | null) {
   const clean = cleanText(value)
   if (!clean) return ''
-
-  // Accept YYYY-MM-DD only. Keeps the route predictable.
   if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) return ''
-
   return clean
 }
 
@@ -41,6 +38,87 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value
   )
+}
+
+const saleSelect = `
+  id,
+  sale_number,
+  mode,
+  payment_method,
+  subtotal,
+  discount_amount,
+  total,
+  vat_amount,
+  net_amount,
+  cash_tendered,
+  change_due,
+  square_status,
+  square_checkout_id,
+  square_payment_id,
+  square_payment_status,
+  square_receipt_url,
+  square_terminal_device_id,
+  square_refund_id,
+  square_refund_status,
+  payment_provider,
+  payment_reference,
+  payment_confirmed_at,
+  manual_payment_reason,
+  status,
+  original_sale_id,
+  exchange_credit,
+  refund_method,
+  checkout_location,
+  created_at,
+  updated_at,
+  pos_sale_lines (
+    id,
+    sale_id,
+    sku,
+    title,
+    brand,
+    reporting_category,
+    sub_type,
+    colour,
+    quantity,
+    unit_price,
+    line_total,
+    discount_percent,
+    discount_amount,
+    original_line_id,
+    refunded_quantity,
+    max_refundable_quantity,
+    created_at
+  )
+`
+
+function normaliseSale(sale: any) {
+  return {
+    ...sale,
+    lines: Array.isArray(sale.pos_sale_lines)
+      ? sale.pos_sale_lines.sort((a: any, b: any) =>
+          String(a.created_at || '').localeCompare(String(b.created_at || ''))
+        )
+      : [],
+    pos_sale_lines: undefined,
+  }
+}
+
+function getLatestActivityIso(sale: any, relatedSales: any[]) {
+  const activityDates = [
+    sale.created_at,
+    sale.updated_at,
+    ...relatedSales.map((related: any) => related.created_at),
+    ...relatedSales.map((related: any) => related.updated_at),
+  ]
+    .filter(Boolean)
+    .map((value: string) => new Date(value).getTime())
+    .filter((value: number) => Number.isFinite(value))
+
+  const fallback = new Date(sale.created_at || Date.now()).getTime()
+  const latestActivityMs = activityDates.length > 0 ? Math.max(...activityDates) : fallback
+
+  return new Date(latestActivityMs).toISOString()
 }
 
 export async function GET(request: Request) {
@@ -83,57 +161,7 @@ export async function GET(request: Request) {
 
     let salesQuery = supabase
       .from('pos_sales')
-      .select(
-        `
-          id,
-          sale_number,
-          mode,
-          payment_method,
-          subtotal,
-          discount_amount,
-          total,
-          vat_amount,
-          net_amount,
-          cash_tendered,
-          change_due,
-          square_status,
-          square_checkout_id,
-          square_payment_id,
-          square_payment_status,
-          square_receipt_url,
-          square_terminal_device_id,
-          payment_provider,
-          payment_reference,
-          payment_confirmed_at,
-          manual_payment_reason,
-          status,
-          original_sale_id,
-          exchange_credit,
-          refund_method,
-          checkout_location,
-          created_at,
-          updated_at,
-          pos_sale_lines (
-            id,
-            sale_id,
-            sku,
-            title,
-            brand,
-            reporting_category,
-            sub_type,
-            colour,
-            quantity,
-            unit_price,
-            line_total,
-            discount_percent,
-            discount_amount,
-            original_line_id,
-            refunded_quantity,
-            max_refundable_quantity,
-            created_at
-          )
-        `
-      )
+      .select(saleSelect)
       .order('created_at', { ascending: false })
       .limit(limit)
 
@@ -158,6 +186,7 @@ export async function GET(request: Request) {
         `sale_number.ilike.%${query}%`,
         `square_payment_id.ilike.%${query}%`,
         `square_checkout_id.ilike.%${query}%`,
+        `square_refund_id.ilike.%${query}%`,
         `payment_reference.ilike.%${query}%`,
       ]
 
@@ -176,20 +205,92 @@ export async function GET(request: Request) {
 
     if (salesError) throw new Error(salesError.message)
 
-    const normalisedSales = (sales || []).map((sale: any) => ({
-      ...sale,
-      lines: Array.isArray(sale.pos_sale_lines)
-        ? sale.pos_sale_lines.sort((a: any, b: any) =>
-            String(a.created_at || '').localeCompare(String(b.created_at || ''))
-          )
-        : [],
-      pos_sale_lines: undefined,
-    }))
+    const normalisedSales = (sales || []).map(normaliseSale)
+
+    const visibleSaleIds = normalisedSales.map((sale: any) => sale.id).filter(Boolean)
+    const originalSaleIds = normalisedSales
+      .map((sale: any) => sale.original_sale_id)
+      .filter(Boolean)
+
+    const idsForRelatedLookup = Array.from(new Set([...visibleSaleIds, ...originalSaleIds]))
+
+    const relatedSalesByOriginalId: Record<string, any[]> = {}
+    const originalSalesById: Record<string, any> = {}
+
+    if (idsForRelatedLookup.length > 0) {
+      const relatedFilters = [`original_sale_id.in.(${idsForRelatedLookup.join(',')})`]
+
+      if (originalSaleIds.length > 0) {
+        relatedFilters.push(`id.in.(${originalSaleIds.join(',')})`)
+      }
+
+      const { data: relatedSales, error: relatedError } = await supabase
+        .from('pos_sales')
+        .select(saleSelect)
+        .or(relatedFilters.join(','))
+        .order('created_at', { ascending: true })
+
+      if (relatedError) throw new Error(relatedError.message)
+
+      const normalisedRelated = (relatedSales || []).map(normaliseSale)
+
+      for (const related of normalisedRelated) {
+        if (related.original_sale_id) {
+          if (!relatedSalesByOriginalId[related.original_sale_id]) {
+            relatedSalesByOriginalId[related.original_sale_id] = []
+          }
+
+          relatedSalesByOriginalId[related.original_sale_id].push(related)
+        }
+
+        originalSalesById[related.id] = related
+      }
+    }
+
+    const enrichedSales = normalisedSales
+      .map((sale: any) => {
+        const originalSale =
+          sale.original_sale_id && originalSalesById[sale.original_sale_id]
+            ? originalSalesById[sale.original_sale_id]
+            : null
+
+        const relatedSales =
+          sale.mode === 'sale'
+            ? relatedSalesByOriginalId[sale.id] || []
+            : sale.original_sale_id
+              ? relatedSalesByOriginalId[sale.original_sale_id] || []
+              : []
+
+        const returnedQtyByOriginalLineId: Record<string, number> = {}
+
+        for (const relatedSale of relatedSales) {
+          for (const line of relatedSale.lines || []) {
+            const originalLineId = line.original_line_id
+            if (!originalLineId) continue
+
+            returnedQtyByOriginalLineId[originalLineId] =
+              (returnedQtyByOriginalLineId[originalLineId] || 0) + Number(line.quantity || 0)
+          }
+        }
+
+        return {
+          ...sale,
+          activity_at: getLatestActivityIso(sale, relatedSales),
+          original_sale: originalSale,
+          related_sales: relatedSales.filter((related: any) => related.id !== sale.id),
+          returned_qty_by_original_line_id: returnedQtyByOriginalLineId,
+        }
+      })
+      .sort((a: any, b: any) =>
+        String(b.activity_at || b.created_at || '').localeCompare(
+          String(a.activity_at || a.created_at || '')
+        )
+      )
 
     return NextResponse.json({
       ok: true,
-      sales: normalisedSales,
-      count: normalisedSales.length,
+      sales: enrichedSales,
+      count: enrichedSales.length,
     })
   } catch (error: any) {
     return NextResponse.json(
