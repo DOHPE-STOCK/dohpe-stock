@@ -1100,13 +1100,22 @@ export default function CheckoutPage() {
               padding: 10px 10px 16px;
             }
             .center { text-align: center; }
-            .logo {
+            .logo-wrap {
               width: 62mm;
-              max-width: 100%;
+              height: 16mm;
+              margin: 0 auto 2px;
+              overflow: hidden;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            }
+            .logo {
+              width: 72mm;
+              max-width: none;
               height: auto;
               object-fit: contain;
-              margin: -6px auto -2px;
               display: block;
+              transform: translateY(-1mm);
             }
             h1 {
               font-size: 18px;
@@ -1215,7 +1224,9 @@ export default function CheckoutPage() {
 
           <div class="receipt">
             <div class="center">
-              <img class="logo" src="${DOHPE_LOGO_URL}" />
+              <div class="logo-wrap">
+                <img class="logo" src="${DOHPE_LOGO_URL}" />
+              </div>
               <h1>DOHPE VINTAGE</h1>
               <div class="small">22 Pottergate, Norwich, NR2 1DX</div>
             </div>
