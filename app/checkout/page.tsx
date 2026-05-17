@@ -113,6 +113,10 @@ type HistorySale = {
   checkout_location: string | null
   created_at: string
   updated_at: string | null
+  activity_at?: string | null
+  original_sale?: HistorySale | null
+  related_sales?: HistorySale[]
+  returned_qty_by_original_line_id?: Record<string, number>
   lines: HistoryLine[]
 }
 
@@ -1176,6 +1180,187 @@ export default function CheckoutPage() {
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
+
+  function getRootHistorySale(sale: HistorySale) {
+    return sale.original_sale || sale
+  }
+
+  function getRelatedHistorySales(sale: HistorySale) {
+    return Array.isArray(sale.related_sales) ? sale.related_sales : []
+  }
+
+  function getLineAlreadyRefunded(line: HistoryLine, sale: HistorySale) {
+    const relatedReturned = sale.returned_qty_by_original_line_id?.[line.id]
+
+    if (relatedReturned !== undefined && relatedReturned !== null) {
+      return Number(relatedReturned || 0)
+    }
+
+    return Number(line.refunded_quantity || 0)
+  }
+
+  function getLineRemainingRefundable(line: HistoryLine, sale: HistorySale) {
+    const soldQty = Number(line.quantity || 0)
+    const maxRefundable =
+      line.max_refundable_quantity === null || line.max_refundable_quantity === undefined
+        ? soldQty
+        : Number(line.max_refundable_quantity || 0)
+    const alreadyRefunded = getLineAlreadyRefunded(line, sale)
+
+    return Math.max(0, Math.min(soldQty, maxRefundable) - alreadyRefunded)
+  }
+
+  function getTotalRemainingRefundable(sale: HistorySale) {
+    const rootSale = getRootHistorySale(sale)
+
+    return (rootSale.lines || []).reduce(
+      (sum, line) => sum + getLineRemainingRefundable(line, sale),
+      0
+    )
+  }
+
+  function hasSquareApiRefundAvailable(sale: HistorySale) {
+    const rootSale = getRootHistorySale(sale)
+    return rootSale.payment_method === 'card' && Boolean(rootSale.square_payment_id)
+  }
+
+  function getRefundMethodLabel(sale: HistorySale) {
+    const rootSale = getRootHistorySale(sale)
+
+    if (rootSale.payment_method === 'cash') return 'Cash refund only'
+    if (hasSquareApiRefundAvailable(sale)) return 'Square API refund available'
+    if (rootSale.payment_method === 'card') return 'Manual card refund only'
+
+    return 'Refund method unknown'
+  }
+
+  function getHistoryFamilyLabel(sale: HistorySale) {
+    const rootSale = getRootHistorySale(sale)
+    const related = getRelatedHistorySales(sale)
+    const refundCount = related.filter((row) => row.mode === 'refund').length
+    const exchangeCount = related.filter((row) => row.mode === 'exchange').length
+
+    if (sale.mode !== 'sale' && rootSale.id !== sale.id) {
+      return `Linked to ${rootSale.sale_number}`
+    }
+
+    if (refundCount || exchangeCount) {
+      return `${refundCount} refund${refundCount === 1 ? '' : 's'} · ${exchangeCount} exchange${exchangeCount === 1 ? '' : 's'}`
+    }
+
+    return 'Original sale'
+  }
+
+  function printHistorySale(sale: HistorySale) {
+    const rootSale = getRootHistorySale(sale)
+    const related = getRelatedHistorySales(sale)
+    const rows = (rootSale.lines || [])
+      .map((line) => {
+        const alreadyRefunded = getLineAlreadyRefunded(line, sale)
+        const remaining = getLineRemainingRefundable(line, sale)
+
+        return `
+          <tr>
+            <td>${line.sku || ''}</td>
+            <td>${line.brand || line.title || ''}</td>
+            <td style="text-align:center">${line.quantity || 0}</td>
+            <td style="text-align:right">${money(Number(line.unit_price || 0))}</td>
+            <td style="text-align:center">${alreadyRefunded}</td>
+            <td style="text-align:center">${remaining}</td>
+            <td style="text-align:right">${money(Number(line.line_total || 0))}</td>
+          </tr>
+        `
+      })
+      .join('')
+
+    const relatedRows = related
+      .map(
+        (row) => `
+          <tr>
+            <td>${row.sale_number}</td>
+            <td>${formatDateTime(row.created_at)}</td>
+            <td>${row.mode || ''}</td>
+            <td>${row.payment_method || ''}</td>
+            <td>${row.square_refund_status || row.square_status || row.status || ''}</td>
+            <td style="text-align:right">${money(Number(row.total || 0))}</td>
+          </tr>
+        `
+      )
+      .join('')
+
+    const printWindow = window.open('', '_blank', 'width=900,height=700')
+
+    if (!printWindow) {
+      setHistoryMessage('Popup blocked. Allow popups to print receipt.')
+      return
+    }
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${rootSale.sale_number}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+            h1 { margin: 0 0 8px; font-size: 28px; }
+            h2 { margin-top: 28px; font-size: 18px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            th, td { border-bottom: 1px solid #ddd; padding: 8px; font-size: 13px; text-align: left; }
+            th { background: #f2f2f2; }
+            .meta { margin: 3px 0; font-size: 13px; }
+            .total { margin-top: 16px; text-align: right; font-size: 22px; font-weight: 800; }
+            .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #eee; font-weight: 700; font-size: 12px; }
+            @media print { button { display: none; } }
+          </style>
+        </head>
+        <body>
+          <button onclick="window.print()" style="padding:10px 14px;margin-bottom:18px;font-weight:700">Print</button>
+          <h1>Dohpe POS Receipt</h1>
+          <div class="badge">${getRefundMethodLabel(sale)}</div>
+          <p class="meta"><strong>Receipt:</strong> ${rootSale.sale_number}</p>
+          <p class="meta"><strong>Date:</strong> ${formatDateTime(rootSale.created_at)}</p>
+          <p class="meta"><strong>Payment:</strong> ${rootSale.payment_method || '-'} / ${rootSale.payment_provider || '-'}</p>
+          <p class="meta"><strong>Square payment:</strong> ${rootSale.square_payment_id || '-'}</p>
+          <p class="meta"><strong>Location:</strong> ${rootSale.checkout_location || '-'}</p>
+
+          <h2>Items</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>Item</th>
+                <th style="text-align:center">Qty</th>
+                <th style="text-align:right">Unit</th>
+                <th style="text-align:center">Refunded</th>
+                <th style="text-align:center">Remaining</th>
+                <th style="text-align:right">Line</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+
+          <div class="total">Total: ${money(Number(rootSale.total || 0))}</div>
+
+          <h2>Linked refunds / exchanges</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>POS No.</th>
+                <th>Date</th>
+                <th>Mode</th>
+                <th>Payment</th>
+                <th>Status</th>
+                <th style="text-align:right">Total</th>
+              </tr>
+            </thead>
+            <tbody>${relatedRows || '<tr><td colspan="6">No linked refunds/exchanges</td></tr>'}</tbody>
+          </table>
+        </body>
+      </html>
+    `)
+
+    printWindow.document.close()
+  }
+
   return (
     <StaffPermissionGate permission="checkout">
       <main className={pageClass}>
@@ -1593,13 +1778,13 @@ export default function CheckoutPage() {
 
         {historyOpen && (
           <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 p-3">
-            <div className="flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white text-neutral-950 shadow-2xl">
+            <div className="flex w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white text-neutral-950 shadow-2xl">
               <div className="border-b border-neutral-200 p-4">
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-2xl font-black">POS History</h2>
                     <p className="text-sm font-semibold text-neutral-500">
-                      Search by receipt, SKU, brand, category, Square payment ID or date.
+                      Search receipts, SKUs, Square IDs, then print, open receipt, refund or exchange.
                     </p>
                   </div>
 
@@ -1622,7 +1807,7 @@ export default function CheckoutPage() {
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') fetchHistory()
                     }}
-                    placeholder="Receipt / SKU / text"
+                    placeholder="Receipt / SKU / Square ID"
                     className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black md:col-span-2"
                   />
 
@@ -1662,7 +1847,7 @@ export default function CheckoutPage() {
                   </select>
                 </div>
 
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={fetchHistory}
@@ -1700,14 +1885,20 @@ export default function CheckoutPage() {
                 {historySales.length === 0 ? (
                   <div className="rounded-3xl p-8 text-center text-neutral-500">
                     <p className="text-lg font-bold">No history loaded</p>
-                    <p className="text-sm">Use search or reset to load recent sales.</p>
+                    <p className="text-sm">Use search or reset to load recent transaction activity.</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
                     {historySales.map((sale) => {
+                      const rootSale = getRootHistorySale(sale)
+                      const relatedSales = getRelatedHistorySales(sale)
                       const expanded = expandedHistorySaleId === sale.id
-                      const saleTotal = Number(sale.total || 0)
-                      const lineCount = sale.lines?.length || 0
+                      const rootLines = rootSale.lines || []
+                      const saleTotal = Number(rootSale.total || 0)
+                      const remainingRefundable = getTotalRemainingRefundable(sale)
+                      const fullyRefunded = rootLines.length > 0 && remainingRefundable <= 0
+                      const refundMethodLabel = getRefundMethodLabel(sale)
+                      const latestActivity = sale.activity_at || sale.updated_at || sale.created_at
 
                       return (
                         <div
@@ -1721,19 +1912,40 @@ export default function CheckoutPage() {
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="truncate text-lg font-black">{sale.sale_number}</p>
+                                <div className="mb-2 flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-lg font-black">{rootSale.sale_number}</p>
+                                  {sale.mode !== 'sale' && sale.sale_number !== rootSale.sale_number && (
+                                    <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-black text-amber-800">
+                                      Activity: {sale.sale_number}
+                                    </span>
+                                  )}
+                                  {fullyRefunded && (
+                                    <span className="rounded-full bg-red-100 px-2 py-1 text-[11px] font-black text-red-700">
+                                      Fully refunded
+                                    </span>
+                                  )}
+                                </div>
+
                                 <p className="text-xs font-bold text-neutral-500">
-                                  {formatDateTime(sale.created_at)} · {sale.payment_method || 'unknown'} ·{' '}
-                                  {sale.mode || 'sale'} · {sale.status || 'unknown'}
+                                  Sale: {formatDateTime(rootSale.created_at)} · Latest activity:{' '}
+                                  {formatDateTime(latestActivity)}
                                 </p>
                                 <p className="mt-1 truncate text-xs font-semibold text-neutral-500">
-                                  {lineCount} line{lineCount === 1 ? '' : 's'}
-                                  {sale.square_payment_id ? ` · Square: ${sale.square_payment_id}` : ''}
+                                  {rootSale.payment_method || 'unknown'} · {rootSale.mode || 'sale'} ·{' '}
+                                  {rootLines.length} line{rootLines.length === 1 ? '' : 's'} ·{' '}
+                                  {getHistoryFamilyLabel(sale)}
+                                </p>
+                                <p className="mt-1 truncate text-xs font-semibold text-neutral-500">
+                                  {refundMethodLabel}
+                                  {rootSale.square_payment_id ? ` · Square payment: ${rootSale.square_payment_id}` : ''}
                                 </p>
                               </div>
 
                               <div className="shrink-0 text-right">
                                 <p className="text-2xl font-black">{money(saleTotal)}</p>
+                                <p className="text-xs font-bold text-neutral-500">
+                                  Refundable lines: {remainingRefundable}
+                                </p>
                                 <p className="text-xs font-bold text-neutral-500">
                                   {expanded ? 'Hide' : 'Open'}
                                 </p>
@@ -1743,97 +1955,168 @@ export default function CheckoutPage() {
 
                           {expanded && (
                             <div className="border-t border-neutral-200 bg-white p-4">
-                              <div className="mb-3 grid grid-cols-2 gap-2 text-xs font-bold text-neutral-600 md:grid-cols-4">
+                              <div className="mb-3 grid grid-cols-2 gap-2 text-xs font-bold text-neutral-600 md:grid-cols-5">
                                 <div className="rounded-2xl bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Payment</p>
-                                  <p>{sale.payment_method || '-'}</p>
+                                  <p>{rootSale.payment_method || '-'}</p>
                                 </div>
 
                                 <div className="rounded-2xl bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Square</p>
-                                  <p>{sale.square_status || sale.square_payment_status || '-'}</p>
+                                  <p>{rootSale.square_status || rootSale.square_payment_status || '-'}</p>
+                                </div>
+
+                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                  <p className="uppercase tracking-widest text-neutral-400">Refund type</p>
+                                  <p>{refundMethodLabel}</p>
                                 </div>
 
                                 <div className="rounded-2xl bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Location</p>
-                                  <p>{sale.checkout_location || '-'}</p>
+                                  <p>{rootSale.checkout_location || '-'}</p>
                                 </div>
 
                                 <div className="rounded-2xl bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Provider</p>
-                                  <p>{sale.payment_provider || '-'}</p>
+                                  <p>{rootSale.payment_provider || '-'}</p>
                                 </div>
                               </div>
 
-                              <div className="space-y-2">
-                                {(sale.lines || []).map((line) => (
-                                  <div
-                                    key={line.id}
-                                    className="flex items-start justify-between gap-3 rounded-2xl bg-neutral-100 p-3"
-                                  >
-                                    <div className="min-w-0">
-                                      <p className="truncate text-sm font-black">
-                                        {line.brand || line.title || line.sku}
-                                      </p>
-                                      <p className="truncate text-xs font-semibold text-neutral-500">
-                                        {[line.reporting_category, line.sub_type, line.colour]
-                                          .filter(Boolean)
-                                          .join(' · ') || line.title || ''}
-                                      </p>
-                                      <p className="truncate text-xs font-bold text-neutral-500">
-                                        {line.sku}
-                                      </p>
-                                    </div>
-
-                                    <div className="shrink-0 text-right">
-                                      <p className="text-sm font-black">
-                                        {line.quantity} × {money(Number(line.unit_price || 0))}
-                                      </p>
-                                      <p className="text-base font-black">
-                                        {money(Number(line.line_total || 0))}
-                                      </p>
-                                      <p className="text-[11px] font-bold text-neutral-500">
-                                        Refundable:{' '}
-                                        {Math.max(
-                                          0,
-                                          Number(line.quantity || 0) -
-                                            Number(line.refunded_quantity || 0)
-                                        )}
-                                      </p>
-                                    </div>
+                              <div className="rounded-3xl border border-neutral-200 bg-white p-4">
+                                <div className="mb-3 flex items-start justify-between gap-3">
+                                  <div>
+                                    <h3 className="text-lg font-black">Receipt items</h3>
+                                    <p className="text-xs font-bold text-neutral-500">
+                                      Sold, refunded and remaining quantities from this transaction family.
+                                    </p>
                                   </div>
-                                ))}
+                                  <p className="text-right text-sm font-black">{money(saleTotal)}</p>
+                                </div>
+
+                                <div className="space-y-2">
+                                  {rootLines.map((line) => {
+                                    const alreadyRefunded = getLineAlreadyRefunded(line, sale)
+                                    const remaining = getLineRemainingRefundable(line, sale)
+
+                                    return (
+                                      <div
+                                        key={line.id}
+                                        className="flex items-start justify-between gap-3 rounded-2xl bg-neutral-100 p-3"
+                                      >
+                                        <div className="min-w-0">
+                                          <p className="truncate text-sm font-black">
+                                            {line.brand || line.title || line.sku}
+                                          </p>
+                                          <p className="truncate text-xs font-semibold text-neutral-500">
+                                            {[line.reporting_category, line.sub_type, line.colour]
+                                              .filter(Boolean)
+                                              .join(' · ') || line.title || ''}
+                                          </p>
+                                          <p className="truncate text-xs font-bold text-neutral-500">
+                                            {line.sku}
+                                          </p>
+                                        </div>
+
+                                        <div className="shrink-0 text-right">
+                                          <p className="text-sm font-black">
+                                            {line.quantity} × {money(Number(line.unit_price || 0))}
+                                          </p>
+                                          <p className="text-base font-black">
+                                            {money(Number(line.line_total || 0))}
+                                          </p>
+                                          <p className="text-[11px] font-bold text-neutral-500">
+                                            Refunded: {alreadyRefunded} · Remaining: {remaining}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
                               </div>
 
-                              <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+                              <div className="mt-3 rounded-3xl border border-neutral-200 bg-neutral-50 p-4">
+                                <h3 className="text-lg font-black">Linked refunds / exchanges</h3>
+
+                                {relatedSales.length === 0 ? (
+                                  <p className="mt-2 text-sm font-bold text-neutral-500">
+                                    No linked refunds or exchanges yet.
+                                  </p>
+                                ) : (
+                                  <div className="mt-3 space-y-2">
+                                    {relatedSales.map((related) => (
+                                      <div
+                                        key={related.id}
+                                        className="flex items-start justify-between gap-3 rounded-2xl bg-white p-3"
+                                      >
+                                        <div className="min-w-0">
+                                          <p className="text-sm font-black">{related.sale_number}</p>
+                                          <p className="text-xs font-bold text-neutral-500">
+                                            {formatDateTime(related.created_at)} · {related.mode || '-'} ·{' '}
+                                            {related.payment_method || '-'}
+                                          </p>
+                                          <p className="truncate text-xs font-bold text-neutral-500">
+                                            {related.square_refund_id
+                                              ? `Square refund: ${related.square_refund_id}`
+                                              : related.square_status || related.status || ''}
+                                          </p>
+                                        </div>
+
+                                        <div className="shrink-0 text-right">
+                                          <p className="text-base font-black">
+                                            {money(Number(related.total || 0))}
+                                          </p>
+                                          <p className="text-[11px] font-black text-neutral-500">
+                                            {related.square_refund_status || related.square_status || related.status || ''}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-4">
                                 <button
                                   type="button"
-                                  onClick={() => loadSaleForRefund(sale.sale_number)}
-                                  className="rounded-2xl bg-red-500 px-4 py-4 text-sm font-black text-white"
+                                  onClick={() => printHistorySale(sale)}
+                                  className="rounded-2xl border border-neutral-300 px-4 py-4 text-sm font-black"
                                 >
-                                  Load Refund / Exchange
+                                  Print Receipt
                                 </button>
 
-                                {sale.square_receipt_url && (
+                                {rootSale.square_receipt_url ? (
                                   <a
-                                    href={sale.square_receipt_url}
+                                    href={rootSale.square_receipt_url}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="rounded-2xl bg-sky-100 px-4 py-4 text-center text-sm font-black text-black"
                                   >
                                     Open Square Receipt
                                   </a>
+                                ) : (
+                                  <div className="rounded-2xl bg-neutral-100 px-4 py-4 text-center text-sm font-black text-neutral-400">
+                                    No Square Receipt
+                                  </div>
                                 )}
 
                                 <button
                                   type="button"
+                                  disabled={fullyRefunded}
+                                  onClick={() => loadSaleForRefund(rootSale.sale_number)}
+                                  className="rounded-2xl bg-red-500 px-4 py-4 text-sm font-black text-white disabled:bg-neutral-200 disabled:text-neutral-400"
+                                >
+                                  {fullyRefunded ? 'Fully Refunded' : 'Load Refund / Exchange'}
+                                </button>
+
+                                <button
+                                  type="button"
                                   onClick={() => {
-                                    navigator.clipboard?.writeText(sale.sale_number)
-                                    setHistoryMessage(`Copied ${sale.sale_number}`)
+                                    navigator.clipboard?.writeText(rootSale.sale_number)
+                                    setHistoryMessage(`Copied ${rootSale.sale_number}`)
                                   }}
                                   className="rounded-2xl border border-neutral-300 px-4 py-4 text-sm font-black"
                                 >
-                                  Copy Receipt Number
+                                  Copy Receipt No.
                                 </button>
                               </div>
                             </div>
@@ -1847,7 +2130,6 @@ export default function CheckoutPage() {
             </div>
           </div>
         )}
-
         {cardPanelOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
