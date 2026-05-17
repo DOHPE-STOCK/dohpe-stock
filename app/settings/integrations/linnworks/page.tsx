@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 
 type LinnworksSettings = {
   mode: string
@@ -224,342 +225,346 @@ export default function LinnworksIntegrationPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-neutral-950 p-5 text-white">
-        Loading Linnworks settings...
-      </main>
+      <StaffPermissionGate permission="integrations">
+        <main className="min-h-screen bg-neutral-950 p-5 text-white">
+          Loading Linnworks settings...
+        </main>
+      </StaffPermissionGate>
     )
   }
 
   return (
-    <main className="min-h-screen bg-neutral-950 p-5 text-white">
-      <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">Linnworks Configuration</h1>
+    <StaffPermissionGate permission="integrations">
+      <main className="min-h-screen bg-neutral-950 p-5 text-white">
+        <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">Linnworks Configuration</h1>
 
-            <p className="text-sm text-neutral-400">
-              Manual export first, then automatic sync for app-managed Linnworks inventory.
-            </p>
+              <p className="text-sm text-neutral-400">
+                Manual export first, then automatic sync for app-managed Linnworks inventory.
+              </p>
+            </div>
+
+            <AppNav current="settings" />
           </div>
 
-          <AppNav current="settings" />
-        </div>
-
-        <div className="flex items-center gap-3">
-          {message && (
-            <span className="rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2 text-sm">
-              {message}
-            </span>
-          )}
-
-          <button
-            onClick={testConnection}
-            disabled={saving}
-            className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-semibold hover:bg-neutral-800 disabled:opacity-40"
-          >
-            Test API
-          </button>
-
-          <button
-            onClick={saveSettings}
-            disabled={saving}
-            className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-40"
-          >
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-
-          <Link
-            href="/settings/integrations"
-            className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-semibold hover:bg-neutral-800"
-          >
-            Back
-          </Link>
-        </div>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
-          <h2 className="mb-4 text-lg font-semibold">Sync Mode</h2>
-
-          <div className="space-y-4">
-            <label className="block">
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Mode
+          <div className="flex items-center gap-3">
+            {message && (
+              <span className="rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2 text-sm">
+                {message}
               </span>
-              <select
-                value={settings.mode}
-                onChange={(e) => updateSetting('mode', e.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              >
-                <option value="manual_export_then_auto_sync">
-                  Manual export, then automatic sync
-                </option>
-                <option value="manual_export_only">Manual export only</option>
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Sync direction
-              </span>
-              <select
-                value={settings.sync_direction}
-                onChange={(e) => updateSetting('sync_direction', e.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              >
-                <option value="controlled_two_way">
-                  Controlled two-way: stock level two-way, product data app → Linnworks
-                </option>
-                <option value="app_to_linnworks_only">App to Linnworks only</option>
-                <option value="linnworks_to_app_stock_only">
-                  Linnworks to app stock only
-                </option>
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Channel strategy
-              </span>
-              <select
-                value={settings.channel_strategy}
-                onChange={(e) => updateSetting('channel_strategy', e.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              >
-                <option value="linnworks_inventory_first_ebay_via_linnworks">
-                  Sync app to Linnworks inventory; eBay handled by Linnworks/eBay configurators
-                </option>
-                <option value="inventory_only">Inventory only for now</option>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
-          <h2 className="mb-4 text-lg font-semibold">
-            Default Location + BinRack
-          </h2>
-
-          <p className="mb-4 text-sm text-neutral-400">
-            New exported items stay at these defaults until allocated or moved in the app.
-            Any app-created bin can later be pushed to Linnworks BinRack.
-          </p>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Default Linnworks location
-              </span>
-              <input
-                value={settings.default_location}
-                onChange={(e) => updateSetting('default_location', e.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Default Linnworks BinRack
-              </span>
-              <input
-                value={settings.default_binrack}
-                onChange={(e) => updateSetting('default_binrack', e.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-          </div>
-
-          <div className="mt-4 space-y-2 text-sm">
-            <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
-              <span>Use app-created bins for Linnworks BinRack</span>
-              <input
-                type="checkbox"
-                checked={settings.use_app_bins_for_binrack}
-                onChange={(e) =>
-                  updateSetting('use_app_bins_for_binrack', e.target.checked)
-                }
-                className="h-4 w-4"
-              />
-            </label>
-
-            <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
-              <span>Use app-managed identifier to ignore old Linnworks stock</span>
-              <input
-                type="checkbox"
-                checked={settings.app_managed_identifier_enabled}
-                onChange={(e) =>
-                  updateSetting('app_managed_identifier_enabled', e.target.checked)
-                }
-                className="h-4 w-4"
-              />
-            </label>
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Unknown BinRack value
-              </span>
-              <input
-                value={settings.unknown_bin}
-                onChange={(e) => updateSetting('unknown_bin', e.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                In transit BinRack value
-              </span>
-              <input
-                value={settings.in_transit_bin}
-                onChange={(e) => updateSetting('in_transit_bin', e.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Managed identifier name
-              </span>
-              <input
-                value={settings.managed_identifier_name}
-                onChange={(e) =>
-                  updateSetting('managed_identifier_name', e.target.value)
-                }
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-
-            <label>
-              <span className="mb-1 block text-sm font-bold text-neutral-300">
-                Managed identifier value
-              </span>
-              <input
-                value={settings.managed_identifier_value}
-                onChange={(e) =>
-                  updateSetting('managed_identifier_value', e.target.value)
-                }
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
-              />
-            </label>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
-          <h2 className="mb-4 text-lg font-semibold">Safety Rules</h2>
-
-          <div className="grid gap-2 text-sm md:grid-cols-2">
-            {[
-              ['require_manual_export_first', 'Require manual export before sync'],
-              ['only_sync_app_managed_items', 'Only sync app-managed items'],
-              ['use_app_for_transfers', 'Use app for transfers'],
-              ['create_missing_stock_items', 'Create missing Linnworks items on manual export'],
-              ['update_existing_stock_items', 'Update existing managed items'],
-            ].map(([key, label]) => (
-              <label
-                key={key}
-                className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
-              >
-                <span>{label}</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings[key as keyof LinnworksSettings])}
-                  onChange={(e) =>
-                    updateSetting(
-                      key as keyof LinnworksSettings,
-                      e.target.checked as any
-                    )
-                  }
-                  className="h-4 w-4"
-                />
-              </label>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
-          <h2 className="mb-4 text-lg font-semibold">
-            Auto Sync After Manual Export
-          </h2>
-
-          <p className="mb-4 text-sm text-neutral-400">
-            These only apply after an item has been exported from the app and marked as app-managed.
-          </p>
-
-          <div className="grid gap-2 text-sm md:grid-cols-2">
-            {[
-              ['sync_stock_levels_two_way', 'Stock level two-way sync'],
-              ['sync_price_app_to_linnworks', 'Price app → Linnworks'],
-              ['sync_location_app_to_linnworks', 'Location app → Linnworks'],
-              ['sync_binrack_app_to_linnworks', 'BinRack app → Linnworks'],
-              ['sync_title_app_to_linnworks', 'Title app → Linnworks'],
-              ['sync_description_app_to_linnworks', 'Description app → Linnworks'],
-              ['sync_category_app_to_linnworks', 'Category app → Linnworks'],
-              ['sync_images_app_to_linnworks', 'Images app → Linnworks'],
-            ].map(([key, label]) => (
-              <label
-                key={key}
-                className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
-              >
-                <span>{label}</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings[key as keyof LinnworksSettings])}
-                  onChange={(e) =>
-                    updateSetting(
-                      key as keyof LinnworksSettings,
-                      e.target.checked as any
-                    )
-                  }
-                  className="h-4 w-4"
-                />
-              </label>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
-          <h2 className="mb-4 text-lg font-semibold">Field Mapping</h2>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            {Object.entries(settings.field_mapping).map(
-              ([appField, linnworksField]) => (
-                <div
-                  key={appField}
-                  className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950 p-3 md:grid-cols-2"
-                >
-                  <label>
-                    <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
-                      App field
-                    </span>
-                    <input
-                      value={appField}
-                      disabled
-                      className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-neutral-400"
-                    />
-                  </label>
-
-                  <label>
-                    <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
-                      Linnworks field
-                    </span>
-                    <input
-                      value={linnworksField}
-                      onChange={(e) =>
-                        updateFieldMapping(appField, e.target.value)
-                      }
-                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2"
-                    />
-                  </label>
-                </div>
-              )
             )}
+
+            <button
+              onClick={testConnection}
+              disabled={saving}
+              className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-semibold hover:bg-neutral-800 disabled:opacity-40"
+            >
+              Test API
+            </button>
+
+            <button
+              onClick={saveSettings}
+              disabled={saving}
+              className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-40"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+
+            <Link
+              href="/settings/integrations"
+              className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-semibold hover:bg-neutral-800"
+            >
+              Back
+            </Link>
           </div>
-        </section>
-      </div>
-    </main>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+            <h2 className="mb-4 text-lg font-semibold">Sync Mode</h2>
+
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Mode
+                </span>
+                <select
+                  value={settings.mode}
+                  onChange={(e) => updateSetting('mode', e.target.value)}
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                >
+                  <option value="manual_export_then_auto_sync">
+                    Manual export, then automatic sync
+                  </option>
+                  <option value="manual_export_only">Manual export only</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Sync direction
+                </span>
+                <select
+                  value={settings.sync_direction}
+                  onChange={(e) => updateSetting('sync_direction', e.target.value)}
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                >
+                  <option value="controlled_two_way">
+                    Controlled two-way: stock level two-way, product data app → Linnworks
+                  </option>
+                  <option value="app_to_linnworks_only">App to Linnworks only</option>
+                  <option value="linnworks_to_app_stock_only">
+                    Linnworks to app stock only
+                  </option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Channel strategy
+                </span>
+                <select
+                  value={settings.channel_strategy}
+                  onChange={(e) => updateSetting('channel_strategy', e.target.value)}
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                >
+                  <option value="linnworks_inventory_first_ebay_via_linnworks">
+                    Sync app to Linnworks inventory; eBay handled by Linnworks/eBay configurators
+                  </option>
+                  <option value="inventory_only">Inventory only for now</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+            <h2 className="mb-4 text-lg font-semibold">
+              Default Location + BinRack
+            </h2>
+
+            <p className="mb-4 text-sm text-neutral-400">
+              New exported items stay at these defaults until allocated or moved in the app.
+              Any app-created bin can later be pushed to Linnworks BinRack.
+            </p>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label>
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Default Linnworks location
+                </span>
+                <input
+                  value={settings.default_location}
+                  onChange={(e) => updateSetting('default_location', e.target.value)}
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                />
+              </label>
+
+              <label>
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Default Linnworks BinRack
+                </span>
+                <input
+                  value={settings.default_binrack}
+                  onChange={(e) => updateSetting('default_binrack', e.target.value)}
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 space-y-2 text-sm">
+              <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
+                <span>Use app-created bins for Linnworks BinRack</span>
+                <input
+                  type="checkbox"
+                  checked={settings.use_app_bins_for_binrack}
+                  onChange={(e) =>
+                    updateSetting('use_app_bins_for_binrack', e.target.checked)
+                  }
+                  className="h-4 w-4"
+                />
+              </label>
+
+              <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
+                <span>Use app-managed identifier to ignore old Linnworks stock</span>
+                <input
+                  type="checkbox"
+                  checked={settings.app_managed_identifier_enabled}
+                  onChange={(e) =>
+                    updateSetting('app_managed_identifier_enabled', e.target.checked)
+                  }
+                  className="h-4 w-4"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label>
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Unknown BinRack value
+                </span>
+                <input
+                  value={settings.unknown_bin}
+                  onChange={(e) => updateSetting('unknown_bin', e.target.value)}
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                />
+              </label>
+
+              <label>
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  In transit BinRack value
+                </span>
+                <input
+                  value={settings.in_transit_bin}
+                  onChange={(e) => updateSetting('in_transit_bin', e.target.value)}
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label>
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Managed identifier name
+                </span>
+                <input
+                  value={settings.managed_identifier_name}
+                  onChange={(e) =>
+                    updateSetting('managed_identifier_name', e.target.value)
+                  }
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                />
+              </label>
+
+              <label>
+                <span className="mb-1 block text-sm font-bold text-neutral-300">
+                  Managed identifier value
+                </span>
+                <input
+                  value={settings.managed_identifier_value}
+                  onChange={(e) =>
+                    updateSetting('managed_identifier_value', e.target.value)
+                  }
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
+            <h2 className="mb-4 text-lg font-semibold">Safety Rules</h2>
+
+            <div className="grid gap-2 text-sm md:grid-cols-2">
+              {[
+                ['require_manual_export_first', 'Require manual export before sync'],
+                ['only_sync_app_managed_items', 'Only sync app-managed items'],
+                ['use_app_for_transfers', 'Use app for transfers'],
+                ['create_missing_stock_items', 'Create missing Linnworks items on manual export'],
+                ['update_existing_stock_items', 'Update existing managed items'],
+              ].map(([key, label]) => (
+                <label
+                  key={key}
+                  className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
+                >
+                  <span>{label}</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings[key as keyof LinnworksSettings])}
+                    onChange={(e) =>
+                      updateSetting(
+                        key as keyof LinnworksSettings,
+                        e.target.checked as any
+                      )
+                    }
+                    className="h-4 w-4"
+                  />
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
+            <h2 className="mb-4 text-lg font-semibold">
+              Auto Sync After Manual Export
+            </h2>
+
+            <p className="mb-4 text-sm text-neutral-400">
+              These only apply after an item has been exported from the app and marked as app-managed.
+            </p>
+
+            <div className="grid gap-2 text-sm md:grid-cols-2">
+              {[
+                ['sync_stock_levels_two_way', 'Stock level two-way sync'],
+                ['sync_price_app_to_linnworks', 'Price app → Linnworks'],
+                ['sync_location_app_to_linnworks', 'Location app → Linnworks'],
+                ['sync_binrack_app_to_linnworks', 'BinRack app → Linnworks'],
+                ['sync_title_app_to_linnworks', 'Title app → Linnworks'],
+                ['sync_description_app_to_linnworks', 'Description app → Linnworks'],
+                ['sync_category_app_to_linnworks', 'Category app → Linnworks'],
+                ['sync_images_app_to_linnworks', 'Images app → Linnworks'],
+              ].map(([key, label]) => (
+                <label
+                  key={key}
+                  className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
+                >
+                  <span>{label}</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings[key as keyof LinnworksSettings])}
+                    onChange={(e) =>
+                      updateSetting(
+                        key as keyof LinnworksSettings,
+                        e.target.checked as any
+                      )
+                    }
+                    className="h-4 w-4"
+                  />
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
+            <h2 className="mb-4 text-lg font-semibold">Field Mapping</h2>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {Object.entries(settings.field_mapping).map(
+                ([appField, linnworksField]) => (
+                  <div
+                    key={appField}
+                    className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950 p-3 md:grid-cols-2"
+                  >
+                    <label>
+                      <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
+                        App field
+                      </span>
+                      <input
+                        value={appField}
+                        disabled
+                        className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-neutral-400"
+                      />
+                    </label>
+
+                    <label>
+                      <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
+                        Linnworks field
+                      </span>
+                      <input
+                        value={linnworksField}
+                        onChange={(e) =>
+                          updateFieldMapping(appField, e.target.value)
+                        }
+                        className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2"
+                      />
+                    </label>
+                  </div>
+                )
+              )}
+            </div>
+          </section>
+        </div>
+      </main>
+    </StaffPermissionGate>
   )
 }
