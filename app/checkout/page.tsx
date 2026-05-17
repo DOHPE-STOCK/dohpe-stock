@@ -44,6 +44,7 @@ type BasketLine = {
 
 type PaymentMethod = 'cash' | 'card' | null
 type CheckoutMode = 'sale' | 'refund' | 'exchange'
+type CardPanelState = 'options' | 'waiting' | 'unclear'
 
 const OFFLINE_TX_KEY = 'dohpe_pos_offline_transactions_v1'
 const CHECKOUT_LOCATION_KEY = 'dohpe_checkout_location_v1'
@@ -143,6 +144,9 @@ export default function CheckoutPage() {
   const [originalSale, setOriginalSale] = useState<any | null>(null)
   const [exchangeCredit, setExchangeCredit] = useState(0)
   const [checkoutLocation, setCheckoutLocation] = useState('SHOP-1')
+  const [cardPanelOpen, setCardPanelOpen] = useState(false)
+  const [cardPanelState, setCardPanelState] = useState<CardPanelState>('options')
+  const [cardPanelMessage, setCardPanelMessage] = useState('')
 
   const saleLines = basket.filter((line) => !line.isReturnLine)
   const returnLines = basket.filter((line) => line.isReturnLine)
@@ -502,6 +506,14 @@ export default function CheckoutPage() {
     )
   }
 
+  function closeCardPanel() {
+    setCardPanelOpen(false)
+    setCardPanelState('options')
+    setCardPanelMessage('')
+    setPaymentMethod(null)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
   function clearSale(resetMode = true) {
     setBasket([])
     setSelectedSku('')
@@ -511,6 +523,9 @@ export default function CheckoutPage() {
     setMessage('')
     setOriginalSale(null)
     setExchangeCredit(0)
+    setCardPanelOpen(false)
+    setCardPanelState('options')
+    setCardPanelMessage('')
     if (resetMode) setMode('sale')
     setTimeout(() => inputRef.current?.focus(), 50)
   }
@@ -681,6 +696,102 @@ export default function CheckoutPage() {
       setMessage(error.message || 'Could not complete transaction.')
     } finally {
       setSaleBusy(false)
+    }
+  }
+
+  function openCardPanel() {
+    if (basket.length === 0) {
+      setMessage('Basket is empty.')
+      return
+    }
+
+    if (displayedTotal <= 0) {
+      setMessage('Card total must be more than £0.')
+      return
+    }
+
+    setPaymentMethod('card')
+    setCardPanelState('options')
+    setCardPanelMessage('')
+    setCardPanelOpen(true)
+  }
+
+  async function completeManualCardSale() {
+    const confirmed = window.confirm(
+      `Record this card sale manually for ${money(displayedTotal)}?\n\nOnly continue if payment has been taken on the card machine.`
+    )
+
+    if (!confirmed) return
+
+    setCardPanelMessage('Recording manual card sale...')
+    await completeSale('card')
+  }
+
+  function cancelCardPayment() {
+    const confirmed = window.confirm(
+      'Cancel card payment and return to checkout?\n\nNo sale will be recorded.'
+    )
+
+    if (!confirmed) return
+
+    closeCardPanel()
+  }
+
+  async function sendTotalToSquareTerminal() {
+    if (basket.length === 0) {
+      setCardPanelMessage('Basket is empty.')
+      return
+    }
+
+    setCardPanelState('waiting')
+    setCardPanelMessage('Sending total to Square Terminal...')
+
+    try {
+      const response = await fetch('/api/pos/square-terminal-checkout', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: Number(displayedTotal.toFixed(2)),
+          currency: 'GBP',
+          checkout_location: checkoutLocation || 'SHOP-1',
+          mode,
+          item_count: totalItems,
+        }),
+      })
+
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'No successful response from Square Terminal.')
+      }
+
+      const status = text(data.status || data.square_status || data.checkout_status).toLowerCase()
+
+      if (['paid', 'completed', 'complete', 'success', 'succeeded'].includes(status)) {
+        setCardPanelMessage('Square payment confirmed. Recording sale...')
+        await completeSale('card')
+        return
+      }
+
+      if (['cancelled', 'canceled', 'cancelled_by_customer', 'canceled_by_customer'].includes(status)) {
+        setCardPanelMessage('Square payment cancelled.')
+        closeCardPanel()
+        return
+      }
+
+      setCardPanelState('unclear')
+      setCardPanelMessage(
+        data?.message ||
+          'Square Terminal did not return a clear paid/cancelled response. Check the terminal before recording manually.'
+      )
+    } catch (error: any) {
+      setCardPanelState('unclear')
+      setCardPanelMessage(
+        error.message ||
+          'No response from Square Terminal. Check the terminal before recording manually.'
+      )
     }
   }
 
@@ -993,7 +1104,7 @@ export default function CheckoutPage() {
 
                   <button
                     type="button"
-                    onClick={() => setPaymentMethod('card')}
+                    onClick={openCardPanel}
                     className={`rounded-3xl py-4 text-xl font-black ${
                       paymentMethod === 'card'
                         ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
@@ -1026,7 +1137,16 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   disabled={!paymentMethod || basket.length === 0 || saleBusy}
-                  onClick={() => paymentMethod && completeSale(paymentMethod)}
+                  onClick={() => {
+                    if (paymentMethod === 'card') {
+                      openCardPanel()
+                      return
+                    }
+
+                    if (paymentMethod === 'cash') {
+                      completeSale('cash')
+                    }
+                  }}
                   className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-2xl font-black text-black disabled:opacity-40"
                 >
                   {saleBusy
@@ -1036,7 +1156,7 @@ export default function CheckoutPage() {
                       : paymentMethod === 'cash'
                         ? 'Complete Cash Sale'
                         : paymentMethod === 'card'
-                          ? 'Record Card Sale'
+                          ? 'Continue Card Payment'
                           : 'Select Payment'}
                 </button>
               </>
@@ -1057,6 +1177,99 @@ export default function CheckoutPage() {
             </div>
           </section>
         </div>
+
+        {cardPanelOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+              <div className="mb-4">
+                <h2 className="text-2xl font-black">Card Payment</h2>
+                <p className="mt-1 text-sm font-semibold text-neutral-500">
+                  Total to pay: {money(displayedTotal)}
+                </p>
+              </div>
+
+              {cardPanelMessage && (
+                <div className="mb-4 rounded-2xl bg-neutral-100 p-3 text-sm font-bold">
+                  {cardPanelMessage}
+                </div>
+              )}
+
+              {cardPanelState === 'options' && (
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={sendTotalToSquareTerminal}
+                    disabled={saleBusy}
+                    className="w-full rounded-2xl bg-sky-500 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
+                  >
+                    Send Total to Square Terminal
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={completeManualCardSale}
+                    disabled={saleBusy}
+                    className="w-full rounded-2xl bg-neutral-900 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
+                  >
+                    Manual Entry / Record Card Sale
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={closeCardPanel}
+                    disabled={saleBusy}
+                    className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black disabled:opacity-40"
+                  >
+                    Cancel / Back
+                  </button>
+                </div>
+              )}
+
+              {cardPanelState === 'waiting' && (
+                <div className="space-y-3">
+                  <div className="rounded-2xl bg-sky-50 p-4 text-center text-sm font-bold text-sky-900">
+                    Waiting for Square Terminal response...
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setCardPanelState('unclear')}
+                    disabled={saleBusy}
+                    className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black disabled:opacity-40"
+                  >
+                    No Response / Show Manual Options
+                  </button>
+                </div>
+              )}
+
+              {cardPanelState === 'unclear' && (
+                <div className="space-y-3">
+                  <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-bold text-yellow-900">
+                    Only record the sale manually if the payment definitely went through on the card terminal.
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={completeManualCardSale}
+                    disabled={saleBusy}
+                    className="w-full rounded-2xl bg-emerald-500 px-4 py-4 text-lg font-black text-black disabled:opacity-40"
+                  >
+                    Record Manual Sale
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={cancelCardPayment}
+                    disabled={saleBusy}
+                    className="w-full rounded-2xl bg-red-500 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
+                  >
+                    Cancel Payment
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </main>
     </StaffPermissionGate>
   )
