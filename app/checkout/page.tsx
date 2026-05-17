@@ -123,6 +123,9 @@ type HistorySale = {
 const OFFLINE_TX_KEY = 'dohpe_pos_offline_transactions_v1'
 const CHECKOUT_LOCATION_KEY = 'dohpe_checkout_location_v1'
 
+const DOHPE_LOGO_URL =
+  'https://lmdqfuvxbtwfeqjvjyoo.supabase.co/storage/v1/object/public/public/dohpe-round-logo.png'
+
 function money(value: number) {
   return new Intl.NumberFormat('en-GB', {
     style: 'currency',
@@ -133,6 +136,15 @@ function money(value: number) {
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
+}
+
+function escapeHtml(value: any) {
+  return text(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -236,6 +248,9 @@ export default function CheckoutPage() {
   const [paymentResultType, setPaymentResultType] = useState<PaymentResultType>(null)
   const [paymentResultTitle, setPaymentResultTitle] = useState('')
   const [paymentResultMessage, setPaymentResultMessage] = useState('')
+
+  const [lastCompletedTx, setLastCompletedTx] = useState<any | null>(null)
+  const [receiptPromptOpen, setReceiptPromptOpen] = useState(false)
 
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyBusy, setHistoryBusy] = useState(false)
@@ -413,7 +428,6 @@ export default function CheckoutPage() {
 
     return text(data?.processed_url || data?.original_url)
   }
-
   async function lookupSaleForRefund(saleNumber: string) {
     const response = await fetch(
       `/api/pos/lookup-sale?sale_number=${encodeURIComponent(saleNumber)}`
@@ -668,7 +682,7 @@ export default function CheckoutPage() {
 
     setBasket((current) =>
       current.map((row) =>
-        row.sku === line.sku && !row.isReturnLine ? { ...row, quantity: nextQty } : row
+        row.sku === line.sku && !line.isReturnLine ? { ...row, quantity: nextQty } : row
       )
     )
   }
@@ -894,6 +908,224 @@ export default function CheckoutPage() {
     }
   }
 
+  function openReceiptWindow(tx: any, sourceSale?: HistorySale) {
+    const saleNumber = escapeHtml(tx?.sale_number || sourceSale?.sale_number || '')
+    const createdAt = escapeHtml(formatDateTime(tx?.created_at || sourceSale?.created_at))
+    const payment = escapeHtml(tx?.payment_method || sourceSale?.payment_method || '')
+    const provider = escapeHtml(tx?.payment_provider || sourceSale?.payment_provider || '')
+    const location = escapeHtml(tx?.checkout_location || sourceSale?.checkout_location || checkoutLocation || 'SHOP-1')
+    const squareReceiptUrl = text(tx?.square_receipt_url || sourceSale?.square_receipt_url || '')
+    const totalValue = Number(tx?.total ?? sourceSale?.total ?? 0)
+    const vatValue = Number(tx?.vat_amount ?? sourceSale?.vat_amount ?? totalValue / 6)
+    const netValue = Number(tx?.net_amount ?? sourceSale?.net_amount ?? totalValue - vatValue)
+    const lines = Array.isArray(tx?.lines) ? tx.lines : sourceSale?.lines || []
+
+    const rows = lines
+      .map((line: any) => {
+        const qty = Number(line.quantity || 0)
+        const unit = Number(line.unit_price || line.price || 0)
+        const lineTotal = Number(line.line_total || unit * qty || 0)
+        const name = [line.brand, line.title || line.sku].filter(Boolean).join(' - ')
+
+        return `
+          <tr>
+            <td class="item">
+              <div class="name">${escapeHtml(name || line.sku)}</div>
+              <div class="sku">${escapeHtml(line.sku)}</div>
+            </td>
+            <td class="qty">${qty}</td>
+            <td class="price">${escapeHtml(money(lineTotal))}</td>
+          </tr>
+        `
+      })
+      .join('')
+
+    const qrValue = squareReceiptUrl || saleNumber
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(qrValue)}`
+
+    const printWindow = window.open('', '_blank', 'width=420,height=700')
+
+    if (!printWindow) {
+      setMessage('Popup blocked. Allow popups to print receipt.')
+      setHistoryMessage('Popup blocked. Allow popups to print receipt.')
+      return
+    }
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${saleNumber}</title>
+          <style>
+            * { box-sizing: border-box; }
+            body {
+              margin: 0;
+              background: #f3f3f3;
+              color: #111;
+              font-family: Arial, Helvetica, sans-serif;
+            }
+            .receipt {
+              width: 80mm;
+              min-height: 100vh;
+              margin: 0 auto;
+              background: white;
+              padding: 10px 10px 16px;
+            }
+            .center { text-align: center; }
+            .logo {
+              width: 58px;
+              height: 58px;
+              object-fit: contain;
+              margin: 2px auto 6px;
+              display: block;
+              border-radius: 999px;
+            }
+            h1 {
+              font-size: 18px;
+              margin: 0;
+              letter-spacing: 0.5px;
+            }
+            .small {
+              font-size: 11px;
+              line-height: 1.35;
+            }
+            .meta {
+              margin-top: 10px;
+              padding-top: 8px;
+              border-top: 1px dashed #111;
+              border-bottom: 1px dashed #111;
+              padding-bottom: 8px;
+            }
+            .meta-row {
+              display: flex;
+              justify-content: space-between;
+              gap: 8px;
+              font-size: 11px;
+              margin: 2px 0;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 10px;
+            }
+            td {
+              vertical-align: top;
+              padding: 5px 0;
+              border-bottom: 1px dotted #ccc;
+              font-size: 12px;
+            }
+            .item { width: 58%; }
+            .name { font-weight: 700; line-height: 1.2; }
+            .sku { font-size: 10px; color: #555; margin-top: 2px; }
+            .qty {
+              width: 12%;
+              text-align: center;
+              font-weight: 700;
+            }
+            .price {
+              width: 30%;
+              text-align: right;
+              font-weight: 700;
+            }
+            .totals {
+              margin-top: 10px;
+              border-top: 1px dashed #111;
+              padding-top: 8px;
+            }
+            .total-row {
+              display: flex;
+              justify-content: space-between;
+              font-size: 12px;
+              margin: 3px 0;
+            }
+            .grand {
+              font-size: 18px;
+              font-weight: 900;
+              margin-top: 7px;
+            }
+            .qr {
+              width: 105px;
+              height: 105px;
+              margin: 10px auto 4px;
+              display: block;
+            }
+            .footer {
+              margin-top: 10px;
+              border-top: 1px dashed #111;
+              padding-top: 8px;
+              font-size: 10px;
+              line-height: 1.35;
+              text-align: center;
+            }
+            .screen-actions {
+              width: 80mm;
+              margin: 12px auto;
+              display: flex;
+              gap: 8px;
+            }
+            .screen-actions button {
+              flex: 1;
+              border: 0;
+              border-radius: 12px;
+              padding: 12px;
+              font-weight: 900;
+              cursor: pointer;
+            }
+            @media print {
+              body { background: white; }
+              .receipt { width: 80mm; margin: 0; padding: 0 2mm; }
+              .screen-actions { display: none; }
+              @page { size: 80mm auto; margin: 3mm; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="screen-actions">
+            <button onclick="window.print()">Print</button>
+            <button onclick="window.close()">Close</button>
+          </div>
+
+          <div class="receipt">
+            <div class="center">
+              <img class="logo" src="${DOHPE_LOGO_URL}" />
+              <h1>DOHPE VINTAGE</h1>
+              <div class="small">Norwich</div>
+            </div>
+
+            <div class="meta">
+              <div class="meta-row"><span>Receipt</span><strong>${saleNumber}</strong></div>
+              <div class="meta-row"><span>Date</span><strong>${createdAt}</strong></div>
+              <div class="meta-row"><span>Payment</span><strong>${payment}${provider ? ` / ${provider}` : ''}</strong></div>
+              <div class="meta-row"><span>Location</span><strong>${location}</strong></div>
+            </div>
+
+            <table>
+              <tbody>
+                ${rows || '<tr><td>No items</td></tr>'}
+              </tbody>
+            </table>
+
+            <div class="totals">
+              <div class="total-row"><span>Net</span><strong>${escapeHtml(money(netValue))}</strong></div>
+              <div class="total-row"><span>VAT included</span><strong>${escapeHtml(money(vatValue))}</strong></div>
+              <div class="total-row grand"><span>Total</span><strong>${escapeHtml(money(totalValue))}</strong></div>
+            </div>
+
+            <img class="qr" src="${qrUrl}" />
+            <div class="small center">${squareReceiptUrl ? 'Scan for Square receipt' : 'Scan/search receipt number'}</div>
+
+            <div class="footer">
+              Thanks for shopping with Dohpe Vintage.<br />
+              Keep this receipt for refunds or exchanges.<br />
+              Refunds/exchanges are subject to store policy.
+            </div>
+          </div>
+        </body>
+      </html>
+    `)
+
+    printWindow.document.close()
+  }
+
   async function completeSale(method: 'cash' | 'card', cardDetails?: CardPaymentDetails) {
     if (basket.length === 0) {
       setMessage('Basket is empty.')
@@ -917,6 +1149,9 @@ export default function CheckoutPage() {
       const tx = buildTransaction(method, action, cardDetails)
 
       await saveTransaction(tx)
+
+      setLastCompletedTx(tx)
+      setReceiptPromptOpen(true)
 
       clearSale()
 
@@ -1180,7 +1415,6 @@ export default function CheckoutPage() {
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
-
   function getRootHistorySale(sale: HistorySale) {
     return sale.original_sale || sale
   }
@@ -1252,113 +1486,7 @@ export default function CheckoutPage() {
   }
 
   function printHistorySale(sale: HistorySale) {
-    const rootSale = getRootHistorySale(sale)
-    const related = getRelatedHistorySales(sale)
-    const rows = (rootSale.lines || [])
-      .map((line) => {
-        const alreadyRefunded = getLineAlreadyRefunded(line, sale)
-        const remaining = getLineRemainingRefundable(line, sale)
-
-        return `
-          <tr>
-            <td>${line.sku || ''}</td>
-            <td>${line.brand || line.title || ''}</td>
-            <td style="text-align:center">${line.quantity || 0}</td>
-            <td style="text-align:right">${money(Number(line.unit_price || 0))}</td>
-            <td style="text-align:center">${alreadyRefunded}</td>
-            <td style="text-align:center">${remaining}</td>
-            <td style="text-align:right">${money(Number(line.line_total || 0))}</td>
-          </tr>
-        `
-      })
-      .join('')
-
-    const relatedRows = related
-      .map(
-        (row) => `
-          <tr>
-            <td>${row.sale_number}</td>
-            <td>${formatDateTime(row.created_at)}</td>
-            <td>${row.mode || ''}</td>
-            <td>${row.payment_method || ''}</td>
-            <td>${row.square_refund_status || row.square_status || row.status || ''}</td>
-            <td style="text-align:right">${money(Number(row.total || 0))}</td>
-          </tr>
-        `
-      )
-      .join('')
-
-    const printWindow = window.open('', '_blank', 'width=900,height=700')
-
-    if (!printWindow) {
-      setHistoryMessage('Popup blocked. Allow popups to print receipt.')
-      return
-    }
-
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>${rootSale.sale_number}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
-            h1 { margin: 0 0 8px; font-size: 28px; }
-            h2 { margin-top: 28px; font-size: 18px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-            th, td { border-bottom: 1px solid #ddd; padding: 8px; font-size: 13px; text-align: left; }
-            th { background: #f2f2f2; }
-            .meta { margin: 3px 0; font-size: 13px; }
-            .total { margin-top: 16px; text-align: right; font-size: 22px; font-weight: 800; }
-            .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #eee; font-weight: 700; font-size: 12px; }
-            @media print { button { display: none; } }
-          </style>
-        </head>
-        <body>
-          <button onclick="window.print()" style="padding:10px 14px;margin-bottom:18px;font-weight:700">Print</button>
-          <h1>Dohpe POS Receipt</h1>
-          <div class="badge">${getRefundMethodLabel(sale)}</div>
-          <p class="meta"><strong>Receipt:</strong> ${rootSale.sale_number}</p>
-          <p class="meta"><strong>Date:</strong> ${formatDateTime(rootSale.created_at)}</p>
-          <p class="meta"><strong>Payment:</strong> ${rootSale.payment_method || '-'} / ${rootSale.payment_provider || '-'}</p>
-          <p class="meta"><strong>Square payment:</strong> ${rootSale.square_payment_id || '-'}</p>
-          <p class="meta"><strong>Location:</strong> ${rootSale.checkout_location || '-'}</p>
-
-          <h2>Items</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>SKU</th>
-                <th>Item</th>
-                <th style="text-align:center">Qty</th>
-                <th style="text-align:right">Unit</th>
-                <th style="text-align:center">Refunded</th>
-                <th style="text-align:center">Remaining</th>
-                <th style="text-align:right">Line</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-
-          <div class="total">Total: ${money(Number(rootSale.total || 0))}</div>
-
-          <h2>Linked refunds / exchanges</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>POS No.</th>
-                <th>Date</th>
-                <th>Mode</th>
-                <th>Payment</th>
-                <th>Status</th>
-                <th style="text-align:right">Total</th>
-              </tr>
-            </thead>
-            <tbody>${relatedRows || '<tr><td colspan="6">No linked refunds/exchanges</td></tr>'}</tbody>
-          </table>
-        </body>
-      </html>
-    `)
-
-    printWindow.document.close()
+    openReceiptWindow(null, getRootHistorySale(sale))
   }
 
   return (
@@ -2130,6 +2258,7 @@ export default function CheckoutPage() {
             </div>
           </div>
         )}
+
         {cardPanelOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
@@ -2241,6 +2370,42 @@ export default function CheckoutPage() {
           </div>
         )}
 
+        {receiptPromptOpen && lastCompletedTx && (
+          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-md rounded-[2rem] bg-white p-6 text-center text-neutral-950 shadow-2xl">
+              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-neutral-100 text-4xl">
+                🧾
+              </div>
+
+              <h2 className="text-2xl font-black">Print receipt?</h2>
+              <p className="mt-2 text-sm font-bold text-neutral-500">
+                Receipt {lastCompletedTx.sale_number} has been recorded.
+              </p>
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openReceiptWindow(lastCompletedTx)
+                    setReceiptPromptOpen(false)
+                  }}
+                  className="rounded-2xl bg-black px-4 py-4 text-lg font-black text-white"
+                >
+                  Print
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReceiptPromptOpen(false)}
+                  className="rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black"
+                >
+                  No receipt
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {paymentResultType && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
             <div
@@ -2254,13 +2419,9 @@ export default function CheckoutPage() {
                 {paymentResultType === 'success' ? '✓' : '✕'}
               </div>
 
-              <h2 className="text-3xl font-black">
-                {paymentResultTitle}
-              </h2>
+              <h2 className="text-3xl font-black">{paymentResultTitle}</h2>
 
-              <p className="mt-3 text-lg font-bold">
-                {paymentResultMessage}
-              </p>
+              <p className="mt-3 text-lg font-bold">{paymentResultMessage}</p>
 
               <p className="mt-5 text-sm font-black opacity-80">
                 This message will close automatically.
