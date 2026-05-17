@@ -1105,7 +1105,7 @@ export default function CheckoutPage() {
               max-width: 100%;
               height: auto;
               object-fit: contain;
-              margin: 2px auto 6px;
+              margin: -6px auto -2px;
               display: block;
             }
             h1 {
@@ -1242,7 +1242,8 @@ export default function CheckoutPage() {
             <img class="qr" src="${qrUrl}" />
 
             <div class="footer">
-              No refunds or exchanges accepted. Thanks for shopping with DOHPE Vintage
+              <div>No refunds or exchanges accepted.</div>
+              <div>Thank you for shopping with DOHPE Vintage.</div>
             </div>
           </div>
         </body>
