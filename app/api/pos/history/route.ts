@@ -15,6 +15,50 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveStaffFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_staff_user=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    return JSON.parse(decodeURIComponent(match[1]))
+  } catch {
+    return null
+  }
+}
+
+async function requireCheckoutPermission(request: Request, supabase: any) {
+  const staffCookie = getActiveStaffFromRequest(request)
+
+  if (!staffCookie?.id) {
+    return { ok: false, status: 401, message: 'Staff PIN required.' }
+  }
+
+  const { data: staff, error } = await supabase
+    .from('staff_users')
+    .select('id, name, role, permissions, is_active')
+    .eq('id', staffCookie.id)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  if (!staff || staff.is_active === false) {
+    return { ok: false, status: 403, message: 'Staff access denied.' }
+  }
+
+  const permissions = staff.permissions || {}
+  const allowed = staff.role === 'admin' || permissions.checkout === true
+
+  if (!allowed) {
+    return { ok: false, status: 403, message: 'Checkout permission required.' }
+  }
+
+  return { ok: true, staff }
+}
+
 function cleanText(value: string | null) {
   return String(value || '').trim()
 }
@@ -38,6 +82,10 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value
   )
+}
+
+function escapePostgrestOrValue(value: string) {
+  return value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_').replaceAll(',', '\\,')
 }
 
 const saleSelect = `
@@ -124,11 +172,22 @@ function getLatestActivityIso(sale: any, relatedSales: any[]) {
 export async function GET(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
+
+    const access = await requireCheckoutPermission(request, supabase)
+
+    if (!access.ok) {
+      return NextResponse.json(
+        { ok: false, message: access.message },
+        { status: access.status }
+      )
+    }
+
     const url = new URL(request.url)
 
     const query = cleanText(url.searchParams.get('query'))
     const receipt = cleanText(url.searchParams.get('receipt'))
     const finalQuery = receipt || query
+    const safeFinalQuery = escapePostgrestOrValue(finalQuery)
 
     const dateFrom = cleanDate(url.searchParams.get('date_from'))
     const dateTo = cleanDate(url.searchParams.get('date_to'))
@@ -145,12 +204,12 @@ export async function GET(request: Request) {
         .select('sale_id')
         .or(
           [
-            `sku.ilike.%${finalQuery}%`,
-            `title.ilike.%${finalQuery}%`,
-            `brand.ilike.%${finalQuery}%`,
-            `reporting_category.ilike.%${finalQuery}%`,
-            `sub_type.ilike.%${finalQuery}%`,
-            `colour.ilike.%${finalQuery}%`,
+            `sku.ilike.%${safeFinalQuery}%`,
+            `title.ilike.%${safeFinalQuery}%`,
+            `brand.ilike.%${safeFinalQuery}%`,
+            `reporting_category.ilike.%${safeFinalQuery}%`,
+            `sub_type.ilike.%${safeFinalQuery}%`,
+            `colour.ilike.%${safeFinalQuery}%`,
           ].join(',')
         )
         .limit(200)
@@ -186,11 +245,11 @@ export async function GET(request: Request) {
 
     if (finalQuery) {
       const saleFilters = [
-        `sale_number.ilike.%${finalQuery}%`,
-        `square_payment_id.ilike.%${finalQuery}%`,
-        `square_checkout_id.ilike.%${finalQuery}%`,
-        `square_refund_id.ilike.%${finalQuery}%`,
-        `payment_reference.ilike.%${finalQuery}%`,
+        `sale_number.ilike.%${safeFinalQuery}%`,
+        `square_payment_id.ilike.%${safeFinalQuery}%`,
+        `square_checkout_id.ilike.%${safeFinalQuery}%`,
+        `square_refund_id.ilike.%${safeFinalQuery}%`,
+        `payment_reference.ilike.%${safeFinalQuery}%`,
       ]
 
       if (isUuid(finalQuery)) {

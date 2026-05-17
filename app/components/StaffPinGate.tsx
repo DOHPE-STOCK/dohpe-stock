@@ -77,13 +77,18 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
       }
     } catch {
       window.localStorage.removeItem('active_staff_user')
+      document.cookie =
+        'active_staff_user=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
     }
   }
 
   function saveStaff(staff: StaffRow) {
     const safeStaff = normaliseStaff(staff)
+    const encoded = encodeURIComponent(JSON.stringify(safeStaff))
 
     window.localStorage.setItem('active_staff_user', JSON.stringify(safeStaff))
+    document.cookie = `active_staff_user=${encoded}; path=/; max-age=2592000; SameSite=Lax`
+
     onStaffSelected?.(safeStaff)
 
     setMessage(`Signed in as ${staff.name}`)
