@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
+import { createServerClient } from '@supabase/ssr'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
+
+type AccessResult =
+  | { ok: true; user?: any; staff?: any }
+  | { ok: false; status: number; message: string }
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -13,6 +19,36 @@ function getSupabaseAdmin() {
   }
 
   return createClient(url, serviceKey)
+}
+
+async function requireAppLogin(): Promise<AccessResult> {
+  const cookieStore = await cookies()
+
+  const supabaseAuth = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll() {
+          // no-op: API auth check only
+        },
+      },
+    }
+  )
+
+  const {
+    data: { user },
+    error,
+  } = await supabaseAuth.auth.getUser()
+
+  if (error || !user) {
+    return { ok: false, status: 401, message: 'Login required.' }
+  }
+
+  return { ok: true, user }
 }
 
 function getActiveStaffFromRequest(request: Request) {
@@ -28,7 +64,7 @@ function getActiveStaffFromRequest(request: Request) {
   }
 }
 
-async function requireCheckoutPermission(request: Request, supabase: any) {
+async function requireCheckoutPermission(request: Request, supabase: any): Promise<AccessResult> {
   const staffCookie = getActiveStaffFromRequest(request)
 
   if (!staffCookie?.id) {
@@ -61,6 +97,15 @@ async function requireCheckoutPermission(request: Request, supabase: any) {
 
 export async function GET(request: Request) {
   try {
+    const login = await requireAppLogin()
+
+    if (!login.ok) {
+      return NextResponse.json(
+        { ok: false, message: login.message },
+        { status: login.status }
+      )
+    }
+
     const supabase = getSupabaseAdmin()
 
     const access = await requireCheckoutPermission(request, supabase)
