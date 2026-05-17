@@ -127,6 +127,9 @@ export async function GET(request: Request) {
     const url = new URL(request.url)
 
     const query = cleanText(url.searchParams.get('query'))
+    const receipt = cleanText(url.searchParams.get('receipt'))
+    const finalQuery = receipt || query
+
     const dateFrom = cleanDate(url.searchParams.get('date_from'))
     const dateTo = cleanDate(url.searchParams.get('date_to'))
     const paymentMethod = cleanText(url.searchParams.get('payment_method')).toLowerCase()
@@ -136,18 +139,18 @@ export async function GET(request: Request) {
 
     let saleIdsFromLines: string[] | null = null
 
-    if (query) {
+    if (finalQuery) {
       const { data: matchingLines, error: lineError } = await supabase
         .from('pos_sale_lines')
         .select('sale_id')
         .or(
           [
-            `sku.ilike.%${query}%`,
-            `title.ilike.%${query}%`,
-            `brand.ilike.%${query}%`,
-            `reporting_category.ilike.%${query}%`,
-            `sub_type.ilike.%${query}%`,
-            `colour.ilike.%${query}%`,
+            `sku.ilike.%${finalQuery}%`,
+            `title.ilike.%${finalQuery}%`,
+            `brand.ilike.%${finalQuery}%`,
+            `reporting_category.ilike.%${finalQuery}%`,
+            `sub_type.ilike.%${finalQuery}%`,
+            `colour.ilike.%${finalQuery}%`,
           ].join(',')
         )
         .limit(200)
@@ -181,24 +184,25 @@ export async function GET(request: Request) {
       salesQuery = salesQuery.eq('mode', mode)
     }
 
-    if (query) {
-      const saleNumberOrFilters = [
-        `sale_number.ilike.%${query}%`,
-        `square_payment_id.ilike.%${query}%`,
-        `square_checkout_id.ilike.%${query}%`,
-        `square_refund_id.ilike.%${query}%`,
-        `payment_reference.ilike.%${query}%`,
+    if (finalQuery) {
+      const saleFilters = [
+        `sale_number.ilike.%${finalQuery}%`,
+        `square_payment_id.ilike.%${finalQuery}%`,
+        `square_checkout_id.ilike.%${finalQuery}%`,
+        `square_refund_id.ilike.%${finalQuery}%`,
+        `payment_reference.ilike.%${finalQuery}%`,
       ]
 
-      if (isUuid(query)) {
-        saleNumberOrFilters.push(`id.eq.${query}`)
+      if (isUuid(finalQuery)) {
+        saleFilters.push(`id.eq.${finalQuery}`)
+        saleFilters.push(`original_sale_id.eq.${finalQuery}`)
       }
 
       if (saleIdsFromLines && saleIdsFromLines.length > 0) {
-        saleNumberOrFilters.push(`id.in.(${saleIdsFromLines.join(',')})`)
+        saleFilters.push(`id.in.(${saleIdsFromLines.join(',')})`)
       }
 
-      salesQuery = salesQuery.or(saleNumberOrFilters.join(','))
+      salesQuery = salesQuery.or(saleFilters.join(','))
     }
 
     const { data: sales, error: salesError } = await salesQuery
@@ -279,6 +283,9 @@ export async function GET(request: Request) {
           original_sale: originalSale,
           related_sales: relatedSales.filter((related: any) => related.id !== sale.id),
           returned_qty_by_original_line_id: returnedQtyByOriginalLineId,
+          receipt_lookup_url: `/checkout?receipt=${encodeURIComponent(
+            originalSale?.sale_number || sale.sale_number
+          )}`,
         }
       })
       .sort((a: any, b: any) =>
@@ -291,6 +298,7 @@ export async function GET(request: Request) {
       ok: true,
       sales: enrichedSales,
       count: enrichedSales.length,
+      query: finalQuery,
     })
   } catch (error: any) {
     return NextResponse.json(
