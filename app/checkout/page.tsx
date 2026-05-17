@@ -40,6 +40,7 @@ type BasketLine = {
   originalLineId?: string
   maxRefundQuantity?: number
   isReturnLine?: boolean
+  isBag?: boolean
 }
 
 type PaymentMethod = 'cash' | 'card' | null
@@ -124,7 +125,7 @@ const OFFLINE_TX_KEY = 'dohpe_pos_offline_transactions_v1'
 const CHECKOUT_LOCATION_KEY = 'dohpe_checkout_location_v1'
 
 const DOHPE_LOGO_URL =
-  'https://lmdqfuvxbtwfeqjvjyoo.supabase.co/storage/v1/object/public/public/dohpe-round-logo.png'
+  'https://hmeaanftisuhcdrzmpil.supabase.co/storage/v1/object/public/item-images/originals/Dohpe_logo_transparent_bk__black_wider_version.png'
 
 function money(value: number) {
   return new Intl.NumberFormat('en-GB', {
@@ -248,9 +249,8 @@ export default function CheckoutPage() {
   const [paymentResultType, setPaymentResultType] = useState<PaymentResultType>(null)
   const [paymentResultTitle, setPaymentResultTitle] = useState('')
   const [paymentResultMessage, setPaymentResultMessage] = useState('')
+  const [paymentResultTx, setPaymentResultTx] = useState<any | null>(null)
 
-  const [lastCompletedTx, setLastCompletedTx] = useState<any | null>(null)
-  const [receiptPromptOpen, setReceiptPromptOpen] = useState(false)
 
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyBusy, setHistoryBusy] = useState(false)
@@ -300,7 +300,7 @@ export default function CheckoutPage() {
   const netAmount = displayedTotal - vatAmount
   const totalItems = basket.reduce((sum, line) => sum + line.quantity, 0)
   const changeDue = Math.max(0, (Number(cashTendered) || 0) - displayedTotal)
-  const selectedLine = basket.find((line) => line.sku === selectedSku)
+  const selectedLine = basket.find((line) => (line.originalLineId || line.sku) === selectedSku)
 
   const pageClass = 'min-h-screen bg-neutral-100 text-neutral-950'
   const panelClass = 'rounded-3xl border border-neutral-200 bg-white shadow-xl'
@@ -320,7 +320,60 @@ export default function CheckoutPage() {
     }
   }, [])
 
-  function showPaymentResult(type: Exclude<PaymentResultType, null>, title: string, body: string) {
+  function makeFailedReceipt(reason: string) {
+    const now = new Date().toISOString()
+
+    return {
+      id: crypto.randomUUID(),
+      sale_number: `FAILED-${makeSaleNumber()}`,
+      mode,
+      payment_method: paymentMethod || 'card',
+      payment_provider: 'none',
+      square_status: 'failed_or_unclear',
+      status: 'failed',
+      checkout_location: checkoutLocation || 'SHOP-1',
+      created_at: now,
+      updated_at: now,
+      subtotal: Number(saleSubtotal.toFixed(2)),
+      discount_amount: Number(totalDiscount.toFixed(2)),
+      total: Number(displayedTotal.toFixed(2)),
+      vat_amount: Number(vatAmount.toFixed(2)),
+      net_amount: Number(netAmount.toFixed(2)),
+      manual_payment_reason: reason,
+      lines: basket
+        .filter((line) => line.quantity > 0)
+        .map((line) => ({
+          sku: line.sku,
+          title: line.title,
+          brand: line.brand,
+          reporting_category: line.category,
+          sub_type: line.subType,
+          colour: line.colour,
+          quantity: line.quantity,
+          unit_price: Number(line.price.toFixed(2)),
+          line_total: Number((line.price * line.quantity).toFixed(2)),
+        })),
+    }
+  }
+
+  function closePaymentResult() {
+    if (paymentResultTimerRef.current) {
+      window.clearTimeout(paymentResultTimerRef.current)
+    }
+
+    setPaymentResultType(null)
+    setPaymentResultTitle('')
+    setPaymentResultMessage('')
+    setPaymentResultTx(null)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function showPaymentResult(
+    type: Exclude<PaymentResultType, null>,
+    title: string,
+    body: string,
+    tx?: any
+  ) {
     if (paymentResultTimerRef.current) {
       window.clearTimeout(paymentResultTimerRef.current)
     }
@@ -328,12 +381,7 @@ export default function CheckoutPage() {
     setPaymentResultType(type)
     setPaymentResultTitle(title)
     setPaymentResultMessage(body)
-
-    paymentResultTimerRef.current = window.setTimeout(() => {
-      setPaymentResultType(null)
-      setPaymentResultTitle('')
-      setPaymentResultMessage('')
-    }, 6000)
+    setPaymentResultTx(tx || (type === 'failed' ? makeFailedReceipt(body) : null))
   }
 
   async function writeTransactionOnline(tx: any) {
@@ -428,6 +476,69 @@ export default function CheckoutPage() {
 
     return text(data?.processed_url || data?.original_url)
   }
+
+  function addBagToBasket() {
+    const bagSku = 'BAG-20P'
+
+    setBasket((current) => {
+      const existing = current.find((line) => line.sku === bagSku && line.isBag)
+
+      if (existing) {
+        return current.map((line) =>
+          line.sku === bagSku && line.isBag ? { ...line, quantity: line.quantity + 1 } : line
+        )
+      }
+
+      return [
+        ...current,
+        {
+          sku: bagSku,
+          title: 'Carrier Bag',
+          brand: 'DOHPE',
+          category: 'Bag',
+          subType: '',
+          colour: '',
+          thumbnailUrl: '',
+          price: 0.2,
+          quantity: 1,
+          location: checkoutLocation || 'SHOP-1',
+          bin: checkoutLocation || 'SHOP-1',
+          stockLevel: 999,
+          lineDiscountPercent: 0,
+          isReturnLine: false,
+          isBag: true,
+        },
+      ]
+    })
+
+    setMessage('20p bag added.')
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function roundUpToNearest(value: number, nearest: number) {
+    if (value <= 0) return 0
+    return Math.ceil(value / nearest) * nearest
+  }
+
+  function getCashSuggestions() {
+    const values = [
+      displayedTotal,
+      roundUpToNearest(displayedTotal, 1),
+      roundUpToNearest(displayedTotal, 5),
+      roundUpToNearest(displayedTotal, 10),
+      roundUpToNearest(displayedTotal, 20),
+    ]
+      .filter((value) => value > 0)
+      .map((value) => Number(value.toFixed(2)))
+
+    return Array.from(new Set(values)).slice(0, 5)
+  }
+
+  function setSuggestedCash(value: number) {
+    setCashTendered(value.toFixed(2))
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
   async function lookupSaleForRefund(saleNumber: string) {
     const response = await fetch(
       `/api/pos/lookup-sale?sale_number=${encodeURIComponent(saleNumber)}`
@@ -501,7 +612,7 @@ export default function CheckoutPage() {
     }
   }
 
-  async function fetchHistory() {
+  async function fetchHistory(overrides?: { query?: string }) {
     setHistoryBusy(true)
     setHistoryMessage('')
 
@@ -509,7 +620,8 @@ export default function CheckoutPage() {
       const params = new URLSearchParams()
       params.set('limit', '50')
 
-      if (historyQuery.trim()) params.set('query', historyQuery.trim())
+      const searchQuery = overrides?.query ?? historyQuery.trim()
+      if (searchQuery) params.set('query', searchQuery)
       if (historyDateFrom) params.set('date_from', historyDateFrom)
       if (historyDateTo) params.set('date_to', historyDateTo)
       if (historyPaymentMethod) params.set('payment_method', historyPaymentMethod)
@@ -542,6 +654,23 @@ export default function CheckoutPage() {
       fetchHistory()
     }, 50)
   }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const params = new URLSearchParams(window.location.search)
+    const receipt = text(params.get('receipt')).toUpperCase()
+
+    if (!receipt) return
+
+    setHistoryQuery(receipt)
+    setHistoryOpen(true)
+
+    setTimeout(() => {
+      fetchHistory({ query: receipt })
+    }, 100)
+  }, [])
+
 
   async function addScannedSku(rawSku?: string) {
     const sku = text(rawSku || scanValue)
@@ -784,7 +913,7 @@ export default function CheckoutPage() {
       })
     }
 
-    for (const line of saleLines.filter((row) => row.quantity > 0)) {
+    for (const line of saleLines.filter((row) => row.quantity > 0 && !row.isBag)) {
       queueRows.push({
         sku: line.sku,
         action: 'adjust_stock',
@@ -909,12 +1038,12 @@ export default function CheckoutPage() {
   }
 
   function openReceiptWindow(tx: any, sourceSale?: HistorySale) {
-    const saleNumber = escapeHtml(tx?.sale_number || sourceSale?.sale_number || '')
+    const saleNumberRaw = text(tx?.sale_number || sourceSale?.sale_number || '')
+    const saleNumber = escapeHtml(saleNumberRaw)
     const createdAt = escapeHtml(formatDateTime(tx?.created_at || sourceSale?.created_at))
     const payment = escapeHtml(tx?.payment_method || sourceSale?.payment_method || '')
     const provider = escapeHtml(tx?.payment_provider || sourceSale?.payment_provider || '')
     const location = escapeHtml(tx?.checkout_location || sourceSale?.checkout_location || checkoutLocation || 'SHOP-1')
-    const squareReceiptUrl = text(tx?.square_receipt_url || sourceSale?.square_receipt_url || '')
     const totalValue = Number(tx?.total ?? sourceSale?.total ?? 0)
     const vatValue = Number(tx?.vat_amount ?? sourceSale?.vat_amount ?? totalValue / 6)
     const netValue = Number(tx?.net_amount ?? sourceSale?.net_amount ?? totalValue - vatValue)
@@ -940,8 +1069,8 @@ export default function CheckoutPage() {
       })
       .join('')
 
-    const qrValue = squareReceiptUrl || saleNumber
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(qrValue)}`
+    const appReceiptUrl = `${window.location.origin}/checkout?receipt=${encodeURIComponent(saleNumberRaw)}`
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(appReceiptUrl)}`
 
     const printWindow = window.open('', '_blank', 'width=420,height=700')
 
@@ -972,12 +1101,12 @@ export default function CheckoutPage() {
             }
             .center { text-align: center; }
             .logo {
-              width: 58px;
-              height: 58px;
+              width: 62mm;
+              max-width: 100%;
+              height: auto;
               object-fit: contain;
               margin: 2px auto 6px;
               display: block;
-              border-radius: 999px;
             }
             h1 {
               font-size: 18px;
@@ -1088,7 +1217,7 @@ export default function CheckoutPage() {
             <div class="center">
               <img class="logo" src="${DOHPE_LOGO_URL}" />
               <h1>DOHPE VINTAGE</h1>
-              <div class="small">Norwich</div>
+              <div class="small">22 Pottergate, Norwich, NR2 1DX</div>
             </div>
 
             <div class="meta">
@@ -1111,12 +1240,9 @@ export default function CheckoutPage() {
             </div>
 
             <img class="qr" src="${qrUrl}" />
-            <div class="small center">${squareReceiptUrl ? 'Scan for Square receipt' : 'Scan/search receipt number'}</div>
 
             <div class="footer">
-              Thanks for shopping with Dohpe Vintage.<br />
-              Keep this receipt for refunds or exchanges.<br />
-              Refunds/exchanges are subject to store policy.
+              No refunds or exchanges accepted. Thanks for shopping with DOHPE Vintage
             </div>
           </div>
         </body>
@@ -1150,9 +1276,6 @@ export default function CheckoutPage() {
 
       await saveTransaction(tx)
 
-      setLastCompletedTx(tx)
-      setReceiptPromptOpen(true)
-
       clearSale()
 
       if (method === 'card' && (mode === 'refund' || refundDue > 0)) {
@@ -1165,13 +1288,18 @@ export default function CheckoutPage() {
         setMessage(`Sale recorded. Receipt: ${tx.sale_number}`)
       }
 
-      if (method === 'card') {
-        showPaymentResult(
-          'success',
-          mode === 'refund' || refundDue > 0 ? 'Refund Succeeded' : 'Payment Succeeded',
-          `Card transaction recorded. Receipt: ${tx.sale_number}`
-        )
-      }
+      showPaymentResult(
+        'success',
+        mode === 'refund' || refundDue > 0
+          ? 'Refund Succeeded'
+          : mode === 'exchange'
+            ? 'Exchange Complete'
+            : method === 'cash'
+              ? 'Cash Sale Complete'
+              : 'Payment Succeeded',
+        `Receipt: ${tx.sale_number}`,
+        tx
+      )
 
       retryOfflineTransactions()
     } catch (error: any) {
@@ -1561,6 +1689,18 @@ export default function CheckoutPage() {
               </button>
             </form>
 
+            {mode !== 'refund' && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={addBagToBasket}
+                  className="rounded-2xl bg-neutral-900 px-4 py-3 text-sm font-black text-white"
+                >
+                  + 20p Bag
+                </button>
+              </div>
+            )}
+
             {message && (
               <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-semibold">
                 {message}
@@ -1824,17 +1964,33 @@ export default function CheckoutPage() {
                 </div>
 
                 {paymentMethod === 'cash' && displayedTotal > 0 && (
-                  <div className="mt-4 grid grid-cols-2 gap-3">
-                    <input
-                      value={cashTendered}
-                      onChange={(event) => setCashTendered(event.target.value)}
-                      placeholder="Cash tendered"
-                      className={inputClass}
-                      inputMode="decimal"
-                    />
-                    <div className="rounded-2xl bg-neutral-100 p-3 text-right">
-                      <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
-                      <p className="text-2xl font-black">{money(changeDue)}</p>
+                  <div className="mt-4 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        value={cashTendered}
+                        onChange={(event) => setCashTendered(event.target.value)}
+                        placeholder="Cash tendered"
+                        className={inputClass}
+                        inputMode="decimal"
+                      />
+                      <div className="rounded-2xl bg-neutral-100 p-3 text-right">
+                        <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
+                        <p className="text-2xl font-black">{money(changeDue)}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {getCashSuggestions().map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setSuggestedCash(value)}
+                          className="rounded-2xl border border-neutral-300 bg-white px-3 py-3 text-sm font-black"
+                        >
+                          {value === Number(displayedTotal.toFixed(2)) ? 'Exact ' : ''}
+                          {money(value)}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -2370,42 +2526,6 @@ export default function CheckoutPage() {
           </div>
         )}
 
-        {receiptPromptOpen && lastCompletedTx && (
-          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/70 p-4">
-            <div className="w-full max-w-md rounded-[2rem] bg-white p-6 text-center text-neutral-950 shadow-2xl">
-              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-neutral-100 text-4xl">
-                🧾
-              </div>
-
-              <h2 className="text-2xl font-black">Print receipt?</h2>
-              <p className="mt-2 text-sm font-bold text-neutral-500">
-                Receipt {lastCompletedTx.sale_number} has been recorded.
-              </p>
-
-              <div className="mt-5 grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    openReceiptWindow(lastCompletedTx)
-                    setReceiptPromptOpen(false)
-                  }}
-                  className="rounded-2xl bg-black px-4 py-4 text-lg font-black text-white"
-                >
-                  Print
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setReceiptPromptOpen(false)}
-                  className="rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black"
-                >
-                  No receipt
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {paymentResultType && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
             <div
@@ -2423,9 +2543,26 @@ export default function CheckoutPage() {
 
               <p className="mt-3 text-lg font-bold">{paymentResultMessage}</p>
 
-              <p className="mt-5 text-sm font-black opacity-80">
-                This message will close automatically.
-              </p>
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openReceiptWindow(paymentResultTx)
+                    closePaymentResult()
+                  }}
+                  className="rounded-2xl bg-black px-4 py-4 text-lg font-black text-white"
+                >
+                  {paymentResultType === 'success' ? 'Yes, Print' : 'Print Failed Receipt'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={closePaymentResult}
+                  className="rounded-2xl bg-white px-4 py-4 text-lg font-black text-black"
+                >
+                  {paymentResultType === 'success' ? 'No Receipt' : 'Close'}
+                </button>
+              </div>
             </div>
           </div>
         )}
