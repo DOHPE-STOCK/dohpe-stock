@@ -10,9 +10,6 @@ type ItemRow = {
   sku: string
   brand?: string | null
   reporting_category?: string | null
-  sub_type?: string | null
-  subtype?: string | null
-  item_sub_type?: string | null
   colour?: string | null
   color?: string | null
   main_colour?: string | null
@@ -131,9 +128,6 @@ type LibraryItem = {
   sku: string
   brand: string | null
   reporting_category: string | null
-  sub_type?: string | null
-  subtype?: string | null
-  item_sub_type?: string | null
   colour?: string | null
   color?: string | null
   main_colour?: string | null
@@ -346,6 +340,7 @@ export default function CheckoutPage() {
   const [libraryCategory, setLibraryCategory] = useState('')
   const [libraryColour, setLibraryColour] = useState('')
   const [libraryStatus, setLibraryStatus] = useState<LibraryStatus>('unsold')
+  const [libraryLimit, setLibraryLimit] = useState(10)
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([])
   const [libraryBusy, setLibraryBusy] = useState(false)
   const [libraryMessage, setLibraryMessage] = useState('')
@@ -1901,8 +1896,8 @@ export default function CheckoutPage() {
     return text(item.colour || item.color || item.main_colour)
   }
 
-  function getLibraryItemSubType(item: LibraryItem) {
-    return text(item.sub_type || item.subtype || item.item_sub_type)
+  function getLibraryItemSubType(_item: LibraryItem) {
+    return ''
   }
 
   function getLibraryImage(item: LibraryItem) {
@@ -1934,9 +1929,6 @@ export default function CheckoutPage() {
           sku,
           brand,
           reporting_category,
-          sub_type,
-          subtype,
-          item_sub_type,
           colour,
           color,
           main_colour,
@@ -1955,7 +1947,7 @@ export default function CheckoutPage() {
         `)
         .ilike('brand', `%${brand}%`)
         .eq('reporting_category', category)
-        .limit(10)
+        .limit(libraryLimit)
 
       if (colour) {
         query = query.or(
@@ -2063,46 +2055,57 @@ export default function CheckoutPage() {
               </button>
             </div>
 
-            <form
-              onSubmit={(event) => {
-                event.preventDefault()
-                handleMainScanSubmit()
-              }}
-              className="flex gap-2"
-            >
-              <input
-                ref={inputRef}
-                value={scanValue}
-                onChange={(event) => setScanValue(event.target.value)}
-                placeholder={activeView === 'transactions' ? 'Scan / enter receipt, SKU or Square ID' : 'Scan SKU or receipt barcode'}
-                className={inputClass}
-                autoFocus
-                inputMode="text"
-                autoComplete="off"
-              />
-              <button
-                type="submit"
-                disabled={!scanValue.trim() || Boolean(activeView === 'transactions' ? historyBusy : loadingSku)}
-                className="rounded-lg bg-black px-5 py-3 font-black text-white disabled:opacity-40"
-              >
-                {activeView === 'transactions' ? 'Search' : 'Add'}
-              </button>
+            {activeView !== 'library' && (
+              <>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    handleMainScanSubmit()
+                  }}
+                  className="flex gap-2"
+                >
+                  <input
+                    ref={inputRef}
+                    value={scanValue}
+                    onChange={(event) => setScanValue(event.target.value)}
+                    placeholder={
+                      activeView === 'transactions'
+                        ? 'Scan / enter receipt, SKU or Square ID'
+                        : 'Scan SKU or receipt barcode'
+                    }
+                    className={inputClass}
+                    autoFocus
+                    inputMode="text"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="submit"
+                    disabled={
+                      !scanValue.trim() ||
+                      Boolean(activeView === 'transactions' ? historyBusy : loadingSku)
+                    }
+                    className="rounded-lg bg-black px-5 py-3 font-black text-white disabled:opacity-40"
+                  >
+                    {activeView === 'transactions' ? 'Search' : 'Add'}
+                  </button>
 
-              <button
-                type="button"
-                onClick={openKeypadForCurrentView}
-                className="rounded-lg bg-neutral-900 px-5 py-3 text-xl font-black text-white"
-                aria-label="Open keypad"
-                title="Keypad"
-              >
-                ⌨
-              </button>
-            </form>
+                  <button
+                    type="button"
+                    onClick={openKeypadForCurrentView}
+                    className="rounded-lg bg-neutral-900 px-5 py-3 text-xl font-black text-white"
+                    aria-label="Open keypad"
+                    title="Keypad"
+                  >
+                    ⌨
+                  </button>
+                </form>
 
-            {message && (
-              <div className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm font-semibold">
-                {message}
-              </div>
+                {message && (
+                  <div className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm font-semibold">
+                    {message}
+                  </div>
+                )}
+              </>
             )}
           </section>
 
@@ -2435,7 +2438,7 @@ export default function CheckoutPage() {
           ) : activeView === 'library' ? (
             <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
               <div className="shrink-0 border-b border-neutral-200 p-3">
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_150px_180px_120px]">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_150px_140px_180px_120px]">
                   <input
                     value={libraryBrand}
                     onChange={(event) => setLibraryBrand(event.target.value)}
@@ -2475,6 +2478,16 @@ export default function CheckoutPage() {
                     className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
                   />
 
+                  <select
+                    value={libraryLimit}
+                    onChange={(event) => setLibraryLimit(Number(event.target.value))}
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                  >
+                    <option value={10}>10 results</option>
+                    <option value={20}>20 results</option>
+                    <option value={50}>50 results</option>
+                  </select>
+
                   <div className="grid grid-cols-2 rounded-lg bg-neutral-200 p-1">
                     <button
                       type="button"
@@ -2513,7 +2526,7 @@ export default function CheckoutPage() {
 
                 {libraryStatus === 'sold' && (
                   <p className="mt-2 text-xs font-bold text-neutral-500">
-                    Sold search shows the 10 most recently sold matching items from the last 3 months.
+                    Sold search shows the most recently sold matching items from the last 3 months.
                   </p>
                 )}
 
@@ -2528,7 +2541,7 @@ export default function CheckoutPage() {
                 {libraryItems.length === 0 ? (
                   <div className="rounded-xl p-8 text-center text-neutral-500">
                     <p className="text-lg font-bold">No library results loaded</p>
-                    <p className="text-sm">Enter brand and reporting category to load up to 10 matching items.</p>
+                    <p className="text-sm">Enter brand and reporting category to load matching inventory items.</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -2562,7 +2575,7 @@ export default function CheckoutPage() {
                             <p className="truncate text-sm font-black">{item.brand || 'Unknown Brand'}</p>
                             <p className="line-clamp-2 text-xs font-bold text-neutral-700">{title}</p>
                             <p className="mt-1 truncate text-[11px] font-bold text-neutral-500">
-                              {[item.reporting_category, subType, colour].filter(Boolean).join(' · ')}
+                              {[item.reporting_category, colour].filter(Boolean).join(' · ')}
                             </p>
                             <div className="mt-2 flex items-center justify-between gap-2">
                               <span className="text-xs font-black">{item.sku}</span>
