@@ -48,6 +48,7 @@ type PaymentMethod = 'cash' | 'card' | null
 type CheckoutMode = 'sale' | 'refund' | 'exchange'
 type CardPanelState = 'options' | 'waiting' | 'unclear'
 type PaymentResultType = 'success' | 'failed' | null
+type PosView = 'checkout' | 'transactions' | 'library'
 
 type CardPaymentDetails = {
   payment_provider?: string
@@ -266,6 +267,7 @@ export default function CheckoutPage() {
   const [paymentResultTx, setPaymentResultTx] = useState<any | null>(null)
 
 
+  const [activeView, setActiveView] = useState<PosView>('checkout')
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyBusy, setHistoryBusy] = useState(false)
   const [historyMessage, setHistoryMessage] = useState('')
@@ -725,10 +727,22 @@ export default function CheckoutPage() {
   }
 
   function openHistory() {
+    setActiveView('transactions')
     setHistoryOpen(true)
     setTimeout(() => {
       fetchHistory()
     }, 50)
+  }
+
+  function openCheckoutView() {
+    setActiveView('checkout')
+    setHistoryOpen(false)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function openLibraryView() {
+    setActiveView('library')
+    setHistoryOpen(false)
   }
 
   useEffect(() => {
@@ -740,6 +754,7 @@ export default function CheckoutPage() {
     if (!receipt) return
 
     setHistoryQuery(receipt)
+    setActiveView('transactions')
     setHistoryOpen(true)
 
     setTimeout(() => {
@@ -1884,336 +1899,11 @@ export default function CheckoutPage() {
             )}
           </section>
 
-          <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
-            <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-2">
-              <div>
-                <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
-                <p className="text-sm font-black">{totalItems} items</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => clearSale()}
-                className="rounded-full bg-red-500 px-4 py-2 text-sm font-black text-white"
-              >
-                Clear
-              </button>
-            </div>
-
-            <div className="grid max-h-[34vh] grid-cols-1 gap-2 overflow-auto p-2 sm:grid-cols-2 lg:grid-cols-4">
-              {basket.length === 0 ? (
-                <div className={`col-span-full rounded-xl p-8 text-center ${mutedText}`}>
-                  <p className="text-lg font-bold">No items scanned yet</p>
-                  <p className="text-sm">Scan SKU or receipt barcode.</p>
-                </div>
-              ) : (
-                basket.map((line) => {
-                  const key = line.originalLineId || line.sku
-                  const isSelected = selectedSku === key
-                  const maxRefund = Number(line.maxRefundQuantity || 0)
-
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setSelectedSku(isSelected ? '' : key)}
-                      className={`w-full rounded-lg p-2 text-left ${
-                        isSelected
-                          ? 'bg-emerald-100 ring-2 ring-emerald-400'
-                          : 'bg-neutral-100'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-neutral-200">
-                          {line.thumbnailUrl ? (
-                            <img
-                              src={line.thumbnailUrl}
-                              alt={line.sku}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-neutral-400">
-                              NO IMG
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-black">
-                                {line.brand || 'Unknown Brand'}
-                              </p>
-                              <p className={`truncate text-xs ${mutedText}`}>
-                                {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') || line.title}
-                              </p>
-                              <p className={`truncate text-[11px] ${mutedText}`}>{line.sku}</p>
-                            </div>
-
-                            <div className="shrink-0 text-right">
-                              <p className="text-sm font-black">
-                                {line.isReturnLine ? '-' : ''}
-                                {money(line.price * line.quantity)}
-                              </p>
-                              <p className={`text-[11px] ${mutedText}`}>{money(line.price)} each</p>
-                            </div>
-                          </div>
-
-                          <div className="mt-2 flex items-center justify-between gap-2">
-                            <div className="flex items-center rounded-full border border-neutral-300">
-                              <span
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  updateQty(line, line.quantity - 1)
-                                }}
-                                className="px-2 py-1 text-base font-black"
-                              >
-                                −
-                              </span>
-                              <span className="min-w-7 text-center text-sm font-black">{line.quantity}</span>
-                              <span
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  updateQty(line, line.quantity + 1)
-                                }}
-                                className="px-2 py-1 text-base font-black"
-                              >
-                                +
-                              </span>
-                            </div>
-
-                            {line.isReturnLine && (
-                              <span className={`text-xs font-bold ${mutedText}`}>Max {maxRefund}</span>
-                            )}
-
-                            {line.lineDiscountPercent > 0 && (
-                              <span className="text-xs font-black text-emerald-600">
-                                {line.lineDiscountPercent}% off
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })
-              )}
-            </div>
-          </section>
-
-          <section className={`${panelClass} sticky bottom-0 z-20 p-3`}>
-            {mode === 'sale' && (
-              <div className="mb-3 grid grid-cols-4 gap-2">
-                <button
-                  type="button"
-                  onClick={() => applyPercentDiscount(5)}
-                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
-                >
-                  5% off
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPercentDiscount(10)}
-                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
-                >
-                  10% off
-                </button>
-
-                {manualDiscountOpen ? (
-                  <div className="flex overflow-hidden rounded-lg border border-neutral-300 bg-white">
-                    <input
-                      value={manualDiscountPercent}
-                      onChange={(event) => setManualDiscountPercent(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') applyManualDiscount()
-                      }}
-                      placeholder="£"
-                      inputMode="decimal"
-                      className="min-w-0 flex-1 px-2 py-3 text-center text-sm font-black outline-none"
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      onClick={applyManualDiscount}
-                      className="bg-black px-2 text-xs font-black text-white"
-                    >
-                      OK
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setManualDiscountOpen(true)}
-                    className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
-                  >
-                    £ Discount
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={addBagToBasket}
-                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
-                >
-                  +20p Bag
-                </button>
-              </div>
-            )}
-
-            <div className="space-y-1 text-sm">
-              {mode === 'exchange' && (
-                <div className="flex justify-between">
-                  <span className={mutedText}>Exchange credit</span>
-                  <span className="font-bold">−{money(exchangeCredit)}</span>
-                </div>
-              )}
-
-              <div className="flex justify-between">
-                <span className={mutedText}>Subtotal</span>
-                <span className="font-bold">{money(mode === 'refund' ? returnSubtotal : saleSubtotal)}</span>
-              </div>
-
-              <div className="flex justify-between">
-                <span className={mutedText}>Discount</span>
-                <span className="font-bold">−{money(totalDiscount)}</span>
-              </div>
-
-              <div className="flex justify-between">
-                <span className={mutedText}>Net</span>
-                <span className="font-bold">{money(netAmount)}</span>
-              </div>
-
-              <div className="flex justify-between">
-                <span className={mutedText}>VAT included at 20%</span>
-                <span className="font-bold">{money(vatAmount)}</span>
-              </div>
-
-              {mode === 'exchange' && refundDue > 0 && (
-                <div className="flex justify-between text-red-500">
-                  <span>Refund due</span>
-                  <span className="font-black">{money(refundDue)}</span>
-                </div>
-              )}
-
-              <div className="flex items-end justify-between pt-2">
-                <span className="text-lg font-black">
-                  {mode === 'refund' ? 'Refund total' : mode === 'exchange' ? 'Balance due' : 'Total'}
-                </span>
-                <span className="text-3xl font-black tracking-tight">{money(displayedTotal)}</span>
-              </div>
-            </div>
-
-            {mode === 'refund' ? (
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => completeSale('cash')}
-                  disabled={saleBusy}
-                  className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
-                >
-                  CASH REFUND
-                </button>
-                <button
-                  type="button"
-                  onClick={completeCardRefund}
-                  disabled={saleBusy}
-                  className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
-                >
-                  CARD REFUND
-                </button>
-              </div>
-            ) : mode === 'exchange' && refundDue > 0 ? (
-              <>
-                <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-800">
-                  Replacement item is cheaper. Refund the customer {money(refundDue)}.
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => completeSale('cash')}
-                    disabled={saleBusy}
-                    className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
-                  >
-                    CASH REFUND DIFFERENCE
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={completeCardRefund}
-                    disabled={saleBusy}
-                    className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
-                  >
-                    CARD REFUND DIFFERENCE
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (basket.length === 0) {
-                        setMessage('Basket is empty.')
-                        return
-                      }
-
-                      setPaymentMethod('cash')
-                      setCashPanelOpen(true)
-                    }}
-                    className={`rounded-xl py-4 text-xl font-black ${
-                      paymentMethod === 'cash'
-                        ? 'bg-green-300 text-black ring-4 ring-green-500/40'
-                        : 'bg-green-100 text-black'
-                    }`}
-                  >
-                    CASH <span className="text-2xl">💷</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={openCardPanel}
-                    className={`rounded-xl py-4 text-xl font-black ${
-                      paymentMethod === 'card'
-                        ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
-                        : 'bg-sky-100 text-black'
-                    }`}
-                  >
-                    <span className="inline-flex items-center justify-center gap-2">
-                      CARD
-                      <CardLogos />
-                    </span>
-                  </button>
-                </div>
-              </>
-            )}
-
-          </section>
-        </div>
-
-        {historyOpen && (
-          <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 p-3">
-            <div className="flex w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white text-neutral-950 shadow-2xl">
-              <div className="border-b border-neutral-200 p-4">
+          {activeView === 'transactions' ? (
+            <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
+              <div className="border-b border-neutral-200 p-3">
                 <div className="mb-3 flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-2xl font-black">POS Transactions</h2>
-                    <p className="text-sm font-semibold text-neutral-500">
-                      Search receipts, SKUs, Square IDs, then print, open receipt, refund or exchange.
-                    </p>
-                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setHistoryOpen(false)
-                      setTimeout(() => inputRef.current?.focus(), 50)
-                    }}
-                    className="rounded-lg bg-black px-4 py-2 text-sm font-black text-white"
-                  >
-                    Close
-                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
@@ -2543,11 +2233,330 @@ export default function CheckoutPage() {
                   </div>
                 )}
               </div>
+            </section>
+          ) : activeView === 'library' ? (
+            <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden p-6`}>
+              <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-neutral-300 bg-neutral-50 p-8 text-center">
+                <div>
+                  <h2 className="text-2xl font-black">Library</h2>
+                  <p className="mt-2 text-sm font-bold text-neutral-500">
+                    Library view coming soon. Checkout basket is still saved.
+                  </p>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <>
+          <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
+            <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-2">
+              <div>
+                <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
+                <p className="text-sm font-black">{totalItems} items</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => clearSale()}
+                className="rounded-full bg-red-500 px-4 py-2 text-sm font-black text-white"
+              >
+                Clear
+              </button>
             </div>
-          </div>
-        )}
 
+            <div className="grid max-h-[34vh] grid-cols-1 gap-2 overflow-auto p-2 sm:grid-cols-2 lg:grid-cols-4">
+              {basket.length === 0 ? (
+                <div className={`col-span-full rounded-xl p-8 text-center ${mutedText}`}>
+                  <p className="text-lg font-bold">No items scanned yet</p>
+                  <p className="text-sm">Scan SKU or receipt barcode.</p>
+                </div>
+              ) : (
+                basket.map((line) => {
+                  const key = line.originalLineId || line.sku
+                  const isSelected = selectedSku === key
+                  const maxRefund = Number(line.maxRefundQuantity || 0)
 
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSelectedSku(isSelected ? '' : key)}
+                      className={`w-full rounded-lg p-2 text-left ${
+                        isSelected
+                          ? 'bg-emerald-100 ring-2 ring-emerald-400'
+                          : 'bg-neutral-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-neutral-200">
+                          {line.thumbnailUrl ? (
+                            <img
+                              src={line.thumbnailUrl}
+                              alt={line.sku}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-neutral-400">
+                              NO IMG
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-black">
+                                {line.brand || 'Unknown Brand'}
+                              </p>
+                              <p className={`truncate text-xs ${mutedText}`}>
+                                {[line.category, line.subType, line.colour].filter(Boolean).join(' · ') || line.title}
+                              </p>
+                              <p className={`truncate text-[11px] ${mutedText}`}>{line.sku}</p>
+                            </div>
+
+                            <div className="shrink-0 text-right">
+                              <p className="text-sm font-black">
+                                {line.isReturnLine ? '-' : ''}
+                                {money(line.price * line.quantity)}
+                              </p>
+                              <p className={`text-[11px] ${mutedText}`}>{money(line.price)} each</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <div className="flex items-center rounded-full border border-neutral-300">
+                              <span
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  updateQty(line, line.quantity - 1)
+                                }}
+                                className="px-2 py-1 text-base font-black"
+                              >
+                                −
+                              </span>
+                              <span className="min-w-7 text-center text-sm font-black">{line.quantity}</span>
+                              <span
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  updateQty(line, line.quantity + 1)
+                                }}
+                                className="px-2 py-1 text-base font-black"
+                              >
+                                +
+                              </span>
+                            </div>
+
+                            {line.isReturnLine && (
+                              <span className={`text-xs font-bold ${mutedText}`}>Max {maxRefund}</span>
+                            )}
+
+                            {line.lineDiscountPercent > 0 && (
+                              <span className="text-xs font-black text-emerald-600">
+                                {line.lineDiscountPercent}% off
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          </section>
+
+          <section className={`${panelClass} sticky bottom-0 z-20 p-3`}>
+            {mode === 'sale' && (
+              <div className="mb-3 grid grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  onClick={() => applyPercentDiscount(5)}
+                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
+                >
+                  5% off
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => applyPercentDiscount(10)}
+                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
+                >
+                  10% off
+                </button>
+
+                {manualDiscountOpen ? (
+                  <div className="flex overflow-hidden rounded-lg border border-neutral-300 bg-white">
+                    <input
+                      value={manualDiscountPercent}
+                      onChange={(event) => setManualDiscountPercent(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') applyManualDiscount()
+                      }}
+                      placeholder="£"
+                      inputMode="decimal"
+                      className="min-w-0 flex-1 px-2 py-3 text-center text-sm font-black outline-none"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={applyManualDiscount}
+                      className="bg-black px-2 text-xs font-black text-white"
+                    >
+                      OK
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setManualDiscountOpen(true)}
+                    className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
+                  >
+                    £ Discount
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={addBagToBasket}
+                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
+                >
+                  +20p Bag
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-1 text-sm">
+              {mode === 'exchange' && (
+                <div className="flex justify-between">
+                  <span className={mutedText}>Exchange credit</span>
+                  <span className="font-bold">−{money(exchangeCredit)}</span>
+                </div>
+              )}
+
+              <div className="flex justify-between">
+                <span className={mutedText}>Subtotal</span>
+                <span className="font-bold">{money(mode === 'refund' ? returnSubtotal : saleSubtotal)}</span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className={mutedText}>Discount</span>
+                <span className="font-bold">−{money(totalDiscount)}</span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className={mutedText}>Net</span>
+                <span className="font-bold">{money(netAmount)}</span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className={mutedText}>VAT included at 20%</span>
+                <span className="font-bold">{money(vatAmount)}</span>
+              </div>
+
+              {mode === 'exchange' && refundDue > 0 && (
+                <div className="flex justify-between text-red-500">
+                  <span>Refund due</span>
+                  <span className="font-black">{money(refundDue)}</span>
+                </div>
+              )}
+
+              <div className="flex items-end justify-between pt-2">
+                <span className="text-lg font-black">
+                  {mode === 'refund' ? 'Refund total' : mode === 'exchange' ? 'Balance due' : 'Total'}
+                </span>
+                <span className="text-3xl font-black tracking-tight">{money(displayedTotal)}</span>
+              </div>
+            </div>
+
+            {mode === 'refund' ? (
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => completeSale('cash')}
+                  disabled={saleBusy}
+                  className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                >
+                  CASH REFUND
+                </button>
+                <button
+                  type="button"
+                  onClick={completeCardRefund}
+                  disabled={saleBusy}
+                  className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                >
+                  CARD REFUND
+                </button>
+              </div>
+            ) : mode === 'exchange' && refundDue > 0 ? (
+              <>
+                <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-800">
+                  Replacement item is cheaper. Refund the customer {money(refundDue)}.
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => completeSale('cash')}
+                    disabled={saleBusy}
+                    className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  >
+                    CASH REFUND DIFFERENCE
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={completeCardRefund}
+                    disabled={saleBusy}
+                    className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  >
+                    CARD REFUND DIFFERENCE
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (basket.length === 0) {
+                        setMessage('Basket is empty.')
+                        return
+                      }
+
+                      setPaymentMethod('cash')
+                      setCashPanelOpen(true)
+                    }}
+                    className={`rounded-xl py-4 text-xl font-black ${
+                      paymentMethod === 'cash'
+                        ? 'bg-green-300 text-black ring-4 ring-green-500/40'
+                        : 'bg-green-100 text-black'
+                    }`}
+                  >
+                    CASH <span className="text-2xl">💷</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={openCardPanel}
+                    className={`rounded-xl py-4 text-xl font-black ${
+                      paymentMethod === 'card'
+                        ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
+                        : 'bg-sky-100 text-black'
+                    }`}
+                  >
+                    <span className="inline-flex items-center justify-center gap-2">
+                      CARD
+                      <CardLogos />
+                    </span>
+                  </button>
+                </div>
+              </>
+            )}
+
+          </section>
+
+            </>
+          )
+        </div>
 
         {cashPanelOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
