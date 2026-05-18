@@ -229,6 +229,7 @@ function CardLogos() {
 
 export default function CheckoutPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const historyInputRef = useRef<HTMLInputElement | null>(null)
   const scannerBufferRef = useRef('')
   const scannerTimerRef = useRef<number | null>(null)
   const retryingRef = useRef(false)
@@ -541,6 +542,15 @@ export default function CheckoutPage() {
   function signOutStaff() {
     clearStaff()
     window.location.href = '/staff?next=/checkout?pos_app=1'
+  }
+
+  function openKeypadForCurrentView() {
+    if (activeView === 'transactions') {
+      historyInputRef.current?.focus()
+      return
+    }
+
+    setManualEntryOpen(true)
   }
 
   async function getThumbnailUrl(itemId: string) {
@@ -1808,7 +1818,7 @@ export default function CheckoutPage() {
                     setTimeout(() => inputRef.current?.focus(), 50)
                   }}
                   className={`rounded-lg px-4 py-3 text-lg font-black ${
-                    !historyOpen ? 'bg-white text-black shadow-sm' : 'bg-neutral-300 text-neutral-700'
+                    activeView === 'checkout' ? 'bg-white text-black shadow-sm' : 'bg-neutral-300 text-neutral-700'
                   }`}
                 >
                   Checkout
@@ -1818,7 +1828,7 @@ export default function CheckoutPage() {
                   type="button"
                   onClick={openHistory}
                   className={`rounded-lg px-4 py-3 text-lg font-black ${
-                    historyOpen ? 'bg-white text-black shadow-sm' : 'bg-neutral-300 text-neutral-700'
+                    activeView === 'transactions' ? 'bg-white text-black shadow-sm' : 'bg-neutral-300 text-neutral-700'
                   }`}
                 >
                   Transactions
@@ -1883,7 +1893,7 @@ export default function CheckoutPage() {
 
               <button
                 type="button"
-                onClick={() => setManualEntryOpen(true)}
+                onClick={openKeypadForCurrentView}
                 className="rounded-lg bg-neutral-900 px-5 py-3 text-xl font-black text-white"
                 aria-label="Open keypad"
                 title="Keypad"
@@ -1908,12 +1918,13 @@ export default function CheckoutPage() {
 
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
                   <input
+                    ref={historyInputRef}
                     value={historyQuery}
                     onChange={(event) => setHistoryQuery(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') fetchHistory()
                     }}
-                    placeholder="Receipt / SKU / Square ID"
+                    placeholder="Scan / Receipt / SKU / Square ID"
                     className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black md:col-span-2"
                   />
 
