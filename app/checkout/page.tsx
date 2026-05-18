@@ -321,7 +321,7 @@ export default function CheckoutPage() {
   const changeDue = Math.max(0, (Number(cashTendered) || 0) - displayedTotal)
   const selectedLine = basket.find((line) => (line.originalLineId || line.sku) === selectedSku)
 
-  const pageClass = 'min-h-screen bg-neutral-100 text-neutral-950'
+  const pageClass = 'h-screen overflow-hidden bg-neutral-100 text-neutral-950'
   const panelClass = 'rounded-xl border border-neutral-200 bg-white shadow-sm'
   const mutedText = 'text-neutral-500'
   const inputClass =
@@ -1828,8 +1828,8 @@ export default function CheckoutPage() {
   return (
     <StaffPermissionGate permission="checkout">
       <main className={pageClass}>
-        <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-2 p-2 sm:p-3">
-          <section className={`${panelClass} p-3`}>
+        <div className="mx-auto flex h-screen max-w-5xl flex-col gap-2 overflow-hidden p-2 sm:p-3">
+          <section className={`${panelClass} shrink-0 p-3`}>
             <div className="mb-3 rounded-xl bg-neutral-200 p-1">
               <div className="grid grid-cols-3 gap-1">
                 <button
@@ -1933,7 +1933,7 @@ export default function CheckoutPage() {
 
           {activeView === 'transactions' ? (
             <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
-              <div className="border-b border-neutral-200 p-3">
+              <div className="shrink-0 border-b border-neutral-200 p-3">
                 <div className="mb-3 flex items-start justify-between gap-3">
 
                 </div>
@@ -2010,7 +2010,7 @@ export default function CheckoutPage() {
                 )}
               </div>
 
-              <div className="flex-1 overflow-auto p-3">
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
                 {historySales.length === 0 ? (
                   <div className="rounded-xl p-8 text-center text-neutral-500">
                     <p className="text-lg font-bold">No transactions loaded</p>
@@ -2386,7 +2386,7 @@ export default function CheckoutPage() {
             </div>
           </section>
 
-          <section className={`${panelClass} sticky bottom-0 z-20 p-3`}>
+          <section className={`${panelClass} shrink-0 p-3`}>
             {mode === 'sale' && (
               <div className="mb-3 grid grid-cols-4 gap-2">
                 <button
