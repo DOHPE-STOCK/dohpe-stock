@@ -2555,7 +2555,7 @@ export default function CheckoutPage() {
           </section>
 
             </>
-          )
+          )}
         </div>
 
         {cashPanelOpen && (
