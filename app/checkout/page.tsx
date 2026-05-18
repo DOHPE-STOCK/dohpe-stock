@@ -228,6 +228,8 @@ function CardLogos() {
 
 export default function CheckoutPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const scannerBufferRef = useRef('')
+  const scannerTimerRef = useRef<number | null>(null)
   const retryingRef = useRef(false)
   const paymentResultTimerRef = useRef<number | null>(null)
   const { staff, clearStaff } = useStaff()
@@ -251,6 +253,9 @@ export default function CheckoutPage() {
   const [manualTitle, setManualTitle] = useState('')
   const [manualPrice, setManualPrice] = useState('')
   const [manualQty, setManualQty] = useState('1')
+  const [manualDiscountOpen, setManualDiscountOpen] = useState(false)
+  const [manualDiscountPercent, setManualDiscountPercent] = useState('')
+  const [cashPanelOpen, setCashPanelOpen] = useState(false)
   const [cardPanelOpen, setCardPanelOpen] = useState(false)
   const [cardPanelState, setCardPanelState] = useState<CardPanelState>('options')
   const [cardPanelMessage, setCardPanelMessage] = useState('')
@@ -324,6 +329,10 @@ export default function CheckoutPage() {
     return () => {
       if (paymentResultTimerRef.current) {
         window.clearTimeout(paymentResultTimerRef.current)
+      }
+
+      if (scannerTimerRef.current) {
+        window.clearTimeout(scannerTimerRef.current)
       }
     }
   }, [])
@@ -699,7 +708,7 @@ export default function CheckoutPage() {
 
       const sales = Array.isArray(data.sales) ? data.sales : []
       setHistorySales(sales)
-      setExpandedHistorySaleId(sales[0]?.id || '')
+      setExpandedHistorySaleId('')
 
       if (sales.length === 0) {
         setHistoryMessage('No sales found.')
@@ -810,6 +819,52 @@ export default function CheckoutPage() {
     }
   }
 
+  useEffect(() => {
+    function handleGlobalScanner(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      const tagName = target?.tagName?.toLowerCase()
+
+      if (
+        tagName === 'input' ||
+        tagName === 'textarea' ||
+        tagName === 'select' ||
+        target?.isContentEditable
+      ) {
+        return
+      }
+
+      if (event.key === 'Enter') {
+        const buffered = scannerBufferRef.current.trim()
+        scannerBufferRef.current = ''
+
+        if (buffered.length >= 3) {
+          event.preventDefault()
+          addScannedSku(buffered)
+        }
+
+        return
+      }
+
+      if (event.key.length !== 1) return
+
+      scannerBufferRef.current += event.key
+
+      if (scannerTimerRef.current) {
+        window.clearTimeout(scannerTimerRef.current)
+      }
+
+      scannerTimerRef.current = window.setTimeout(() => {
+        scannerBufferRef.current = ''
+      }, 250)
+    }
+
+    window.addEventListener('keydown', handleGlobalScanner)
+
+    return () => {
+      window.removeEventListener('keydown', handleGlobalScanner)
+    }
+  })
+
   function hasLineDiscounts() {
     return basket.some((line) => !line.isReturnLine && line.lineDiscountPercent > 0)
   }
@@ -853,6 +908,19 @@ export default function CheckoutPage() {
     setMessage(`${percent}% discount applied to whole basket.`)
   }
 
+  function applyManualDiscount() {
+    const percent = Number(manualDiscountPercent)
+
+    if (!Number.isFinite(percent) || percent <= 0 || percent >= 100) {
+      setMessage('Enter a valid discount percentage.')
+      return
+    }
+
+    applyPercentDiscount(percent)
+    setManualDiscountOpen(false)
+    setManualDiscountPercent('')
+  }
+
   function updateQty(line: BasketLine, nextQty: number) {
     if (line.isReturnLine) {
       const max = Number(line.maxRefundQuantity || 0)
@@ -881,6 +949,7 @@ export default function CheckoutPage() {
 
   function closeCardPanel() {
     setCardPanelOpen(false)
+    setCashPanelOpen(false)
     setCardPanelState('options')
     setCardPanelMessage('')
     setPaymentMethod(null)
@@ -1697,53 +1766,61 @@ export default function CheckoutPage() {
       <main className={pageClass}>
         <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 p-3 sm:p-5">
           <section className={`${panelClass} p-4`}>
-            <div className="mb-3 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setHistoryOpen(false)
-                  setTimeout(() => inputRef.current?.focus(), 50)
-                }}
-                className={`rounded-2xl px-4 py-3 text-sm font-black ${
-                  !historyOpen ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-500'
-                }`}
-              >
-                Checkout
-              </button>
+            <div className="mb-3 rounded-[1.6rem] bg-neutral-100 p-1">
+              <div className="grid grid-cols-3 gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryOpen(false)
+                    setTimeout(() => inputRef.current?.focus(), 50)
+                  }}
+                  className={`rounded-[1.3rem] px-4 py-3 text-lg font-black ${
+                    !historyOpen ? 'bg-white text-black shadow-sm' : 'text-neutral-500'
+                  }`}
+                >
+                  Checkout
+                </button>
 
-              <button
-                type="button"
-                onClick={openHistory}
-                className={`rounded-2xl px-4 py-3 text-sm font-black ${
-                  historyOpen ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-500'
-                }`}
-              >
-                Transactions
-              </button>
+                <button
+                  type="button"
+                  onClick={openHistory}
+                  className={`rounded-[1.3rem] px-4 py-3 text-lg font-black ${
+                    historyOpen ? 'bg-white text-black shadow-sm' : 'text-neutral-500'
+                  }`}
+                >
+                  Transactions
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMessage('Library view coming soon.')}
+                  className="rounded-[1.3rem] px-4 py-3 text-lg font-black text-neutral-500"
+                >
+                  Library
+                </button>
+              </div>
             </div>
 
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={openLocationEditor}
                 className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-xs font-black uppercase"
               >
-                Shop: {checkoutLocation || 'SHOP-1'}
+                {checkoutLocation || 'SHOP-1'}
               </button>
 
-              <div className="flex items-center gap-2">
-                <div className="rounded-xl bg-neutral-100 px-3 py-2 text-xs font-black">
-                  {staff?.name ? `Pinned: ${staff.name}` : 'No staff pinned'}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={signOutStaff}
-                  className="rounded-xl bg-neutral-900 px-3 py-2 text-xs font-black text-white"
-                >
-                  Log out
-                </button>
+              <div className="rounded-xl bg-neutral-100 px-3 py-2 text-xs font-black">
+                {staff?.name ? `Pinned: ${staff.name}` : 'No staff pinned'}
               </div>
+
+              <button
+                type="button"
+                onClick={signOutStaff}
+                className="rounded-xl bg-neutral-900 px-3 py-2 text-xs font-black text-white"
+              >
+                Log out
+              </button>
             </div>
 
             <form
@@ -1770,27 +1847,17 @@ export default function CheckoutPage() {
               >
                 Add
               </button>
+
+              <button
+                type="button"
+                onClick={() => setManualEntryOpen(true)}
+                className="rounded-2xl bg-neutral-900 px-5 py-3 text-xl font-black text-white"
+                aria-label="Open keypad"
+                title="Keypad"
+              >
+                ⌨
+              </button>
             </form>
-
-            {mode !== 'refund' && (
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setManualEntryOpen(true)}
-                  className="rounded-2xl bg-neutral-900 px-4 py-3 text-sm font-black text-white"
-                >
-                  + Manual / Keypad
-                </button>
-
-                <button
-                  type="button"
-                  onClick={addBagToBasket}
-                  className="rounded-2xl bg-neutral-900 px-4 py-3 text-sm font-black text-white"
-                >
-                  + 20p Bag
-                </button>
-              </div>
-            )}
 
             {message && (
               <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-semibold">
@@ -1917,20 +1984,60 @@ export default function CheckoutPage() {
 
           <section className={`${panelClass} p-4`}>
             {mode === 'sale' && (
-              <div className="mb-3 grid grid-cols-2 gap-2">
+              <div className="mb-3 grid grid-cols-4 gap-2">
                 <button
                   type="button"
                   onClick={() => applyPercentDiscount(5)}
-                  className="rounded-2xl border border-neutral-300 py-3 font-black"
+                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
                 >
                   5% off
                 </button>
+
                 <button
                   type="button"
                   onClick={() => applyPercentDiscount(10)}
-                  className="rounded-2xl border border-neutral-300 py-3 font-black"
+                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
                 >
                   10% off
+                </button>
+
+                {manualDiscountOpen ? (
+                  <div className="flex overflow-hidden rounded-2xl border border-neutral-300 bg-white">
+                    <input
+                      value={manualDiscountPercent}
+                      onChange={(event) => setManualDiscountPercent(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') applyManualDiscount()
+                      }}
+                      placeholder="%"
+                      inputMode="decimal"
+                      className="min-w-0 flex-1 px-2 py-3 text-center text-sm font-black outline-none"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={applyManualDiscount}
+                      className="bg-black px-2 text-xs font-black text-white"
+                    >
+                      OK
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setManualDiscountOpen(true)}
+                    className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                  >
+                    Manual Discount
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={addBagToBasket}
+                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                >
+                  +20p Bag
                 </button>
               </div>
             )}
@@ -2028,7 +2135,15 @@ export default function CheckoutPage() {
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <button
                     type="button"
-                    onClick={() => setPaymentMethod('cash')}
+                    onClick={() => {
+                      if (basket.length === 0) {
+                        setMessage('Basket is empty.')
+                        return
+                      }
+
+                      setPaymentMethod('cash')
+                      setCashPanelOpen(true)
+                    }}
                     className={`rounded-3xl py-4 text-xl font-black ${
                       paymentMethod === 'cash'
                         ? 'bg-green-300 text-black ring-4 ring-green-500/40'
@@ -2053,101 +2168,9 @@ export default function CheckoutPage() {
                     </span>
                   </button>
                 </div>
-
-                {paymentMethod === 'cash' && displayedTotal > 0 && (
-                  <div className="mt-4 space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        value={cashTendered}
-                        onChange={(event) => setCashTendered(event.target.value)}
-                        placeholder="Cash tendered"
-                        className={inputClass}
-                        inputMode="decimal"
-                      />
-                      <div className="rounded-2xl bg-neutral-100 p-3 text-right">
-                        <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
-                        <p className="text-2xl font-black">{money(changeDue)}</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                      {getCashSuggestions().map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => setSuggestedCash(value)}
-                          className="rounded-2xl border border-neutral-300 bg-white px-3 py-3 text-sm font-black"
-                        >
-                          {value === Number(displayedTotal.toFixed(2)) ? 'Exact ' : ''}
-                          {money(value)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  disabled={!paymentMethod || basket.length === 0 || saleBusy}
-                  onClick={() => {
-                    if (paymentMethod === 'card') {
-                      openCardPanel()
-                      return
-                    }
-
-                    if (paymentMethod === 'cash') {
-                      completeSale('cash')
-                    }
-                  }}
-                  className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-2xl font-black text-black disabled:opacity-40"
-                >
-                  {saleBusy
-                    ? 'Saving…'
-                    : mode === 'exchange'
-                      ? 'Complete Exchange'
-                      : paymentMethod === 'cash'
-                        ? 'Complete Cash Sale'
-                        : paymentMethod === 'card'
-                          ? 'Continue Card Payment'
-                          : 'Select Payment'}
-                </button>
               </>
             )}
 
-            {mode === 'refund' && (
-              <div className="mt-3 flex justify-center">
-                <button
-                  type="button"
-                  onClick={beginExchange}
-                  disabled={saleBusy}
-                  className="text-xs font-black text-amber-700 underline disabled:opacity-40"
-                >
-                  Exchange instead
-                </button>
-              </div>
-            )}
-
-            <div className="mt-4 flex justify-center gap-4">
-              <button
-                type="button"
-                onClick={openHistory}
-                className="text-xs font-bold text-black underline"
-              >
-                History
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const receipt = window.prompt('Scan or enter receipt barcode')
-                  if (!receipt) return
-                  loadSaleForRefund(receipt.trim().toUpperCase())
-                }}
-                className="text-xs font-bold text-red-500 underline"
-              >
-                Refund / exchange receipt
-              </button>
-            </div>
           </section>
         </div>
 
@@ -2259,8 +2282,8 @@ export default function CheckoutPage() {
               <div className="flex-1 overflow-auto p-3">
                 {historySales.length === 0 ? (
                   <div className="rounded-3xl p-8 text-center text-neutral-500">
-                    <p className="text-lg font-bold">No history loaded</p>
-                    <p className="text-sm">Use search or reset to load recent transaction activity.</p>
+                    <p className="text-lg font-bold">No transactions loaded</p>
+                    <p className="text-sm">Search or reset to load recent transactions.</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -2321,9 +2344,9 @@ export default function CheckoutPage() {
                                 <p className="text-xs font-bold text-neutral-500">
                                   Refundable lines: {remainingRefundable}
                                 </p>
-                                <p className="text-xs font-bold text-neutral-500">
-                                  {expanded ? 'Hide' : 'Open'}
-                                </p>
+                                <span className="mt-2 inline-flex rounded-xl bg-black px-4 py-2 text-xs font-black text-white">
+                                  {expanded ? 'Close' : 'Open'}
+                                </span>
                               </div>
                             </div>
                           </button>
@@ -2506,6 +2529,69 @@ export default function CheckoutPage() {
           </div>
         )}
 
+
+
+        {cashPanelOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+              <h2 className="text-2xl font-black">Cash Payment</h2>
+              <p className="mt-1 text-sm font-bold text-neutral-500">
+                Total due: {money(displayedTotal)}
+              </p>
+
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <input
+                  value={cashTendered}
+                  onChange={(event) => setCashTendered(event.target.value)}
+                  placeholder="Cash tendered"
+                  className={inputClass}
+                  inputMode="decimal"
+                  autoFocus
+                />
+
+                <div className="rounded-2xl bg-neutral-100 p-3 text-right">
+                  <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
+                  <p className="text-2xl font-black">{money(changeDue)}</p>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {getCashSuggestions().map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setSuggestedCash(value)}
+                    className="rounded-2xl border border-neutral-300 bg-white px-3 py-3 text-sm font-black"
+                  >
+                    {value === Number(displayedTotal.toFixed(2)) ? 'Exact ' : ''}
+                    {money(value)}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                disabled={saleBusy || basket.length === 0 || Number(cashTendered || 0) < displayedTotal}
+                onClick={() => completeSale('cash')}
+                className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-xl font-black text-black disabled:opacity-40"
+              >
+                {saleBusy ? 'Saving…' : 'Complete Cash Sale'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCashPanelOpen(false)
+                  setTimeout(() => inputRef.current?.focus(), 50)
+                }}
+                disabled={saleBusy}
+                className="mt-3 w-full rounded-2xl border border-neutral-300 py-4 text-sm font-black disabled:opacity-40"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {locationEditorOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
