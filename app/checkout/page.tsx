@@ -240,6 +240,7 @@ export default function CheckoutPage() {
   const [selectedSku, setSelectedSku] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(null)
   const [basketDiscountPercent, setBasketDiscountPercent] = useState(0)
+  const [basketDiscountFixedAmount, setBasketDiscountFixedAmount] = useState(0)
   const [cashTendered, setCashTendered] = useState('')
   const [message, setMessage] = useState('')
   const [saleBusy, setSaleBusy] = useState(false)
@@ -252,7 +253,7 @@ export default function CheckoutPage() {
   const [manualEntryOpen, setManualEntryOpen] = useState(false)
   const [manualTitle, setManualTitle] = useState('')
   const [manualPrice, setManualPrice] = useState('')
-  const [manualQty, setManualQty] = useState('1')
+  const [manualQty, setManualQty] = useState('')
   const [manualDiscountOpen, setManualDiscountOpen] = useState(false)
   const [manualDiscountPercent, setManualDiscountPercent] = useState('')
   const [cashPanelOpen, setCashPanelOpen] = useState(false)
@@ -295,7 +296,10 @@ export default function CheckoutPage() {
   }, [saleLines])
 
   const basketPercentDiscountAmount = saleSubtotal * (basketDiscountPercent / 100)
-  const totalDiscount = Math.min(saleSubtotal, lineDiscountTotal + basketPercentDiscountAmount)
+  const totalDiscount = Math.min(
+    saleSubtotal,
+    lineDiscountTotal + basketPercentDiscountAmount + basketDiscountFixedAmount
+  )
 
   const total =
     mode === 'refund'
@@ -316,10 +320,10 @@ export default function CheckoutPage() {
   const selectedLine = basket.find((line) => (line.originalLineId || line.sku) === selectedSku)
 
   const pageClass = 'min-h-screen bg-neutral-100 text-neutral-950'
-  const panelClass = 'rounded-3xl border border-neutral-200 bg-white shadow-xl'
+  const panelClass = 'rounded-xl border border-neutral-200 bg-white shadow-sm'
   const mutedText = 'text-neutral-500'
   const inputClass =
-    'w-full rounded-2xl border border-neutral-300 bg-white px-4 py-4 text-xl font-semibold outline-none focus:border-black'
+    'w-full rounded-lg border border-neutral-300 bg-white px-4 py-4 text-xl font-semibold outline-none focus:border-black'
 
   useEffect(() => {
     setCheckoutLocation(getSavedCheckoutLocation())
@@ -526,7 +530,7 @@ export default function CheckoutPage() {
 
     setManualTitle('')
     setManualPrice('')
-    setManualQty('1')
+    setManualQty('')
     setManualEntryOpen(false)
     setMessage('Manual item added.')
     setTimeout(() => inputRef.current?.focus(), 50)
@@ -876,7 +880,7 @@ export default function CheckoutPage() {
     }
 
     if (selectedLine && !selectedLine.isReturnLine) {
-      if (basketDiscountPercent > 0) {
+      if (basketDiscountPercent > 0 || basketDiscountFixedAmount > 0) {
         setMessage('Remove the basket discount before applying an item discount.')
         return
       }
@@ -893,7 +897,7 @@ export default function CheckoutPage() {
       return
     }
 
-    if (hasLineDiscounts()) {
+    if (hasLineDiscounts() || basketDiscountFixedAmount > 0) {
       setMessage('Remove item discounts before applying a whole basket discount.')
       return
     }
@@ -909,16 +913,29 @@ export default function CheckoutPage() {
   }
 
   function applyManualDiscount() {
-    const percent = Number(manualDiscountPercent)
+    const amount = Number(manualDiscountPercent)
 
-    if (!Number.isFinite(percent) || percent <= 0 || percent >= 100) {
-      setMessage('Enter a valid discount percentage.')
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage('Enter a valid discount amount.')
       return
     }
 
-    applyPercentDiscount(percent)
+    if (selectedLine && !selectedLine.isReturnLine) {
+      setMessage('Manual £ discount is for the whole basket. Use 5% or 10% for selected item discounts.')
+      return
+    }
+
+    if (hasLineDiscounts() || basketDiscountPercent > 0) {
+      setMessage('Remove item/percentage discounts before applying a manual £ discount.')
+      return
+    }
+
+    const safeAmount = Math.min(saleSubtotal, amount)
+
+    setBasketDiscountFixedAmount(safeAmount)
     setManualDiscountOpen(false)
     setManualDiscountPercent('')
+    setMessage(`${money(safeAmount)} discount applied to whole basket.`)
   }
 
   function updateQty(line: BasketLine, nextQty: number) {
@@ -961,6 +978,7 @@ export default function CheckoutPage() {
     setSelectedSku('')
     setPaymentMethod(null)
     setBasketDiscountPercent(0)
+    setBasketDiscountFixedAmount(0)
     setCashTendered('')
     setMessage('')
     setOriginalSale(null)
@@ -1764,9 +1782,9 @@ export default function CheckoutPage() {
   return (
     <StaffPermissionGate permission="checkout">
       <main className={pageClass}>
-        <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 p-3 sm:p-5">
-          <section className={`${panelClass} p-4`}>
-            <div className="mb-3 rounded-[1.6rem] bg-neutral-100 p-1">
+        <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-2 p-2 sm:p-3">
+          <section className={`${panelClass} p-3`}>
+            <div className="mb-3 rounded-xl bg-neutral-200 p-1">
               <div className="grid grid-cols-3 gap-1">
                 <button
                   type="button"
@@ -1774,8 +1792,8 @@ export default function CheckoutPage() {
                     setHistoryOpen(false)
                     setTimeout(() => inputRef.current?.focus(), 50)
                   }}
-                  className={`rounded-[1.3rem] px-4 py-3 text-lg font-black ${
-                    !historyOpen ? 'bg-white text-black shadow-sm' : 'text-neutral-500'
+                  className={`rounded-lg px-4 py-3 text-lg font-black ${
+                    !historyOpen ? 'bg-white text-black shadow-sm' : 'bg-neutral-300 text-neutral-700'
                   }`}
                 >
                   Checkout
@@ -1784,8 +1802,8 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={openHistory}
-                  className={`rounded-[1.3rem] px-4 py-3 text-lg font-black ${
-                    historyOpen ? 'bg-white text-black shadow-sm' : 'text-neutral-500'
+                  className={`rounded-lg px-4 py-3 text-lg font-black ${
+                    historyOpen ? 'bg-white text-black shadow-sm' : 'bg-neutral-300 text-neutral-700'
                   }`}
                 >
                   Transactions
@@ -1794,7 +1812,7 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={() => setMessage('Library view coming soon.')}
-                  className="rounded-[1.3rem] px-4 py-3 text-lg font-black text-neutral-500"
+                  className="rounded-lg bg-neutral-300 px-4 py-3 text-lg font-black text-neutral-700"
                 >
                   Library
                 </button>
@@ -1843,7 +1861,7 @@ export default function CheckoutPage() {
               <button
                 type="submit"
                 disabled={!scanValue.trim() || Boolean(loadingSku)}
-                className="rounded-2xl bg-black px-5 py-3 font-black text-white disabled:opacity-40"
+                className="rounded-lg bg-black px-5 py-3 font-black text-white disabled:opacity-40"
               >
                 Add
               </button>
@@ -1851,7 +1869,7 @@ export default function CheckoutPage() {
               <button
                 type="button"
                 onClick={() => setManualEntryOpen(true)}
-                className="rounded-2xl bg-neutral-900 px-5 py-3 text-xl font-black text-white"
+                className="rounded-lg bg-neutral-900 px-5 py-3 text-xl font-black text-white"
                 aria-label="Open keypad"
                 title="Keypad"
               >
@@ -1860,17 +1878,17 @@ export default function CheckoutPage() {
             </form>
 
             {message && (
-              <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-semibold">
+              <div className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm font-semibold">
                 {message}
               </div>
             )}
           </section>
 
-          <section className={`${panelClass} flex flex-1 flex-col overflow-hidden`}>
-            <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+          <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
+            <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-2">
               <div>
                 <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Basket</p>
-                <p className="text-base font-black">{totalItems} items</p>
+                <p className="text-sm font-black">{totalItems} items</p>
               </div>
               <button
                 type="button"
@@ -1881,9 +1899,9 @@ export default function CheckoutPage() {
               </button>
             </div>
 
-            <div className="flex-1 space-y-2 overflow-auto p-2">
+            <div className="grid max-h-[34vh] grid-cols-1 gap-2 overflow-auto p-2 sm:grid-cols-2 lg:grid-cols-4">
               {basket.length === 0 ? (
-                <div className={`rounded-3xl p-8 text-center ${mutedText}`}>
+                <div className={`col-span-full rounded-xl p-8 text-center ${mutedText}`}>
                   <p className="text-lg font-bold">No items scanned yet</p>
                   <p className="text-sm">Scan SKU or receipt barcode.</p>
                 </div>
@@ -1898,14 +1916,14 @@ export default function CheckoutPage() {
                       key={key}
                       type="button"
                       onClick={() => setSelectedSku(isSelected ? '' : key)}
-                      className={`w-full rounded-2xl p-2 text-left ${
+                      className={`w-full rounded-lg p-2 text-left ${
                         isSelected
                           ? 'bg-emerald-100 ring-2 ring-emerald-400'
                           : 'bg-neutral-100'
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-neutral-200">
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-neutral-200">
                           {line.thumbnailUrl ? (
                             <img
                               src={line.thumbnailUrl}
@@ -1932,7 +1950,7 @@ export default function CheckoutPage() {
                             </div>
 
                             <div className="shrink-0 text-right">
-                              <p className="text-base font-black">
+                              <p className="text-sm font-black">
                                 {line.isReturnLine ? '-' : ''}
                                 {money(line.price * line.quantity)}
                               </p>
@@ -1947,17 +1965,17 @@ export default function CheckoutPage() {
                                   event.stopPropagation()
                                   updateQty(line, line.quantity - 1)
                                 }}
-                                className="px-3 py-1 text-lg font-black"
+                                className="px-2 py-1 text-base font-black"
                               >
                                 −
                               </span>
-                              <span className="min-w-8 text-center text-sm font-black">{line.quantity}</span>
+                              <span className="min-w-7 text-center text-sm font-black">{line.quantity}</span>
                               <span
                                 onClick={(event) => {
                                   event.stopPropagation()
                                   updateQty(line, line.quantity + 1)
                                 }}
-                                className="px-3 py-1 text-lg font-black"
+                                className="px-2 py-1 text-base font-black"
                               >
                                 +
                               </span>
@@ -1982,13 +2000,13 @@ export default function CheckoutPage() {
             </div>
           </section>
 
-          <section className={`${panelClass} p-4`}>
+          <section className={`${panelClass} sticky bottom-0 z-20 p-3`}>
             {mode === 'sale' && (
               <div className="mb-3 grid grid-cols-4 gap-2">
                 <button
                   type="button"
                   onClick={() => applyPercentDiscount(5)}
-                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
                 >
                   5% off
                 </button>
@@ -1996,20 +2014,20 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={() => applyPercentDiscount(10)}
-                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
                 >
                   10% off
                 </button>
 
                 {manualDiscountOpen ? (
-                  <div className="flex overflow-hidden rounded-2xl border border-neutral-300 bg-white">
+                  <div className="flex overflow-hidden rounded-lg border border-neutral-300 bg-white">
                     <input
                       value={manualDiscountPercent}
                       onChange={(event) => setManualDiscountPercent(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') applyManualDiscount()
                       }}
-                      placeholder="%"
+                      placeholder="£"
                       inputMode="decimal"
                       className="min-w-0 flex-1 px-2 py-3 text-center text-sm font-black outline-none"
                       autoFocus
@@ -2026,16 +2044,16 @@ export default function CheckoutPage() {
                   <button
                     type="button"
                     onClick={() => setManualDiscountOpen(true)}
-                    className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                    className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
                   >
-                    Manual Discount
+                    £ Discount
                   </button>
                 )}
 
                 <button
                   type="button"
                   onClick={addBagToBasket}
-                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
                 >
                   +20p Bag
                 </button>
@@ -2081,7 +2099,7 @@ export default function CheckoutPage() {
                 <span className="text-lg font-black">
                   {mode === 'refund' ? 'Refund total' : mode === 'exchange' ? 'Balance due' : 'Total'}
                 </span>
-                <span className="text-4xl font-black tracking-tight">{money(displayedTotal)}</span>
+                <span className="text-3xl font-black tracking-tight">{money(displayedTotal)}</span>
               </div>
             </div>
 
@@ -2091,7 +2109,7 @@ export default function CheckoutPage() {
                   type="button"
                   onClick={() => completeSale('cash')}
                   disabled={saleBusy}
-                  className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
                 >
                   CASH REFUND
                 </button>
@@ -2099,14 +2117,14 @@ export default function CheckoutPage() {
                   type="button"
                   onClick={completeCardRefund}
                   disabled={saleBusy}
-                  className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
                 >
                   CARD REFUND
                 </button>
               </div>
             ) : mode === 'exchange' && refundDue > 0 ? (
               <>
-                <div className="mt-4 rounded-2xl bg-red-50 p-3 text-sm font-bold text-red-800">
+                <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-800">
                   Replacement item is cheaper. Refund the customer {money(refundDue)}.
                 </div>
 
@@ -2115,7 +2133,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={() => completeSale('cash')}
                     disabled={saleBusy}
-                    className="rounded-3xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                    className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
                   >
                     CASH REFUND DIFFERENCE
                   </button>
@@ -2124,7 +2142,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={completeCardRefund}
                     disabled={saleBusy}
-                    className="rounded-3xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                    className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
                   >
                     CARD REFUND DIFFERENCE
                   </button>
@@ -2144,7 +2162,7 @@ export default function CheckoutPage() {
                       setPaymentMethod('cash')
                       setCashPanelOpen(true)
                     }}
-                    className={`rounded-3xl py-4 text-xl font-black ${
+                    className={`rounded-xl py-4 text-xl font-black ${
                       paymentMethod === 'cash'
                         ? 'bg-green-300 text-black ring-4 ring-green-500/40'
                         : 'bg-green-100 text-black'
@@ -2156,7 +2174,7 @@ export default function CheckoutPage() {
                   <button
                     type="button"
                     onClick={openCardPanel}
-                    className={`rounded-3xl py-4 text-xl font-black ${
+                    className={`rounded-xl py-4 text-xl font-black ${
                       paymentMethod === 'card'
                         ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
                         : 'bg-sky-100 text-black'
@@ -2176,7 +2194,7 @@ export default function CheckoutPage() {
 
         {historyOpen && (
           <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 p-3">
-            <div className="flex w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white text-neutral-950 shadow-2xl">
+            <div className="flex w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white text-neutral-950 shadow-2xl">
               <div className="border-b border-neutral-200 p-4">
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
@@ -2192,7 +2210,7 @@ export default function CheckoutPage() {
                       setHistoryOpen(false)
                       setTimeout(() => inputRef.current?.focus(), 50)
                     }}
-                    className="rounded-2xl bg-black px-4 py-2 text-sm font-black text-white"
+                    className="rounded-lg bg-black px-4 py-2 text-sm font-black text-white"
                   >
                     Close
                   </button>
@@ -2206,27 +2224,27 @@ export default function CheckoutPage() {
                       if (event.key === 'Enter') fetchHistory()
                     }}
                     placeholder="Receipt / SKU / Square ID"
-                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black md:col-span-2"
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black md:col-span-2"
                   />
 
                   <input
                     value={historyDateFrom}
                     onChange={(event) => setHistoryDateFrom(event.target.value)}
                     type="date"
-                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
                   />
 
                   <input
                     value={historyDateTo}
                     onChange={(event) => setHistoryDateTo(event.target.value)}
                     type="date"
-                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
                   />
 
                   <select
                     value={historyPaymentMethod}
                     onChange={(event) => setHistoryPaymentMethod(event.target.value)}
-                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
                   >
                     <option value="">All payments</option>
                     <option value="cash">Cash</option>
@@ -2236,7 +2254,7 @@ export default function CheckoutPage() {
                   <select
                     value={historyMode}
                     onChange={(event) => setHistoryMode(event.target.value)}
-                    className="rounded-2xl border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
                   >
                     <option value="">All modes</option>
                     <option value="sale">Sale</option>
@@ -2250,7 +2268,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={() => fetchHistory()}
                     disabled={historyBusy}
-                    className="rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:opacity-40"
+                    className="rounded-lg bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:opacity-40"
                   >
                     {historyBusy ? 'Searching…' : 'Search'}
                   </button>
@@ -2266,14 +2284,14 @@ export default function CheckoutPage() {
                       setTimeout(() => fetchHistory(), 50)
                     }}
                     disabled={historyBusy}
-                    className="rounded-2xl border border-neutral-300 px-5 py-3 text-sm font-black disabled:opacity-40"
+                    className="rounded-lg border border-neutral-300 px-5 py-3 text-sm font-black disabled:opacity-40"
                   >
                     Reset
                   </button>
                 </div>
 
                 {historyMessage && (
-                  <div className="mt-3 rounded-2xl bg-neutral-100 p-3 text-sm font-bold">
+                  <div className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm font-bold">
                     {historyMessage}
                   </div>
                 )}
@@ -2281,7 +2299,7 @@ export default function CheckoutPage() {
 
               <div className="flex-1 overflow-auto p-3">
                 {historySales.length === 0 ? (
-                  <div className="rounded-3xl p-8 text-center text-neutral-500">
+                  <div className="rounded-xl p-8 text-center text-neutral-500">
                     <p className="text-lg font-bold">No transactions loaded</p>
                     <p className="text-sm">Search or reset to load recent transactions.</p>
                   </div>
@@ -2301,7 +2319,7 @@ export default function CheckoutPage() {
                       return (
                         <div
                           key={sale.id}
-                          className="overflow-hidden rounded-3xl border border-neutral-200 bg-neutral-50"
+                          className="overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50"
                         >
                           <button
                             type="button"
@@ -2354,33 +2372,33 @@ export default function CheckoutPage() {
                           {expanded && (
                             <div className="border-t border-neutral-200 bg-white p-4">
                               <div className="mb-3 grid grid-cols-2 gap-2 text-xs font-bold text-neutral-600 md:grid-cols-5">
-                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                <div className="rounded-lg bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Payment</p>
                                   <p>{rootSale.payment_method || '-'}</p>
                                 </div>
 
-                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                <div className="rounded-lg bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Square</p>
                                   <p>{rootSale.square_status || rootSale.square_payment_status || '-'}</p>
                                 </div>
 
-                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                <div className="rounded-lg bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Refund type</p>
                                   <p>{refundMethodLabel}</p>
                                 </div>
 
-                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                <div className="rounded-lg bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Location</p>
                                   <p>{rootSale.checkout_location || '-'}</p>
                                 </div>
 
-                                <div className="rounded-2xl bg-neutral-100 p-3">
+                                <div className="rounded-lg bg-neutral-100 p-3">
                                   <p className="uppercase tracking-widest text-neutral-400">Provider</p>
                                   <p>{rootSale.payment_provider || '-'}</p>
                                 </div>
                               </div>
 
-                              <div className="rounded-3xl border border-neutral-200 bg-white p-4">
+                              <div className="rounded-xl border border-neutral-200 bg-white p-4">
                                 <div className="mb-3 flex items-start justify-between gap-3">
                                   <div>
                                     <h3 className="text-lg font-black">Receipt items</h3>
@@ -2399,7 +2417,7 @@ export default function CheckoutPage() {
                                     return (
                                       <div
                                         key={line.id}
-                                        className="flex items-start justify-between gap-3 rounded-2xl bg-neutral-100 p-3"
+                                        className="flex items-start justify-between gap-3 rounded-lg bg-neutral-100 p-3"
                                       >
                                         <div className="min-w-0">
                                           <p className="truncate text-sm font-black">
@@ -2419,7 +2437,7 @@ export default function CheckoutPage() {
                                           <p className="text-sm font-black">
                                             {line.quantity} × {money(Number(line.unit_price || 0))}
                                           </p>
-                                          <p className="text-base font-black">
+                                          <p className="text-sm font-black">
                                             {money(Number(line.line_total || 0))}
                                           </p>
                                           <p className="text-[11px] font-bold text-neutral-500">
@@ -2432,7 +2450,7 @@ export default function CheckoutPage() {
                                 </div>
                               </div>
 
-                              <div className="mt-3 rounded-3xl border border-neutral-200 bg-neutral-50 p-4">
+                              <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
                                 <h3 className="text-lg font-black">Linked refunds / exchanges</h3>
 
                                 {relatedSales.length === 0 ? (
@@ -2444,7 +2462,7 @@ export default function CheckoutPage() {
                                     {relatedSales.map((related) => (
                                       <div
                                         key={related.id}
-                                        className="flex items-start justify-between gap-3 rounded-2xl bg-white p-3"
+                                        className="flex items-start justify-between gap-3 rounded-lg bg-white p-3"
                                       >
                                         <div className="min-w-0">
                                           <p className="text-sm font-black">{related.sale_number}</p>
@@ -2460,7 +2478,7 @@ export default function CheckoutPage() {
                                         </div>
 
                                         <div className="shrink-0 text-right">
-                                          <p className="text-base font-black">
+                                          <p className="text-sm font-black">
                                             {money(Number(related.total || 0))}
                                           </p>
                                           <p className="text-[11px] font-black text-neutral-500">
@@ -2477,7 +2495,7 @@ export default function CheckoutPage() {
                                 <button
                                   type="button"
                                   onClick={() => printHistorySale(sale)}
-                                  className="rounded-2xl border border-neutral-300 px-4 py-4 text-sm font-black"
+                                  className="rounded-lg border border-neutral-300 px-4 py-4 text-sm font-black"
                                 >
                                   Print Receipt
                                 </button>
@@ -2487,12 +2505,12 @@ export default function CheckoutPage() {
                                     href={rootSale.square_receipt_url}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="rounded-2xl bg-sky-100 px-4 py-4 text-center text-sm font-black text-black"
+                                    className="rounded-lg bg-sky-100 px-4 py-4 text-center text-sm font-black text-black"
                                   >
                                     Open Square Receipt
                                   </a>
                                 ) : (
-                                  <div className="rounded-2xl bg-neutral-100 px-4 py-4 text-center text-sm font-black text-neutral-400">
+                                  <div className="rounded-lg bg-neutral-100 px-4 py-4 text-center text-sm font-black text-neutral-400">
                                     No Square Receipt
                                   </div>
                                 )}
@@ -2501,7 +2519,7 @@ export default function CheckoutPage() {
                                   type="button"
                                   disabled={fullyRefunded}
                                   onClick={() => loadSaleForRefund(rootSale.sale_number)}
-                                  className="rounded-2xl bg-red-500 px-4 py-4 text-sm font-black text-white disabled:bg-neutral-200 disabled:text-neutral-400"
+                                  className="rounded-lg bg-red-500 px-4 py-4 text-sm font-black text-white disabled:bg-neutral-200 disabled:text-neutral-400"
                                 >
                                   {fullyRefunded ? 'Fully Refunded' : 'Load Refund / Exchange'}
                                 </button>
@@ -2512,7 +2530,7 @@ export default function CheckoutPage() {
                                     navigator.clipboard?.writeText(rootSale.sale_number)
                                     setHistoryMessage(`Copied ${rootSale.sale_number}`)
                                   }}
-                                  className="rounded-2xl border border-neutral-300 px-4 py-4 text-sm font-black"
+                                  className="rounded-lg border border-neutral-300 px-4 py-4 text-sm font-black"
                                 >
                                   Copy Receipt No.
                                 </button>
@@ -2533,7 +2551,7 @@ export default function CheckoutPage() {
 
         {cashPanelOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-            <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+            <div className="w-full max-w-md rounded-xl bg-white p-5 text-neutral-950 shadow-2xl">
               <h2 className="text-2xl font-black">Cash Payment</h2>
               <p className="mt-1 text-sm font-bold text-neutral-500">
                 Total due: {money(displayedTotal)}
@@ -2549,7 +2567,7 @@ export default function CheckoutPage() {
                   autoFocus
                 />
 
-                <div className="rounded-2xl bg-neutral-100 p-3 text-right">
+                <div className="rounded-lg bg-neutral-100 p-3 text-right">
                   <p className={`text-xs font-bold uppercase tracking-widest ${mutedText}`}>Change</p>
                   <p className="text-2xl font-black">{money(changeDue)}</p>
                 </div>
@@ -2561,7 +2579,7 @@ export default function CheckoutPage() {
                     key={value}
                     type="button"
                     onClick={() => setSuggestedCash(value)}
-                    className="rounded-2xl border border-neutral-300 bg-white px-3 py-3 text-sm font-black"
+                    className="rounded-lg border border-neutral-300 bg-white px-3 py-3 text-sm font-black"
                   >
                     {value === Number(displayedTotal.toFixed(2)) ? 'Exact ' : ''}
                     {money(value)}
@@ -2573,7 +2591,7 @@ export default function CheckoutPage() {
                 type="button"
                 disabled={saleBusy || basket.length === 0 || Number(cashTendered || 0) < displayedTotal}
                 onClick={() => completeSale('cash')}
-                className="mt-4 w-full rounded-3xl bg-emerald-400 py-5 text-xl font-black text-black disabled:opacity-40"
+                className="mt-4 w-full rounded-xl bg-emerald-400 py-5 text-xl font-black text-black disabled:opacity-40"
               >
                 {saleBusy ? 'Saving…' : 'Complete Cash Sale'}
               </button>
@@ -2585,7 +2603,7 @@ export default function CheckoutPage() {
                   setTimeout(() => inputRef.current?.focus(), 50)
                 }}
                 disabled={saleBusy}
-                className="mt-3 w-full rounded-2xl border border-neutral-300 py-4 text-sm font-black disabled:opacity-40"
+                className="mt-3 w-full rounded-lg border border-neutral-300 py-4 text-sm font-black disabled:opacity-40"
               >
                 Cancel
               </button>
@@ -2595,7 +2613,7 @@ export default function CheckoutPage() {
 
         {locationEditorOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-            <div className="w-full max-w-sm rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+            <div className="w-full max-w-sm rounded-xl bg-white p-5 text-neutral-950 shadow-2xl">
               <h2 className="mb-3 text-xl font-black">Checkout location</h2>
 
               <div className="grid grid-cols-2 gap-2">
@@ -2604,7 +2622,7 @@ export default function CheckoutPage() {
                     key={location}
                     type="button"
                     onClick={() => confirmLocationEditor(location)}
-                    className="rounded-2xl bg-neutral-100 px-4 py-4 text-sm font-black"
+                    className="rounded-lg bg-neutral-100 px-4 py-4 text-sm font-black"
                   >
                     {location}
                   </button>
@@ -2615,7 +2633,7 @@ export default function CheckoutPage() {
                 value={locationDraft}
                 onChange={(event) => setLocationDraft(event.target.value.toUpperCase())}
                 placeholder="Custom location"
-                className="mt-3 w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black uppercase outline-none focus:border-black"
+                className="mt-3 w-full rounded-lg border border-neutral-300 px-4 py-4 text-lg font-black uppercase outline-none focus:border-black"
                 autoFocus
               />
 
@@ -2623,7 +2641,7 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={() => setLocationEditorOpen(false)}
-                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                  className="rounded-lg border border-neutral-300 py-3 text-sm font-black"
                 >
                   Cancel
                 </button>
@@ -2631,7 +2649,7 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={() => confirmLocationEditor()}
-                  className="rounded-2xl bg-black py-3 text-sm font-black text-white"
+                  className="rounded-lg bg-black py-3 text-sm font-black text-white"
                 >
                   Save
                 </button>
@@ -2642,14 +2660,14 @@ export default function CheckoutPage() {
 
         {manualEntryOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-            <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+            <div className="w-full max-w-md rounded-xl bg-white p-5 text-neutral-950 shadow-2xl">
               <h2 className="mb-3 text-xl font-black">Manual item / keypad</h2>
 
               <input
                 value={manualTitle}
                 onChange={(event) => setManualTitle(event.target.value)}
                 placeholder="Item name, optional"
-                className="mb-3 w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-bold outline-none focus:border-black"
+                className="mb-3 w-full rounded-lg border border-neutral-300 px-4 py-4 text-lg font-bold outline-none focus:border-black"
               />
 
               <div className="grid grid-cols-2 gap-3">
@@ -2658,7 +2676,7 @@ export default function CheckoutPage() {
                   onChange={(event) => setManualPrice(event.target.value)}
                   placeholder="Price"
                   inputMode="decimal"
-                  className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-2xl font-black outline-none focus:border-black"
+                  className="w-full rounded-lg border border-neutral-300 px-4 py-4 text-2xl font-black outline-none focus:border-black"
                   autoFocus
                 />
 
@@ -2667,7 +2685,7 @@ export default function CheckoutPage() {
                   onChange={(event) => setManualQty(event.target.value.replace(/\D/g, ''))}
                   placeholder="Qty"
                   inputMode="numeric"
-                  className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-2xl font-black outline-none focus:border-black"
+                  className="w-full rounded-lg border border-neutral-300 px-4 py-4 text-2xl font-black outline-none focus:border-black"
                 />
               </div>
 
@@ -2677,7 +2695,7 @@ export default function CheckoutPage() {
                     key={value}
                     type="button"
                     onClick={() => setManualPrice(value)}
-                    className="rounded-2xl bg-neutral-100 py-3 text-sm font-black"
+                    className="rounded-lg bg-neutral-100 py-3 text-sm font-black"
                   >
                     £{value}
                   </button>
@@ -2691,7 +2709,7 @@ export default function CheckoutPage() {
                     setManualEntryOpen(false)
                     setTimeout(() => inputRef.current?.focus(), 50)
                   }}
-                  className="rounded-2xl border border-neutral-300 py-4 text-sm font-black"
+                  className="rounded-lg border border-neutral-300 py-4 text-sm font-black"
                 >
                   Cancel
                 </button>
@@ -2699,7 +2717,7 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={addManualEntryToBasket}
-                  className="rounded-2xl bg-emerald-400 py-4 text-sm font-black text-black"
+                  className="rounded-lg bg-emerald-400 py-4 text-sm font-black text-black"
                 >
                   Add to basket
                 </button>
@@ -2710,7 +2728,7 @@ export default function CheckoutPage() {
 
         {cardPanelOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+            <div className="w-full max-w-md rounded-xl bg-white p-5 text-neutral-950 shadow-2xl">
               <div className="mb-4">
                 <h2 className="text-2xl font-black">Card Payment</h2>
                 <p className="mt-1 text-sm font-semibold text-neutral-500">
@@ -2720,7 +2738,7 @@ export default function CheckoutPage() {
 
               {cardPanelMessage && (
                 <div
-                  className={`mb-4 rounded-2xl p-3 text-sm font-bold ${
+                  className={`mb-4 rounded-lg p-3 text-sm font-bold ${
                     cardPanelState === 'unclear'
                       ? 'bg-yellow-50 text-yellow-950'
                       : 'bg-neutral-100 text-neutral-950'
@@ -2736,7 +2754,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={sendTotalToSquareTerminal}
                     disabled={saleBusy}
-                    className="w-full rounded-2xl bg-sky-500 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
+                    className="w-full rounded-lg bg-sky-500 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
                   >
                     Send Total to Square Terminal
                   </button>
@@ -2745,7 +2763,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={completeManualCardSale}
                     disabled={saleBusy}
-                    className="w-full rounded-2xl bg-neutral-900 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
+                    className="w-full rounded-lg bg-neutral-900 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
                   >
                     Manual Entry / Record Card Sale
                   </button>
@@ -2754,7 +2772,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={closeCardPanel}
                     disabled={saleBusy}
-                    className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black disabled:opacity-40"
+                    className="w-full rounded-lg border border-neutral-300 px-4 py-4 text-lg font-black disabled:opacity-40"
                   >
                     Cancel / Back
                   </button>
@@ -2763,7 +2781,7 @@ export default function CheckoutPage() {
 
               {cardPanelState === 'waiting' && (
                 <div className="space-y-3">
-                  <div className="rounded-2xl bg-sky-50 p-4 text-center text-sm font-bold text-sky-900">
+                  <div className="rounded-lg bg-sky-50 p-4 text-center text-sm font-bold text-sky-900">
                     Waiting for Square Terminal response...
                   </div>
 
@@ -2778,7 +2796,7 @@ export default function CheckoutPage() {
                       )
                     }}
                     disabled={saleBusy}
-                    className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black disabled:opacity-40"
+                    className="w-full rounded-lg border border-neutral-300 px-4 py-4 text-lg font-black disabled:opacity-40"
                   >
                     No Response / Manual Options
                   </button>
@@ -2787,7 +2805,7 @@ export default function CheckoutPage() {
 
               {cardPanelState === 'unclear' && (
                 <div className="space-y-3">
-                  <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-black text-yellow-950">
+                  <div className="rounded-lg bg-yellow-50 p-4 text-sm font-black text-yellow-950">
                     APP OFFLINE / SQUARE UNCLEAR
                     <br />
                     <span className="font-bold">
@@ -2800,7 +2818,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={completeManualCardSale}
                     disabled={saleBusy}
-                    className="w-full rounded-2xl bg-emerald-500 px-4 py-4 text-lg font-black text-black disabled:opacity-40"
+                    className="w-full rounded-lg bg-emerald-500 px-4 py-4 text-lg font-black text-black disabled:opacity-40"
                   >
                     Record Manual Sale
                   </button>
@@ -2809,7 +2827,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={cancelCardPayment}
                     disabled={saleBusy}
-                    className="w-full rounded-2xl bg-red-500 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
+                    className="w-full rounded-lg bg-red-500 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
                   >
                     Cancel Sale
                   </button>
@@ -2822,7 +2840,7 @@ export default function CheckoutPage() {
         {paymentResultType && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
             <div
-              className={`w-full max-w-md rounded-[2rem] p-8 text-center shadow-2xl ${
+              className={`w-full max-w-md rounded-xl p-8 text-center shadow-2xl ${
                 paymentResultType === 'success'
                   ? 'bg-emerald-500 text-black'
                   : 'bg-red-500 text-white'
@@ -2843,7 +2861,7 @@ export default function CheckoutPage() {
                     openReceiptWindow(paymentResultTx)
                     closePaymentResult()
                   }}
-                  className="rounded-2xl bg-black px-4 py-4 text-lg font-black text-white"
+                  className="rounded-lg bg-black px-4 py-4 text-lg font-black text-white"
                 >
                   {paymentResultType === 'success' ? 'Yes, Print' : 'Print Failed Receipt'}
                 </button>
@@ -2851,7 +2869,7 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={closePaymentResult}
-                  className="rounded-2xl bg-white px-4 py-4 text-lg font-black text-black"
+                  className="rounded-lg bg-white px-4 py-4 text-lg font-black text-black"
                 >
                   {paymentResultType === 'success' ? 'No Receipt' : 'Close'}
                 </button>
