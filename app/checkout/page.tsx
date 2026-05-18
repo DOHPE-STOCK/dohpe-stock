@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useStaff } from '@/app/context/StaffContext'
 
 type ItemRow = {
   id: string
@@ -229,6 +230,7 @@ export default function CheckoutPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const retryingRef = useRef(false)
   const paymentResultTimerRef = useRef<number | null>(null)
+  const { staff, clearStaff } = useStaff()
 
   const [mode, setMode] = useState<CheckoutMode>('sale')
   const [scanValue, setScanValue] = useState('')
@@ -243,6 +245,12 @@ export default function CheckoutPage() {
   const [originalSale, setOriginalSale] = useState<any | null>(null)
   const [exchangeCredit, setExchangeCredit] = useState(0)
   const [checkoutLocation, setCheckoutLocation] = useState('SHOP-1')
+  const [locationEditorOpen, setLocationEditorOpen] = useState(false)
+  const [locationDraft, setLocationDraft] = useState('SHOP-1')
+  const [manualEntryOpen, setManualEntryOpen] = useState(false)
+  const [manualTitle, setManualTitle] = useState('')
+  const [manualPrice, setManualPrice] = useState('')
+  const [manualQty, setManualQty] = useState('1')
   const [cardPanelOpen, setCardPanelOpen] = useState(false)
   const [cardPanelState, setCardPanelState] = useState<CardPanelState>('options')
   const [cardPanelMessage, setCardPanelMessage] = useState('')
@@ -463,6 +471,61 @@ export default function CheckoutPage() {
     setCheckoutLocation(clean)
     localStorage.setItem(CHECKOUT_LOCATION_KEY, clean)
     setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function openLocationEditor() {
+    setLocationDraft(checkoutLocation || 'SHOP-1')
+    setLocationEditorOpen(true)
+  }
+
+  function confirmLocationEditor(value?: string) {
+    saveCheckoutLocation(value || locationDraft)
+    setLocationEditorOpen(false)
+  }
+
+  function addManualEntryToBasket() {
+    const price = Number(manualPrice)
+    const quantity = Math.max(1, Math.floor(Number(manualQty) || 1))
+
+    if (!Number.isFinite(price) || price <= 0) {
+      setMessage('Enter a valid manual price.')
+      return
+    }
+
+    const cleanTitle = text(manualTitle) || 'Manual item'
+    const manualSku = `MANUAL-${Date.now().toString(36).toUpperCase()}`
+
+    setBasket((current) => [
+      ...current,
+      {
+        sku: manualSku,
+        title: cleanTitle,
+        brand: 'DOHPE',
+        category: 'Manual',
+        subType: '',
+        colour: '',
+        thumbnailUrl: '',
+        price,
+        quantity,
+        location: checkoutLocation || 'SHOP-1',
+        bin: checkoutLocation || 'SHOP-1',
+        stockLevel: 999,
+        lineDiscountPercent: 0,
+        isReturnLine: false,
+      },
+    ])
+
+    setManualTitle('')
+    setManualPrice('')
+    setManualQty('1')
+    setManualEntryOpen(false)
+    setMessage('Manual item added.')
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function signOutStaff() {
+    clearStaff()
+    window.location.href = '/staff?next=/checkout?pos_app=1'
   }
 
   async function getThumbnailUrl(itemId: string) {
@@ -1634,43 +1697,51 @@ export default function CheckoutPage() {
       <main className={pageClass}>
         <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 p-3 sm:p-5">
           <section className={`${panelClass} p-4`}>
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <h1 className="text-2xl font-black tracking-tight">
-                  {mode === 'refund' ? 'Refund' : mode === 'exchange' ? 'Exchange' : 'Checkout'}
-                </h1>
-                <p className={`text-sm ${mutedText}`}>
-                  {mode === 'refund'
-                    ? 'Select items and quantities to refund.'
-                    : selectedLine
-                      ? `Discount target: ${selectedLine.sku}`
-                      : 'Discount target: whole basket'}
-                </p>
-              </div>
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryOpen(false)
+                  setTimeout(() => inputRef.current?.focus(), 50)
+                }}
+                className={`rounded-2xl px-4 py-3 text-sm font-black ${
+                  !historyOpen ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-500'
+                }`}
+              >
+                Checkout
+              </button>
 
-              <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={openHistory}
+                className={`rounded-2xl px-4 py-3 text-sm font-black ${
+                  historyOpen ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-500'
+                }`}
+              >
+                Transactions
+              </button>
+            </div>
+
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={openLocationEditor}
+                className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-xs font-black uppercase"
+              >
+                Shop: {checkoutLocation || 'SHOP-1'}
+              </button>
+
+              <div className="flex items-center gap-2">
+                <div className="rounded-xl bg-neutral-100 px-3 py-2 text-xs font-black">
+                  {staff?.name ? `Pinned: ${staff.name}` : 'No staff pinned'}
+                </div>
+
                 <button
                   type="button"
-                  onClick={openHistory}
+                  onClick={signOutStaff}
                   className="rounded-xl bg-neutral-900 px-3 py-2 text-xs font-black text-white"
                 >
-                  History
-                </button>
-
-                <input
-                  value={checkoutLocation}
-                  onChange={(event) => setCheckoutLocation(event.target.value)}
-                  onBlur={(event) => saveCheckoutLocation(event.target.value)}
-                  placeholder="Location"
-                  className="w-24 rounded-xl border border-neutral-300 bg-white px-2 py-2 text-xs font-bold uppercase outline-none focus:border-black"
-                />
-
-                <button
-                  type="button"
-                  onClick={() => saveCheckoutLocation(checkoutLocation)}
-                  className="rounded-xl bg-black px-3 py-2 text-xs font-black text-white"
-                >
-                  Save
+                  Log out
                 </button>
               </div>
             </div>
@@ -1702,7 +1773,15 @@ export default function CheckoutPage() {
             </form>
 
             {mode !== 'refund' && (
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setManualEntryOpen(true)}
+                  className="rounded-2xl bg-neutral-900 px-4 py-3 text-sm font-black text-white"
+                >
+                  + Manual / Keypad
+                </button>
+
                 <button
                   type="button"
                   onClick={addBagToBasket}
@@ -2078,7 +2157,7 @@ export default function CheckoutPage() {
               <div className="border-b border-neutral-200 p-4">
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <h2 className="text-2xl font-black">POS History</h2>
+                    <h2 className="text-2xl font-black">POS Transactions</h2>
                     <p className="text-sm font-semibold text-neutral-500">
                       Search receipts, SKUs, Square IDs, then print, open receipt, refund or exchange.
                     </p>
@@ -2422,6 +2501,122 @@ export default function CheckoutPage() {
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+
+        {locationEditorOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+              <h2 className="mb-3 text-xl font-black">Checkout location</h2>
+
+              <div className="grid grid-cols-2 gap-2">
+                {['SHOP-1', 'WAREHOUSE'].map((location) => (
+                  <button
+                    key={location}
+                    type="button"
+                    onClick={() => confirmLocationEditor(location)}
+                    className="rounded-2xl bg-neutral-100 px-4 py-4 text-sm font-black"
+                  >
+                    {location}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                value={locationDraft}
+                onChange={(event) => setLocationDraft(event.target.value.toUpperCase())}
+                placeholder="Custom location"
+                className="mt-3 w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-black uppercase outline-none focus:border-black"
+                autoFocus
+              />
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLocationEditorOpen(false)}
+                  className="rounded-2xl border border-neutral-300 py-3 text-sm font-black"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => confirmLocationEditor()}
+                  className="rounded-2xl bg-black py-3 text-sm font-black text-white"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {manualEntryOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl">
+              <h2 className="mb-3 text-xl font-black">Manual item / keypad</h2>
+
+              <input
+                value={manualTitle}
+                onChange={(event) => setManualTitle(event.target.value)}
+                placeholder="Item name, optional"
+                className="mb-3 w-full rounded-2xl border border-neutral-300 px-4 py-4 text-lg font-bold outline-none focus:border-black"
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  value={manualPrice}
+                  onChange={(event) => setManualPrice(event.target.value)}
+                  placeholder="Price"
+                  inputMode="decimal"
+                  className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-2xl font-black outline-none focus:border-black"
+                  autoFocus
+                />
+
+                <input
+                  value={manualQty}
+                  onChange={(event) => setManualQty(event.target.value.replace(/\D/g, ''))}
+                  placeholder="Qty"
+                  inputMode="numeric"
+                  className="w-full rounded-2xl border border-neutral-300 px-4 py-4 text-2xl font-black outline-none focus:border-black"
+                />
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {['5', '10', '15', '20', '25', '30'].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setManualPrice(value)}
+                    className="rounded-2xl bg-neutral-100 py-3 text-sm font-black"
+                  >
+                    £{value}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManualEntryOpen(false)
+                    setTimeout(() => inputRef.current?.focus(), 50)
+                  }}
+                  className="rounded-2xl border border-neutral-300 py-4 text-sm font-black"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={addManualEntryToBasket}
+                  className="rounded-2xl bg-emerald-400 py-4 text-sm font-black text-black"
+                >
+                  Add to basket
+                </button>
               </div>
             </div>
           </div>
