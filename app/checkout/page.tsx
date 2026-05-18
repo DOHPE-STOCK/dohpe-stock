@@ -229,7 +229,6 @@ function CardLogos() {
 
 export default function CheckoutPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const historyInputRef = useRef<HTMLInputElement | null>(null)
   const scannerBufferRef = useRef('')
   const scannerTimerRef = useRef<number | null>(null)
   const retryingRef = useRef(false)
@@ -546,7 +545,7 @@ export default function CheckoutPage() {
 
   function openKeypadForCurrentView() {
     if (activeView === 'transactions') {
-      historyInputRef.current?.focus()
+      inputRef.current?.focus()
       return
     }
 
@@ -773,6 +772,22 @@ export default function CheckoutPage() {
   }, [])
 
 
+  async function handleMainScanSubmit() {
+    const cleanValue = text(scanValue)
+
+    if (!cleanValue) return
+
+    if (activeView === 'transactions') {
+      setHistoryQuery(cleanValue)
+      setScanValue('')
+      await fetchHistory({ query: cleanValue })
+      setTimeout(() => inputRef.current?.focus(), 50)
+      return
+    }
+
+    await addScannedSku(cleanValue)
+  }
+
   async function addScannedSku(rawSku?: string) {
     const sku = text(rawSku || scanValue)
     if (!sku) return
@@ -868,7 +883,13 @@ export default function CheckoutPage() {
 
         if (buffered.length >= 3) {
           event.preventDefault()
-          addScannedSku(buffered)
+
+          if (activeView === 'transactions') {
+            setHistoryQuery(buffered)
+            fetchHistory({ query: buffered })
+          } else {
+            addScannedSku(buffered)
+          }
         }
 
         return
@@ -1813,10 +1834,7 @@ export default function CheckoutPage() {
               <div className="grid grid-cols-3 gap-1">
                 <button
                   type="button"
-                  onClick={() => {
-                    setHistoryOpen(false)
-                    setTimeout(() => inputRef.current?.focus(), 50)
-                  }}
+                  onClick={openCheckoutView}
                   className={`rounded-lg px-4 py-3 text-lg font-black ${
                     activeView === 'checkout' ? 'bg-white text-black shadow-sm' : 'bg-neutral-300 text-neutral-700'
                   }`}
@@ -1836,8 +1854,12 @@ export default function CheckoutPage() {
 
                 <button
                   type="button"
-                  onClick={() => setMessage('Library view coming soon.')}
-                  className="rounded-lg bg-neutral-300 px-4 py-3 text-lg font-black text-neutral-700"
+                  onClick={openLibraryView}
+                  className={`rounded-lg px-4 py-3 text-lg font-black ${
+                    activeView === 'library'
+                      ? 'bg-white text-black shadow-sm'
+                      : 'bg-neutral-300 text-neutral-700'
+                  }`}
                 >
                   Library
                 </button>
@@ -1869,7 +1891,7 @@ export default function CheckoutPage() {
             <form
               onSubmit={(event) => {
                 event.preventDefault()
-                addScannedSku()
+                handleMainScanSubmit()
               }}
               className="flex gap-2"
             >
@@ -1877,7 +1899,7 @@ export default function CheckoutPage() {
                 ref={inputRef}
                 value={scanValue}
                 onChange={(event) => setScanValue(event.target.value)}
-                placeholder="Scan SKU or receipt barcode"
+                placeholder={activeView === 'transactions' ? 'Scan / enter receipt, SKU or Square ID' : 'Scan SKU or receipt barcode'}
                 className={inputClass}
                 autoFocus
                 inputMode="text"
@@ -1885,10 +1907,10 @@ export default function CheckoutPage() {
               />
               <button
                 type="submit"
-                disabled={!scanValue.trim() || Boolean(loadingSku)}
+                disabled={!scanValue.trim() || Boolean(activeView === 'transactions' ? historyBusy : loadingSku)}
                 className="rounded-lg bg-black px-5 py-3 font-black text-white disabled:opacity-40"
               >
-                Add
+                {activeView === 'transactions' ? 'Search' : 'Add'}
               </button>
 
               <button
@@ -1916,18 +1938,7 @@ export default function CheckoutPage() {
 
                 </div>
 
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
-                  <input
-                    ref={historyInputRef}
-                    value={historyQuery}
-                    onChange={(event) => setHistoryQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') fetchHistory()
-                    }}
-                    placeholder="Scan / Receipt / SKU / Square ID"
-                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black md:col-span-2"
-                  />
-
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
                   <input
                     value={historyDateFrom}
                     onChange={(event) => setHistoryDateFrom(event.target.value)}
@@ -1967,7 +1978,7 @@ export default function CheckoutPage() {
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => fetchHistory()}
+                    onClick={() => fetchHistory({ query: scanValue.trim() || historyQuery.trim() })}
                     disabled={historyBusy}
                     className="rounded-lg bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:opacity-40"
                   >
@@ -1978,6 +1989,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={() => {
                       setHistoryQuery('')
+                      setScanValue('')
                       setHistoryDateFrom('')
                       setHistoryDateTo('')
                       setHistoryPaymentMethod('')
