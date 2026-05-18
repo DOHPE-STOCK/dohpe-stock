@@ -16,12 +16,24 @@ type StaffRow = {
   permissions?: StaffPermissions | null
 }
 
+function cleanNextUrl(value: string | null) {
+  if (!value) return '/'
+
+  const clean = value.trim()
+
+  if (!clean.startsWith('/')) return '/'
+  if (clean.startsWith('//')) return '/'
+  if (clean.startsWith('/login')) return '/'
+
+  return clean
+}
+
 function StaffPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { setStaff, clearStaff } = useStaff()
 
-  const nextUrl = searchParams.get('next') || '/'
+  const nextUrl = cleanNextUrl(searchParams.get('next'))
 
   const [staffUsers, setStaffUsers] = useState<StaffRow[]>([])
   const [selectedStaffId, setSelectedStaffId] = useState('')

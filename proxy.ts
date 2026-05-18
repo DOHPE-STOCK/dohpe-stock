@@ -1,6 +1,33 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
+function makeSafeNext(request: NextRequest) {
+  return `${request.nextUrl.pathname}${request.nextUrl.search}`
+}
+
+function setNextParam(url: URL, nextPath: string) {
+  if (nextPath && nextPath !== '/login' && !nextPath.startsWith('/login?')) {
+    url.searchParams.set('next', nextPath)
+  }
+}
+
+function splitRelativeTarget(target: string) {
+  if (!target.startsWith('/') || target.startsWith('//') || target.startsWith('/login')) {
+    return { pathname: '/', search: '' }
+  }
+
+  const questionIndex = target.indexOf('?')
+
+  if (questionIndex === -1) {
+    return { pathname: target, search: '' }
+  }
+
+  return {
+    pathname: target.slice(0, questionIndex) || '/',
+    search: target.slice(questionIndex),
+  }
+}
+
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
@@ -43,30 +70,48 @@ export async function proxy(request: NextRequest) {
 
   const isLoginPage = pathname.startsWith('/login')
   const isStaffPage = pathname.startsWith('/staff')
-
   const hasStaffCookie = Boolean(request.cookies.get('active_staff_user')?.value)
+
+  const currentNext = request.nextUrl.searchParams.get('next') || ''
+  const requestedPath = makeSafeNext(request)
 
   if (!user && !isLoginPage) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
+    url.search = ''
+    setNextParam(url, requestedPath)
     return NextResponse.redirect(url)
   }
 
   if (user && isLoginPage) {
     const url = request.nextUrl.clone()
-    url.pathname = hasStaffCookie ? '/' : '/staff'
+
+    if (hasStaffCookie) {
+      const target = splitRelativeTarget(currentNext || '/')
+      url.pathname = target.pathname
+      url.search = target.search
+      return NextResponse.redirect(url)
+    }
+
+    url.pathname = '/staff'
+    url.search = ''
+    setNextParam(url, currentNext || '/')
     return NextResponse.redirect(url)
   }
 
   if (user && !hasStaffCookie && !isStaffPage) {
     const url = request.nextUrl.clone()
     url.pathname = '/staff'
+    url.search = ''
+    setNextParam(url, requestedPath)
     return NextResponse.redirect(url)
   }
 
   if (user && hasStaffCookie && isStaffPage) {
     const url = request.nextUrl.clone()
-    url.pathname = '/'
+    const target = splitRelativeTarget(currentNext || '/')
+    url.pathname = target.pathname
+    url.search = target.search
     return NextResponse.redirect(url)
   }
 

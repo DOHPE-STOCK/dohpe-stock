@@ -1,11 +1,24 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
-export default function LoginPage() {
-  const router = useRouter()
+function cleanNextUrl(value: string | null) {
+  if (!value) return '/'
+
+  const clean = value.trim()
+
+  if (!clean.startsWith('/')) return '/'
+  if (clean.startsWith('//')) return '/'
+  if (clean.startsWith('/login')) return '/'
+
+  return clean
+}
+
+function LoginPageContent() {
+  const searchParams = useSearchParams()
+  const nextUrl = cleanNextUrl(searchParams.get('next'))
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -30,8 +43,8 @@ export default function LoginPage() {
       return
     }
 
-    // IMPORTANT: force reload so proxy sees session
-    window.location.href = '/'
+    // Force reload so proxy sees session.
+    window.location.href = nextUrl
   }
 
   return (
@@ -76,5 +89,21 @@ export default function LoginPage() {
         )}
       </div>
     </main>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-neutral-950 p-4 text-white">
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 text-sm font-bold">
+            Loading login...
+          </div>
+        </main>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   )
 }
