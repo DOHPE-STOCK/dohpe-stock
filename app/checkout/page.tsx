@@ -10,6 +10,9 @@ type ItemRow = {
   sku: string
   brand?: string | null
   reporting_category?: string | null
+  sub_type?: string | null
+  subtype?: string | null
+  item_sub_type?: string | null
   colour?: string | null
   color?: string | null
   main_colour?: string | null
