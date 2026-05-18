@@ -123,6 +123,70 @@ type HistorySale = {
   lines: HistoryLine[]
 }
 
+
+type LibraryStatus = 'unsold' | 'sold'
+
+type LibraryItem = {
+  id: string
+  sku: string
+  brand: string | null
+  reporting_category: string | null
+  sub_type?: string | null
+  subtype?: string | null
+  item_sub_type?: string | null
+  colour?: string | null
+  color?: string | null
+  main_colour?: string | null
+  final_title?: string | null
+  basic_title?: string | null
+  selling_price?: number | null
+  stock_level?: number | null
+  current_location?: string | null
+  sold_at?: string | null
+  updated_at?: string | null
+  item_images?: {
+    processed_url?: string | null
+    original_url?: string | null
+  }[]
+}
+
+const reportingCategoryOptions = [
+  'Accessories',
+  'Bag',
+  'Beanie',
+  'Belt',
+  'Blazer',
+  'Boiler Suit',
+  'Boots',
+  'Cap',
+  'Cardigan',
+  'Cargo Trousers',
+  'Coat',
+  'Dress',
+  'Dungarees',
+  'Fleece',
+  'Football Shirt',
+  'Gilet',
+  'Hat',
+  'Hoodie',
+  'Jacket',
+  'Jeans',
+  'Joggers',
+  'Jumper',
+  'Long Sleeve T-Shirt',
+  'Polo Shirt',
+  'Shirt',
+  'Shorts',
+  'Skirt',
+  'Sweatshirt',
+  'T-Shirt',
+  'Track Jacket',
+  'Tracksuit',
+  'Trainers',
+  'Trousers',
+  'Vest',
+]
+
 const OFFLINE_TX_KEY = 'dohpe_pos_offline_transactions_v1'
 const CHECKOUT_LOCATION_KEY = 'dohpe_checkout_location_v1'
 
@@ -278,6 +342,14 @@ export default function CheckoutPage() {
   const [historyMode, setHistoryMode] = useState('')
   const [historySales, setHistorySales] = useState<HistorySale[]>([])
   const [expandedHistorySaleId, setExpandedHistorySaleId] = useState('')
+  const [libraryBrand, setLibraryBrand] = useState('')
+  const [libraryCategory, setLibraryCategory] = useState('')
+  const [libraryColour, setLibraryColour] = useState('')
+  const [libraryStatus, setLibraryStatus] = useState<LibraryStatus>('unsold')
+  const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([])
+  const [libraryBusy, setLibraryBusy] = useState(false)
+  const [libraryMessage, setLibraryMessage] = useState('')
+
 
   const saleLines = basket.filter((line) => !line.isReturnLine)
   const returnLines = basket.filter((line) => line.isReturnLine)
@@ -1821,6 +1893,109 @@ export default function CheckoutPage() {
     return 'Original sale'
   }
 
+  function getLibraryItemTitle(item: LibraryItem) {
+    return item.final_title || item.basic_title || item.sku
+  }
+
+  function getLibraryItemColour(item: LibraryItem) {
+    return text(item.colour || item.color || item.main_colour)
+  }
+
+  function getLibraryItemSubType(item: LibraryItem) {
+    return text(item.sub_type || item.subtype || item.item_sub_type)
+  }
+
+  function getLibraryImage(item: LibraryItem) {
+    const firstImage = Array.isArray(item.item_images) ? item.item_images[0] : null
+    return text(firstImage?.processed_url || firstImage?.original_url)
+  }
+
+  async function searchLibrary() {
+    const brand = text(libraryBrand)
+    const category = text(libraryCategory)
+
+    setLibraryMessage('')
+
+    if (!brand || !category) {
+      setLibraryMessage('Enter both brand and reporting category.')
+      setLibraryItems([])
+      return
+    }
+
+    setLibraryBusy(true)
+
+    try {
+      const colour = text(libraryColour)
+
+      let query = supabase
+        .from('items')
+        .select(`
+          id,
+          sku,
+          brand,
+          reporting_category,
+          sub_type,
+          subtype,
+          item_sub_type,
+          colour,
+          color,
+          main_colour,
+          final_title,
+          basic_title,
+          selling_price,
+          stock_level,
+          current_location,
+          sold_at,
+          created_at,
+          updated_at,
+          item_images (
+            processed_url,
+            original_url
+          )
+        `)
+        .ilike('brand', `%${brand}%`)
+        .eq('reporting_category', category)
+        .limit(10)
+
+      if (colour) {
+        query = query.or(
+          `colour.ilike.%${colour}%,color.ilike.%${colour}%,main_colour.ilike.%${colour}%`
+        )
+      }
+
+      if (libraryStatus === 'unsold') {
+        query = query
+          .gt('stock_level', 0)
+          .order('created_at', { ascending: false })
+      } else {
+        const threeMonthsAgo = new Date()
+        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
+
+        query = query
+          .lte('stock_level', 0)
+          .gte('updated_at', threeMonthsAgo.toISOString())
+          .order('sold_at', { ascending: false, nullsFirst: false })
+          .order('updated_at', { ascending: false })
+      }
+
+      const { data, error } = await query
+
+      if (error) throw new Error(error.message)
+
+      const rows = (data || []) as LibraryItem[]
+      setLibraryItems(rows)
+
+      if (rows.length === 0) {
+        setLibraryMessage('No matching items found.')
+      }
+    } catch (error: any) {
+      setLibraryMessage(error.message || 'Could not search library.')
+      setLibraryItems([])
+    } finally {
+      setLibraryBusy(false)
+    }
+  }
+
   function printHistorySale(sale: HistorySale) {
     openReceiptWindow(null, getRootHistorySale(sale))
   }
@@ -2258,14 +2433,151 @@ export default function CheckoutPage() {
               </div>
             </section>
           ) : activeView === 'library' ? (
-            <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden p-6`}>
-              <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-neutral-300 bg-neutral-50 p-8 text-center">
-                <div>
-                  <h2 className="text-2xl font-black">Library</h2>
-                  <p className="mt-2 text-sm font-bold text-neutral-500">
-                    Library view coming soon. Checkout basket is still saved.
-                  </p>
+            <section className={`${panelClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
+              <div className="shrink-0 border-b border-neutral-200 p-3">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_150px_180px_120px]">
+                  <input
+                    value={libraryBrand}
+                    onChange={(event) => setLibraryBrand(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') searchLibrary()
+                    }}
+                    placeholder="Brand, e.g. Nike"
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                  />
+
+                  <div>
+                    <input
+                      value={libraryCategory}
+                      onChange={(event) => setLibraryCategory(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') searchLibrary()
+                      }}
+                      placeholder="Reporting category"
+                      list="checkout-reporting-category-options"
+                      className="w-full rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                    />
+
+                    <datalist id="checkout-reporting-category-options">
+                      {reportingCategoryOptions.map((category) => (
+                        <option key={category} value={category} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  <input
+                    value={libraryColour}
+                    onChange={(event) => setLibraryColour(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') searchLibrary()
+                    }}
+                    placeholder="Colour optional"
+                    className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
+                  />
+
+                  <div className="grid grid-cols-2 rounded-lg bg-neutral-200 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setLibraryStatus('unsold')}
+                      className={`rounded-md px-3 py-2 text-sm font-black ${
+                        libraryStatus === 'unsold'
+                          ? 'bg-white text-black shadow-sm'
+                          : 'text-neutral-700'
+                      }`}
+                    >
+                      Unsold
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setLibraryStatus('sold')}
+                      className={`rounded-md px-3 py-2 text-sm font-black ${
+                        libraryStatus === 'sold'
+                          ? 'bg-white text-black shadow-sm'
+                          : 'text-neutral-700'
+                      }`}
+                    >
+                      Sold
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={searchLibrary}
+                    disabled={libraryBusy}
+                    className="rounded-lg bg-emerald-400 px-4 py-3 text-sm font-black text-black disabled:opacity-40"
+                  >
+                    {libraryBusy ? 'Searching…' : 'Search'}
+                  </button>
                 </div>
+
+                {libraryStatus === 'sold' && (
+                  <p className="mt-2 text-xs font-bold text-neutral-500">
+                    Sold search shows the 10 most recently sold matching items from the last 3 months.
+                  </p>
+                )}
+
+                {libraryMessage && (
+                  <div className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm font-bold">
+                    {libraryMessage}
+                  </div>
+                )}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                {libraryItems.length === 0 ? (
+                  <div className="rounded-xl p-8 text-center text-neutral-500">
+                    <p className="text-lg font-bold">No library results loaded</p>
+                    <p className="text-sm">Enter brand and reporting category to load up to 10 matching items.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    {libraryItems.map((item) => {
+                      const imageUrl = getLibraryImage(item)
+                      const title = getLibraryItemTitle(item)
+                      const colour = getLibraryItemColour(item)
+                      const subType = getLibraryItemSubType(item)
+                      const stock = Number(item.stock_level || 0)
+
+                      return (
+                        <div
+                          key={item.id}
+                          className="overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50"
+                        >
+                          <div className="aspect-square bg-neutral-200">
+                            {imageUrl ? (
+                              <img
+                                src={imageUrl}
+                                alt={item.sku}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-xs font-black text-neutral-400">
+                                NO IMG
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="p-2">
+                            <p className="truncate text-sm font-black">{item.brand || 'Unknown Brand'}</p>
+                            <p className="line-clamp-2 text-xs font-bold text-neutral-700">{title}</p>
+                            <p className="mt-1 truncate text-[11px] font-bold text-neutral-500">
+                              {[item.reporting_category, subType, colour].filter(Boolean).join(' · ')}
+                            </p>
+                            <div className="mt-2 flex items-center justify-between gap-2">
+                              <span className="text-xs font-black">{item.sku}</span>
+                              <span className="text-sm font-black">{money(Number(item.selling_price || 0))}</span>
+                            </div>
+                            <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-bold text-neutral-500">
+                              <span>{item.current_location || 'No location'}</span>
+                              <span>{libraryStatus === 'sold' ? 'Sold' : `Stock ${stock}`}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             </section>
           ) : (
