@@ -82,6 +82,34 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+async function sendTelegramMessage(message: string) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN
+  const chatId = process.env.TELEGRAM_CHAT_ID
+
+  if (!botToken || !chatId) {
+    return { skipped: true, reason: 'Telegram env vars missing' }
+  }
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${botToken}/sendMessage`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+      }),
+    }
+  )
+
+  if (!response.ok) {
+    const responseText = await response.text()
+    throw new Error(`Telegram send failed: ${responseText}`)
+  }
+
+  return { ok: true }
+}
+
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }
@@ -443,43 +471,6 @@ async function markOrderChecked(params: {
   if (error) throw new Error(error.message)
 }
 
-async function createQueueRow(params: {
-  supabase: any
-  sku: string
-  previousStockLevel: number
-  newStockLevel: number
-  location: string
-  bin: string
-  orderId: string
-  quantity: number
-  source: string
-  subSource: string
-}) {
-  const payload = {
-    sku: params.sku,
-    previous_stock_level: params.previousStockLevel,
-    stock_level: params.newStockLevel,
-    location: params.location,
-    bin: params.bin,
-    reason: 'online_sale',
-    linnworks_order_id: params.orderId,
-    quantity: params.quantity,
-    source: params.source,
-    sub_source: params.subSource,
-  }
-
-  const { error } = await params.supabase
-    .from('linnworks_sync_queue')
-    .insert({
-      sku: params.sku,
-      action: 'update_stock',
-      payload,
-      status: 'pending',
-    })
-
-  if (error) throw new Error(error.message)
-}
-
 async function processLinnworksOpenOrders(request: Request) {
   const startedAt = new Date().toISOString()
 
@@ -578,7 +569,7 @@ async function processLinnworksOpenOrders(request: Request) {
 
         const existingSale = await supabase
           .from('linnworks_processed_sales')
-          .select('id, stock_deducted')
+          .select('id, stock_deducted, telegram_sent')
           .eq('linnworks_order_id', orderId)
           .eq('sku', sku)
           .maybeSingle()
@@ -598,7 +589,7 @@ async function processLinnworksOpenOrders(request: Request) {
 
         const itemResult = await supabase
           .from('items')
-          .select('id, sku, stock_level, current_location, current_bin')
+          .select('id, sku, brand, reporting_category, stock_level, current_location, current_bin')
           .eq('sku', sku)
           .maybeSingle()
 
@@ -617,23 +608,49 @@ async function processLinnworksOpenOrders(request: Request) {
           continue
         }
 
-        const liveStock = await getLiveLinnworksStock(server, token, sku)
-
-        const previousStockLevel = liveStock.totalStockLevel
-        const newStockLevel =
-          liveStock.totalAvailable !== null
-            ? liveStock.totalAvailable
-            : Math.max(0, previousStockLevel - quantity)
-
         const location =
           normaliseText(localItem.current_location) ||
           normaliseText(body.default_location) ||
-          'SHOP-1'
+          'WAREHOUSE'
 
         const bin =
           normaliseText(localItem.current_bin) ||
           normaliseText(body.default_bin) ||
-          location
+          'Default'
+
+        let telegramResult: any = {
+          skipped: true,
+          reason: 'Item is not currently in a shop location.',
+        }
+
+        let telegramSent = Boolean(existingSale.data?.telegram_sent)
+
+        if (!telegramSent && location.toLowerCase().startsWith('shop')) {
+          try {
+            telegramResult = await sendTelegramMessage(
+              `🛒 Online order needs picking
+
+SKU: ${sku}
+Brand: ${normaliseText(localItem.brand) || 'Unknown'}
+Category: ${normaliseText(localItem.reporting_category) || 'Unknown'}
+Qty: ${quantity}
+Location: ${location}
+Bin: ${bin}
+Source: ${source || 'Unknown'}
+Sub source: ${subSource || 'Unknown'}
+Order ID: ${orderId}
+
+If this sells to an in-store customer first, complete the shop sale and cancel/refund the online order.`
+            )
+
+            telegramSent = Boolean(telegramResult?.ok)
+          } catch (error: any) {
+            telegramResult = {
+              ok: false,
+              error: error.message || 'Telegram notification failed.',
+            }
+          }
+        }
 
         const salePayload = {
           linnworks_order_id: orderId,
@@ -645,7 +662,7 @@ async function processLinnworksOpenOrders(request: Request) {
           first_seen_status: 'open',
           current_status: 'open',
           stock_deducted: true,
-          telegram_sent: false,
+          telegram_sent: telegramSent,
           updated_at: new Date().toISOString(),
         }
 
@@ -664,30 +681,17 @@ async function processLinnworksOpenOrders(request: Request) {
           if (insertSaleError) throw new Error(insertSaleError.message)
         }
 
-        await createQueueRow({
-          supabase,
-          sku,
-          previousStockLevel,
-          newStockLevel,
-          location,
-          bin,
-          orderId,
-          quantity,
-          source,
-          subSource,
-        })
-
         results.push({
           ok: true,
           orderId,
           sku,
           quantity,
-          previousStockLevel,
-          newStockLevel,
-          liveLinnworksStockLevel: liveStock.totalStockLevel,
-          liveLinnworksAvailable: liveStock.totalAvailable,
-          queueAction: 'update_stock',
-          reason: 'online_sale',
+          location,
+          bin,
+          queueAction: null,
+          stockAction: 'none',
+          reason: 'online_sale_notification_only',
+          telegram: telegramResult,
         })
       }
 
@@ -708,7 +712,8 @@ async function processLinnworksOpenOrders(request: Request) {
       unchecked_order_id_count: allOrderIds.length - alreadyCheckedOrderIds.size,
       checked_this_run_count: uncheckedOrderIds.length,
       order_count: orders.length,
-      created_queue_rows: results.filter((row) => row.queueAction === 'update_stock').length,
+      created_queue_rows: 0,
+      notification_rows: results.filter((row) => row.reason === 'online_sale_notification_only').length,
       results,
     })
   } catch (error: any) {
