@@ -315,21 +315,17 @@ export default function SkuSearchPage() {
       return
     }
 
-    if (!isValidSku(rawSku)) {
+    const isTenDigitBarcode = /^\d{10}$/.test(rawSku)
+
+    if (isTenDigitBarcode && !isValidSku(rawSku)) {
       setMessage(`Invalid SKU/check digit: ${rawSku}`)
       setScanValue('')
       return
     }
 
-    const existingScanned = scannedItems.find((item) => item.sku === rawSku)
-
-    if (existingScanned) {
-      setMessage(`Already scanned: ${rawSku}`)
-      setScanValue('')
-      return
-    }
-
     setBusy(true)
+
+    const safeLookup = escapePostgrestOrValue(rawSku)
 
     const { data, error } = await supabase
       .from('items')
@@ -366,7 +362,7 @@ export default function SkuSearchPage() {
           image_order
         )
       `)
-      .or(`sku.eq.${rawSku},barcode_number.eq.${rawSku}`)
+      .eq('sku', rawSku)
       .maybeSingle()
 
     setBusy(false)
@@ -398,22 +394,6 @@ export default function SkuSearchPage() {
       }
     }
 
-    const matchedSku = itemData?.sku || rawSku
-    const matchedBarcode = itemData?.barcode_number || ''
-
-    const alreadyScannedMatched = scannedItems.find(
-      (item) =>
-        item.sku === matchedSku ||
-        (matchedBarcode && item.barcode_number === matchedBarcode)
-    )
-
-    if (alreadyScannedMatched) {
-      setMessage(`Already scanned: ${matchedSku}`)
-      setScanValue('')
-      setTimeout(() => scanInputRef.current?.focus(), 50)
-      return
-    }
-
     const loanedByName =
       itemData?.loan_status === 'on_loan'
         ? await getStaffName(itemData?.loaned_by)
@@ -431,7 +411,7 @@ export default function SkuSearchPage() {
 
     const newItem: ScannedItem = {
       id: itemData?.id || null,
-      sku: rawSku,
+      sku: itemData?.sku || rawSku,
       barcode_number: itemData?.barcode_number || null,
       exists: !!itemData,
       selected: true,
@@ -1272,12 +1252,6 @@ export default function SkuSearchPage() {
                           {item.sku}
                         </p>
 
-                        {item.barcode_number && item.barcode_number !== item.sku && (
-                          <p className="font-mono text-xs text-neutral-600">
-                            Barcode: {item.barcode_number}
-                          </p>
-                        )}
-
                         <h3 className="truncate text-base font-semibold">
                           {item.ai_title || item.basic_title || 'Untitled item'}
                         </h3>
@@ -1438,16 +1412,13 @@ export default function SkuSearchPage() {
               onClick={() => {
                 if (exactReusableMatch) {
                   editReusableSku(exactReusableMatch)
-                } else {
-                  createReusableSku()
+                  return
                 }
+
+                createReusableSku()
               }}
               disabled={reusableBusy || !staff || !reusableSearch.trim()}
-              className={`rounded-xl px-4 py-2 font-semibold disabled:opacity-50 ${
-                exactReusableMatch
-                  ? 'bg-white text-black'
-                  : 'bg-emerald-400 text-black'
-              }`}
+              className="rounded-xl bg-emerald-400 px-4 py-2 font-semibold text-black disabled:opacity-50"
             >
               {exactReusableMatch ? 'Edit' : 'Create'}
             </button>
