@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
@@ -27,6 +27,7 @@ type ScannedItem = {
   condition?: string | null
   selling_price?: number | null
   stock_level?: number | null
+  sku_type?: 'single_use' | 'reusable' | string | null
   location_status?: string | null
   current_location?: string | null
   current_bin?: string | null
@@ -47,6 +48,21 @@ type PreviewLabelItem = {
   sku: string
   sizeText?: string | null
   price?: number | null
+}
+
+type ReusableSkuResult = {
+  id: string
+  sku: string
+  sku_type?: string | null
+  brand?: string | null
+  reporting_category?: string | null
+  basic_title?: string | null
+  ai_title?: string | null
+  final_title?: string | null
+  selling_price?: number | null
+  stock_level?: number | null
+  current_location?: string | null
+  current_bin?: string | null
 }
 
 const CHANNEL_ICONS = [
@@ -124,6 +140,22 @@ function openLabelPreview(items: PreviewLabelItem[]) {
   window.open('/labels/preview', '_blank')
 }
 
+function cleanReusableSku(value: string) {
+  return value.trim().toUpperCase()
+}
+
+function escapePostgrestOrValue(value: string) {
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('%', '\\%')
+    .replaceAll('_', '\\_')
+    .replaceAll(',', '\\,')
+}
+
+function getReusableTitle(item: ReusableSkuResult) {
+  return item.final_title || item.ai_title || item.basic_title || item.sku
+}
+
 export default function SkuSearchPage() {
   const router = useRouter()
   const scanInputRef = useRef<HTMLInputElement | null>(null)
@@ -134,11 +166,26 @@ export default function SkuSearchPage() {
   const [printQty, setPrintQty] = useState(10)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [reusableSearch, setReusableSearch] = useState('')
+  const [reusableResults, setReusableResults] = useState<ReusableSkuResult[]>([])
+  const [reusableBusy, setReusableBusy] = useState(false)
+  const [reusableMessage, setReusableMessage] = useState('')
 
   const selectedItems = useMemo(
     () => scannedItems.filter((item) => item.selected),
     [scannedItems]
   )
+
+  const exactReusableMatch = useMemo(() => {
+    const clean = cleanReusableSku(reusableSearch)
+
+    if (!clean) return null
+
+    return (
+      reusableResults.find((item) => item.sku.toUpperCase() === clean) ||
+      null
+    )
+  }, [reusableResults, reusableSearch])
 
   const selectedCount = selectedItems.length
 
@@ -190,6 +237,7 @@ export default function SkuSearchPage() {
         sku,
         status: 'working',
         stock_level: 1,
+        sku_type: 'single_use',
         location_status: 'unknown',
         current_location: null,
         current_bin: null,
@@ -264,6 +312,7 @@ export default function SkuSearchPage() {
         condition,
         selling_price,
         stock_level,
+        sku_type,
         ai_title,
         basic_title,
         location_status,
@@ -347,6 +396,7 @@ export default function SkuSearchPage() {
       condition: itemData?.condition || null,
       selling_price: itemData?.selling_price || null,
       stock_level: itemData?.stock_level ?? 1,
+      sku_type: itemData?.sku_type || 'single_use',
       location_status: itemData?.location_status || 'unknown',
       current_location: itemData?.current_location || null,
       current_bin: itemData?.current_bin || null,
@@ -656,12 +706,178 @@ export default function SkuSearchPage() {
         }))
       )
 
-      setMessage(`Opened preview for ${skus.length} new random SKU label(s).`)
+      setMessage(`Opened preview for ${skus.length} new single-use SKU label(s).`)
     } catch (error: any) {
       setMessage(error.message || 'Print Next failed.')
     } finally {
       setBusy(false)
     }
+  }
+
+  async function searchReusableSkus(searchValue = reusableSearch) {
+    const clean = searchValue.trim()
+
+    setReusableMessage('')
+
+    if (clean.length < 2) {
+      setReusableResults([])
+      return
+    }
+
+    setReusableBusy(true)
+
+    try {
+      const safe = escapePostgrestOrValue(clean)
+
+      const { data, error } = await supabase
+        .from('items')
+        .select(`
+          id,
+          sku,
+          sku_type,
+          brand,
+          reporting_category,
+          basic_title,
+          ai_title,
+          final_title,
+          selling_price,
+          stock_level,
+          current_location,
+          current_bin
+        `)
+        .eq('sku_type', 'reusable')
+        .or(
+          `sku.ilike.%${safe}%,brand.ilike.%${safe}%,basic_title.ilike.%${safe}%,ai_title.ilike.%${safe}%,final_title.ilike.%${safe}%`
+        )
+        .order('sku', { ascending: true })
+        .limit(8)
+
+      if (error) throw new Error(error.message)
+
+      setReusableResults((data || []) as ReusableSkuResult[])
+    } catch (error: any) {
+      setReusableMessage(error.message || 'Could not search reusable SKUs.')
+      setReusableResults([])
+    } finally {
+      setReusableBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    const clean = reusableSearch.trim()
+
+    if (clean.length < 2) {
+      setReusableResults([])
+      setReusableMessage('')
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      searchReusableSkus(clean)
+    }, 250)
+
+    return () => window.clearTimeout(timer)
+  }, [reusableSearch])
+
+  async function createReusableSku() {
+    if (!staff) {
+      setReusableMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
+    const sku = cleanReusableSku(reusableSearch)
+
+    if (!sku) {
+      setReusableMessage('Enter a reusable SKU first.')
+      return
+    }
+
+    if (exactReusableMatch) {
+      setReusableMessage('This reusable SKU already exists. Use Edit or Print Label.')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Create reusable SKU ${sku}?\n\nThis creates a repeat-stock product line, not a one-off single-use item.`
+    )
+
+    if (!confirmed) return
+
+    const now = new Date().toISOString()
+
+    setReusableBusy(true)
+    setReusableMessage('Creating reusable SKU...')
+
+    try {
+      const { data: existing, error: existingError } = await supabase
+        .from('items')
+        .select('id, sku, sku_type')
+        .eq('sku', sku)
+        .maybeSingle()
+
+      if (existingError) throw new Error(existingError.message)
+
+      if (existing) {
+        setReusableMessage(
+          existing.sku_type === 'reusable'
+            ? 'Reusable SKU already exists.'
+            : 'That SKU already exists as a single-use/item SKU. Choose a different reusable SKU.'
+        )
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('items')
+        .insert({
+          sku,
+          sku_type: 'reusable',
+          status: 'working',
+          stock_level: 0,
+          location_status: 'unknown',
+          current_location: null,
+          current_bin: null,
+          loan_status: 'not_on_loan',
+          ebay_status: 'not_listed',
+          linnworks_status: 'not_synced',
+          shopify_status: 'not_listed',
+          square_status: 'not_listed',
+          loyverse_status: 'not_listed',
+          vinted_status: 'not_listed',
+          depop_status: 'not_listed',
+          tiktok_shop_status: 'not_listed',
+          last_saved_by: staff.id,
+          updated_at: now,
+        })
+        .select('id')
+        .single()
+
+      if (error) throw new Error(error.message)
+
+      setReusableSearch('')
+      setReusableResults([])
+      setReusableMessage(`Created reusable SKU ${sku}. Opening edit page...`)
+      router.push(`/items/${data.id}`)
+    } catch (error: any) {
+      setReusableMessage(error.message || 'Could not create reusable SKU.')
+    } finally {
+      setReusableBusy(false)
+    }
+  }
+
+  function editReusableSku(item: ReusableSkuResult) {
+    router.push(`/items/${item.id}`)
+  }
+
+  function printReusableSku(item: ReusableSkuResult) {
+    openLabelPreview([
+      {
+        sku: item.sku,
+        sizeText: '',
+        price: item.selling_price,
+      },
+    ])
+
+    setReusableMessage(`Opened label preview for ${item.sku}.`)
   }
 
   function channelOpacity(status?: string | null) {
@@ -955,10 +1171,10 @@ export default function SkuSearchPage() {
         </div>
       </section>
 
-      <section>
+      <section className="grid gap-5 lg:grid-cols-2">
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
           <h2 className="mb-3 text-lg font-semibold">
-            Print Next Unused Labels
+            Print Next Single-Use Labels
           </h2>
 
           <div className="flex gap-2">
@@ -981,8 +1197,118 @@ export default function SkuSearchPage() {
           </div>
 
           <p className="mt-2 text-sm text-neutral-400">
-            Generates unused pseudo-random SKU barcode labels and opens the print preview page.
+            Generates unused pseudo-random single-use SKU barcode labels and opens the print preview page.
           </p>
+        </div>
+
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+          <h2 className="mb-3 text-lg font-semibold">
+            Create / Find Reusable SKU
+          </h2>
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              value={reusableSearch}
+              onChange={(e) => setReusableSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  if (exactReusableMatch) {
+                    editReusableSku(exactReusableMatch)
+                  } else {
+                    createReusableSku()
+                  }
+                }
+              }}
+              placeholder="Reusable SKU, brand, or title"
+              disabled={reusableBusy || !staff}
+              className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-white disabled:opacity-50"
+            />
+
+            <button
+              type="button"
+              onClick={createReusableSku}
+              disabled={
+                reusableBusy ||
+                !staff ||
+                !reusableSearch.trim() ||
+                Boolean(exactReusableMatch)
+              }
+              className="rounded-xl bg-emerald-400 px-4 py-2 font-semibold text-black disabled:opacity-50"
+            >
+              Create New
+            </button>
+          </div>
+
+          <p className="mt-2 text-sm text-neutral-400">
+            Reusable SKUs are for repeat-stock product lines. Stock can hit 0 without treating the SKU as sold.
+          </p>
+
+          {reusableMessage && (
+            <div className="mt-3 rounded-xl border border-neutral-700 bg-neutral-950 p-3 text-sm text-neutral-200">
+              {reusableMessage}
+            </div>
+          )}
+
+          {reusableBusy && (
+            <p className="mt-3 text-sm font-bold text-neutral-400">Searching...</p>
+          )}
+
+          {reusableSearch.trim().length >= 2 &&
+            reusableResults.length === 0 &&
+            !reusableBusy && (
+              <div className="mt-3 rounded-xl border border-dashed border-neutral-700 p-4 text-sm text-neutral-400">
+                No reusable SKU found. Use Create New to create a reusable product line.
+              </div>
+            )}
+
+          {reusableResults.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {reusableResults.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-mono text-xs text-neutral-500">{item.sku}</p>
+                      <h3 className="truncate text-sm font-black">
+                        {getReusableTitle(item)}
+                      </h3>
+                      <p className="mt-1 text-xs text-neutral-400">
+                        {[item.brand, item.reporting_category, item.current_location || 'No location']
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                      <p className="mt-1 text-xs text-neutral-400">
+                        Stock: {item.stock_level ?? 0}
+                        {typeof item.selling_price === 'number'
+                          ? ` · £${item.selling_price.toFixed(2)}`
+                          : ''}
+                      </p>
+                    </div>
+
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => editReusableSku(item)}
+                        className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-black"
+                      >
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => printReusableSku(item)}
+                        className="rounded-xl border border-neutral-700 px-3 py-2 text-sm font-semibold text-white"
+                      >
+                        Print Label
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
     </main>
