@@ -15,6 +15,7 @@ type ItemImage = {
 type ScannedItem = {
   id: string | null
   sku: string
+  barcode_number?: string | null
   exists: boolean
   selected: boolean
   image_url?: string | null
@@ -53,6 +54,7 @@ type PreviewLabelItem = {
 type ReusableSkuResult = {
   id: string
   sku: string
+  barcode_number?: string | null
   sku_type?: string | null
   brand?: string | null
   reporting_category?: string | null
@@ -168,8 +170,12 @@ export default function SkuSearchPage() {
   const [busy, setBusy] = useState(false)
   const [reusableSearch, setReusableSearch] = useState('')
   const [reusableResults, setReusableResults] = useState<ReusableSkuResult[]>([])
+  const [reusableSuggestionsLoaded, setReusableSuggestionsLoaded] = useState(false)
   const [reusableBusy, setReusableBusy] = useState(false)
   const [reusableMessage, setReusableMessage] = useState('')
+  const [reusablePrintOpen, setReusablePrintOpen] = useState(false)
+  const [reusablePrintQty, setReusablePrintQty] = useState(1)
+  const [reusablePrintItem, setReusablePrintItem] = useState<ReusableSkuResult | null>(null)
 
   const selectedItems = useMemo(
     () => scannedItems.filter((item) => item.selected),
@@ -182,9 +188,34 @@ export default function SkuSearchPage() {
     if (!clean) return null
 
     return (
-      reusableResults.find((item) => item.sku.toUpperCase() === clean) ||
+      reusableResults.find((item) => item.sku.toUpperCase() === clean || item.barcode_number === clean) ||
       null
     )
+  }, [reusableResults, reusableSearch])
+
+  const reusableDropdownMatches = useMemo(() => {
+    const clean = reusableSearch.trim().toLowerCase()
+
+    if (!clean) return []
+
+    return reusableResults
+      .filter((item) => {
+        const haystack = [
+          item.sku,
+          item.barcode_number,
+          item.brand,
+          item.reporting_category,
+          item.basic_title,
+          item.ai_title,
+          item.final_title,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+
+        return haystack.includes(clean)
+      })
+      .slice(0, 8)
   }, [reusableResults, reusableSearch])
 
   const selectedCount = selectedItems.length
@@ -305,6 +336,7 @@ export default function SkuSearchPage() {
       .select(`
         id,
         sku,
+        barcode_number,
         brand,
         reporting_category,
         tagged_size,
@@ -384,6 +416,7 @@ export default function SkuSearchPage() {
     const newItem: ScannedItem = {
       id: itemData?.id || null,
       sku: rawSku,
+      barcode_number: itemData?.barcode_number || null,
       exists: !!itemData,
       selected: true,
       image_url: firstImage,
@@ -714,19 +747,128 @@ export default function SkuSearchPage() {
     }
   }
 
-  async function searchReusableSkus(searchValue = reusableSearch) {
-    const clean = searchValue.trim()
+  async function generateReusableBarcodeNumber() {
+    const yearPrefix = getYearPrefix()
+    let attempts = 0
 
+    while (attempts < 1000) {
+      attempts++
+
+      const sequenceNumber = randomSequenceNumber()
+      const body = `${yearPrefix}${String(sequenceNumber).padStart(7, '0')}`
+      const checkDigit = luhnCheckDigit(body)
+      const barcodeNumber = `${body}${checkDigit}`
+
+      const { data: existingItemBySku, error: itemSkuError } = await supabase
+        .from('items')
+        .select('id')
+        .eq('sku', barcodeNumber)
+        .maybeSingle()
+
+      if (itemSkuError) {
+        throw new Error(`Item SKU check failed: ${itemSkuError.message}`)
+      }
+
+      if (existingItemBySku) continue
+
+      const { data: existingItemByBarcode, error: itemBarcodeError } = await supabase
+        .from('items')
+        .select('id')
+        .eq('barcode_number', barcodeNumber)
+        .maybeSingle()
+
+      if (itemBarcodeError) {
+        throw new Error(`Item barcode check failed: ${itemBarcodeError.message}`)
+      }
+
+      if (existingItemByBarcode) continue
+
+      const { data: existingGenerated, error: generatedCheckError } =
+        await supabase
+          .from('generated_skus')
+          .select('sku')
+          .eq('sku', barcodeNumber)
+          .maybeSingle()
+
+      if (generatedCheckError) {
+        throw new Error(
+          `Generated SKU check failed: ${generatedCheckError.message}`
+        )
+      }
+
+      if (existingGenerated) continue
+
+      const { error: insertGeneratedError } = await supabase
+        .from('generated_skus')
+        .insert({
+          sku: barcodeNumber,
+          year_prefix: yearPrefix,
+          sequence_number: sequenceNumber,
+          check_digit: checkDigit,
+        })
+
+      if (insertGeneratedError) {
+        throw new Error(`Saving reusable barcode failed: ${insertGeneratedError.message}`)
+      }
+
+      return barcodeNumber
+    }
+
+    throw new Error('Could not generate a reusable barcode number.')
+  }
+
+  async function loadReusableSkuSuggestions() {
+    if (reusableSuggestionsLoaded || reusableBusy) return
+
+    setReusableBusy(true)
     setReusableMessage('')
 
-    if (clean.length < 2) {
-      setReusableResults([])
+    try {
+      const { data, error } = await supabase
+        .from('items')
+        .select(`
+          id,
+          sku,
+          barcode_number,
+          sku_type,
+          brand,
+          reporting_category,
+          basic_title,
+          ai_title,
+          final_title,
+          selling_price,
+          stock_level,
+          current_location,
+          current_bin
+        `)
+        .eq('sku_type', 'reusable')
+        .order('sku', { ascending: true })
+        .limit(300)
+
+      if (error) throw new Error(error.message)
+
+      setReusableResults((data || []) as ReusableSkuResult[])
+      setReusableSuggestionsLoaded(true)
+    } catch (error: any) {
+      setReusableMessage(error.message || 'Could not load reusable SKU suggestions.')
+    } finally {
+      setReusableBusy(false)
+    }
+  }
+
+  async function findReusableSku() {
+    const clean = reusableSearch.trim()
+
+    if (!clean) {
+      setReusableMessage('Enter a reusable SKU, brand, or title first.')
       return
     }
 
     setReusableBusy(true)
+    setReusableMessage('Finding reusable SKU...')
 
     try {
+      const sku = cleanReusableSku(clean)
       const safe = escapePostgrestOrValue(clean)
 
       const { data, error } = await supabase
@@ -734,6 +876,7 @@ export default function SkuSearchPage() {
         .select(`
           id,
           sku,
+          barcode_number,
           sku_type,
           brand,
           reporting_category,
@@ -747,37 +890,36 @@ export default function SkuSearchPage() {
         `)
         .eq('sku_type', 'reusable')
         .or(
-          `sku.ilike.%${safe}%,brand.ilike.%${safe}%,basic_title.ilike.%${safe}%,ai_title.ilike.%${safe}%,final_title.ilike.%${safe}%`
+          `sku.eq.${sku},barcode_number.eq.${sku},sku.ilike.%${safe}%,barcode_number.ilike.%${safe}%,brand.ilike.%${safe}%,basic_title.ilike.%${safe}%,ai_title.ilike.%${safe}%,final_title.ilike.%${safe}%`
         )
         .order('sku', { ascending: true })
         .limit(8)
 
       if (error) throw new Error(error.message)
 
-      setReusableResults((data || []) as ReusableSkuResult[])
+      const rows = (data || []) as ReusableSkuResult[]
+      setReusableResults(rows)
+      setReusableSuggestionsLoaded(true)
+
+      if (rows.length === 0) {
+        setReusableMessage('No reusable SKU found. Use Create New if this should be a repeat-stock SKU.')
+        return
+      }
+
+      const exact = rows.find((item) => item.sku.toUpperCase() === sku || item.barcode_number === sku)
+
+      if (exact) {
+        setReusableMessage(`Found reusable SKU ${exact.sku}. Use Edit or Print.`)
+        return
+      }
+
+      setReusableMessage(`Found ${rows.length} matching reusable SKU(s).`)
     } catch (error: any) {
-      setReusableMessage(error.message || 'Could not search reusable SKUs.')
-      setReusableResults([])
+      setReusableMessage(error.message || 'Could not find reusable SKU.')
     } finally {
       setReusableBusy(false)
     }
   }
-
-  useEffect(() => {
-    const clean = reusableSearch.trim()
-
-    if (clean.length < 2) {
-      setReusableResults([])
-      setReusableMessage('')
-      return
-    }
-
-    const timer = window.setTimeout(() => {
-      searchReusableSkus(clean)
-    }, 250)
-
-    return () => window.clearTimeout(timer)
-  }, [reusableSearch])
 
   async function createReusableSku() {
     if (!staff) {
@@ -793,7 +935,7 @@ export default function SkuSearchPage() {
     }
 
     if (exactReusableMatch) {
-      setReusableMessage('This reusable SKU already exists. Use Edit or Print Label.')
+      setReusableMessage('This reusable SKU already exists. Use Edit or Print.')
       return
     }
 
@@ -811,7 +953,7 @@ export default function SkuSearchPage() {
     try {
       const { data: existing, error: existingError } = await supabase
         .from('items')
-        .select('id, sku, sku_type')
+        .select('id, sku, barcode_number, sku_type')
         .eq('sku', sku)
         .maybeSingle()
 
@@ -820,19 +962,24 @@ export default function SkuSearchPage() {
       if (existing) {
         setReusableMessage(
           existing.sku_type === 'reusable'
-            ? 'Reusable SKU already exists.'
+            ? 'Reusable SKU already exists. Use Find, Edit, or Print.'
             : 'That SKU already exists as a single-use/item SKU. Choose a different reusable SKU.'
         )
         return
       }
 
+      const barcodeNumber = await generateReusableBarcodeNumber()
+
       const { data, error } = await supabase
         .from('items')
         .insert({
           sku,
+          barcode_number: barcodeNumber,
           sku_type: 'reusable',
           status: 'working',
           stock_level: 0,
+          shop_floor_stock: 0,
+          warehouse_stock: 0,
           location_status: 'unknown',
           current_location: null,
           current_bin: null,
@@ -855,7 +1002,8 @@ export default function SkuSearchPage() {
 
       setReusableSearch('')
       setReusableResults([])
-      setReusableMessage(`Created reusable SKU ${sku}. Opening edit page...`)
+      setReusableSuggestionsLoaded(false)
+      setReusableMessage(`Created reusable SKU ${sku} with barcode ${barcodeNumber}. Opening edit page...`)
       router.push(`/items/${data.id}`)
     } catch (error: any) {
       setReusableMessage(error.message || 'Could not create reusable SKU.')
@@ -868,16 +1016,34 @@ export default function SkuSearchPage() {
     router.push(`/items/${item.id}`)
   }
 
-  function printReusableSku(item: ReusableSkuResult) {
-    openLabelPreview([
-      {
-        sku: item.sku,
-        sizeText: '',
-        price: item.selling_price,
-      },
-    ])
+  function openReusablePrintQuantity(item?: ReusableSkuResult | null) {
+    const target = item || exactReusableMatch
 
-    setReusableMessage(`Opened label preview for ${item.sku}.`)
+    if (!target) {
+      setReusableMessage('Find or select an existing reusable SKU before printing.')
+      return
+    }
+
+    setReusablePrintItem(target)
+    setReusablePrintQty(1)
+    setReusablePrintOpen(true)
+  }
+
+  function printReusableSkuQuantity() {
+    if (!reusablePrintItem) return
+
+    const qty = Math.max(1, Math.min(100, Number(reusablePrintQty) || 1))
+
+    openLabelPreview(
+      Array.from({ length: qty }, () => ({
+        sku: reusablePrintItem.barcode_number || reusablePrintItem.sku,
+        sizeText: reusablePrintItem.sku,
+        price: reusablePrintItem.selling_price,
+      }))
+    )
+
+    setReusablePrintOpen(false)
+    setReusableMessage(`Opened ${qty} label(s) for ${reusablePrintItem.sku}.`)
   }
 
   function channelOpacity(status?: string | null) {
@@ -1203,26 +1369,47 @@ export default function SkuSearchPage() {
 
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
           <h2 className="mb-3 text-lg font-semibold">
-            Create / Find Reusable SKU
+            Create / Find / Print Reusable SKU
           </h2>
 
           <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              value={reusableSearch}
-              onChange={(e) => setReusableSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  if (exactReusableMatch) {
-                    editReusableSku(exactReusableMatch)
-                  } else {
-                    createReusableSku()
+            <div className="relative flex-1">
+              <input
+                value={reusableSearch}
+                onFocus={loadReusableSkuSuggestions}
+                onChange={(e) => setReusableSearch(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (exactReusableMatch) {
+                      editReusableSku(exactReusableMatch)
+                    } else {
+                      findReusableSku()
+                    }
                   }
-                }
-              }}
-              placeholder="Reusable SKU, brand, or title"
-              disabled={reusableBusy || !staff}
-              className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-white disabled:opacity-50"
-            />
+                }}
+                placeholder="Reusable SKU, brand, or title"
+                list="reusable-sku-suggestions"
+                disabled={!staff}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-white disabled:opacity-50"
+              />
+
+              <datalist id="reusable-sku-suggestions">
+                {reusableResults.map((item) => (
+                  <option
+                    key={item.id}
+                    value={item.sku}
+                    label={[
+                      getReusableTitle(item),
+                      item.barcode_number ? `Barcode ${item.barcode_number}` : '',
+                      item.brand,
+                      item.reporting_category,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  />
+                ))}
+              </datalist>
+            </div>
 
             <button
               type="button"
@@ -1235,12 +1422,30 @@ export default function SkuSearchPage() {
               }
               className="rounded-xl bg-emerald-400 px-4 py-2 font-semibold text-black disabled:opacity-50"
             >
-              Create New
+              Create
+            </button>
+
+            <button
+              type="button"
+              onClick={findReusableSku}
+              disabled={reusableBusy || !staff || !reusableSearch.trim()}
+              className="rounded-xl bg-white px-4 py-2 font-semibold text-black disabled:opacity-50"
+            >
+              Find
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openReusablePrintQuantity()}
+              disabled={reusableBusy || !staff || !exactReusableMatch}
+              className="rounded-xl border border-neutral-700 px-4 py-2 font-semibold text-white disabled:opacity-50"
+            >
+              Print
             </button>
           </div>
 
           <p className="mt-2 text-sm text-neutral-400">
-            Reusable SKUs are for repeat-stock product lines. Stock can hit 0 without treating the SKU as sold.
+            Reusable SKUs are for repeat-stock product lines. The field gives suggestions from existing reusable SKUs, but does not run a search on every key press.
           </p>
 
           {reusableMessage && (
@@ -1250,67 +1455,112 @@ export default function SkuSearchPage() {
           )}
 
           {reusableBusy && (
-            <p className="mt-3 text-sm font-bold text-neutral-400">Searching...</p>
+            <p className="mt-3 text-sm font-bold text-neutral-400">Loading...</p>
           )}
 
           {reusableSearch.trim().length >= 2 &&
-            reusableResults.length === 0 &&
-            !reusableBusy && (
-              <div className="mt-3 rounded-xl border border-dashed border-neutral-700 p-4 text-sm text-neutral-400">
-                No reusable SKU found. Use Create New to create a reusable product line.
+            reusableDropdownMatches.length > 0 && (
+              <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3">
+                <p className="mb-2 text-xs font-bold uppercase text-neutral-500">
+                  Matching reusable SKUs
+                </p>
+
+                <div className="space-y-2">
+                  {reusableDropdownMatches.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setReusableSearch(item.sku)}
+                      className="w-full rounded-xl border border-neutral-800 bg-neutral-900 p-3 text-left hover:border-white"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="font-mono text-xs text-neutral-500">{item.sku}</p>
+                          {item.barcode_number && (
+                            <p className="font-mono text-xs text-neutral-500">
+                              Barcode: {item.barcode_number}
+                            </p>
+                          )}
+                          <h3 className="truncate text-sm font-black">
+                            {getReusableTitle(item)}
+                          </h3>
+                          <p className="mt-1 text-xs text-neutral-400">
+                            {[item.brand, item.reporting_category, item.current_location || 'No location']
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </p>
+                          <p className="mt-1 text-xs text-neutral-400">
+                            Stock: {item.stock_level ?? 0}
+                            {typeof item.selling_price === 'number'
+                              ? ` · £${item.selling_price.toFixed(2)}`
+                              : ''}
+                          </p>
+                        </div>
+
+                        <div className="flex shrink-0 gap-2">
+                          <span className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-black">
+                            Select
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
-
-          {reusableResults.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {reusableResults.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"
-                >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="font-mono text-xs text-neutral-500">{item.sku}</p>
-                      <h3 className="truncate text-sm font-black">
-                        {getReusableTitle(item)}
-                      </h3>
-                      <p className="mt-1 text-xs text-neutral-400">
-                        {[item.brand, item.reporting_category, item.current_location || 'No location']
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </p>
-                      <p className="mt-1 text-xs text-neutral-400">
-                        Stock: {item.stock_level ?? 0}
-                        {typeof item.selling_price === 'number'
-                          ? ` · £${item.selling_price.toFixed(2)}`
-                          : ''}
-                      </p>
-                    </div>
-
-                    <div className="flex shrink-0 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => editReusableSku(item)}
-                        className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-black"
-                      >
-                        Edit
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => printReusableSku(item)}
-                        className="rounded-xl border border-neutral-700 px-3 py-2 text-sm font-semibold text-white"
-                      >
-                        Print Label
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </section>
+
+
+      {reusablePrintOpen && reusablePrintItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-neutral-700 bg-neutral-900 p-5 text-white shadow-2xl">
+            <h2 className="text-xl font-black">Print Reusable SKU</h2>
+            <p className="mt-2 font-mono text-sm text-neutral-300">
+              SKU: {reusablePrintItem.sku}
+            </p>
+            <p className="mt-1 font-mono text-sm text-neutral-300">
+              Barcode: {reusablePrintItem.barcode_number || 'Not set'}
+            </p>
+            <p className="mt-1 text-sm text-neutral-400">
+              {getReusableTitle(reusablePrintItem)}
+            </p>
+
+            <label className="mt-4 block">
+              <span className="mb-1 block text-xs font-bold text-neutral-400">
+                Label quantity
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={reusablePrintQty}
+                onChange={(e) => setReusablePrintQty(Number(e.target.value))}
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-3 text-lg outline-none focus:border-white"
+                autoFocus
+              />
+            </label>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setReusablePrintOpen(false)}
+                className="rounded-xl border border-neutral-700 px-4 py-3 font-semibold text-white"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={printReusableSkuQuantity}
+                className="rounded-xl bg-white px-4 py-3 font-semibold text-black"
+              >
+                Print
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
