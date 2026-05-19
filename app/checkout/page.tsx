@@ -136,7 +136,6 @@ type LibraryItem = {
   selling_price?: number | null
   stock_level?: number | null
   current_location?: string | null
-  sold_at?: string | null
   updated_at?: string | null
   item_images?: {
     processed_url?: string | null
@@ -1947,7 +1946,6 @@ export default function CheckoutPage() {
           selling_price,
           stock_level,
           current_location,
-          sold_at,
           created_at,
           updated_at,
           item_images (
@@ -1974,7 +1972,6 @@ export default function CheckoutPage() {
         query = query
           .lte('stock_level', 0)
           .gte('updated_at', threeMonthsAgo.toISOString())
-          .order('sold_at', { ascending: false, nullsFirst: false })
           .order('updated_at', { ascending: false })
       }
 
