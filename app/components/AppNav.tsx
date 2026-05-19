@@ -9,6 +9,8 @@ import { useStaff } from '@/app/context/StaffContext'
 type NavKey =
   | 'settings'
   | 'sku'
+  | 'inventory'
+  | 'create-bin'
   | 'checkout'
   | 'working'
   | 'review'
@@ -34,6 +36,8 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { key: 'sku', label: 'SKU Search', href: '/' },
+  { key: 'inventory', label: 'Inventory', href: '/inventory', permission: 'working' },
+  { key: 'create-bin', label: 'Create Bin', href: '/create-bin', permission: 'scanner' },
   { key: 'checkout', label: 'Checkout', href: '/checkout', permission: 'checkout' },
   { key: 'working', label: 'Working', href: '/working', permission: 'working' },
   { key: 'review', label: 'Review', href: '/review', permission: 'review' },
