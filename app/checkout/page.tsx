@@ -128,6 +128,8 @@ type LibraryStatus = 'unsold' | 'sold'
 type LibraryItem = {
   id: string
   sku: string
+  barcode_number?: string | null
+  sku_type?: string | null
   brand: string | null
   reporting_category: string | null
   colour_primary?: string | null
@@ -1938,6 +1940,8 @@ export default function CheckoutPage() {
         .select(`
           id,
           sku,
+          barcode_number,
+          sku_type,
           brand,
           reporting_category,
           colour_primary,
@@ -2582,9 +2586,16 @@ export default function CheckoutPage() {
                             <p className="mt-1 truncate text-[11px] font-bold text-neutral-500">
                               {[item.reporting_category, colour].filter(Boolean).join(' · ')}
                             </p>
-                            <div className="mt-2 flex items-center justify-between gap-2">
-                              <span className="text-xs font-black">{item.sku}</span>
-                              <span className="text-sm font-black">{money(Number(item.selling_price || 0))}</span>
+                            <div className="mt-2 flex items-end justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-xs font-black">{item.sku}</p>
+                                {item.sku_type === 'reusable' && item.barcode_number && (
+                                  <p className="truncate font-mono text-[11px] font-bold text-neutral-500">
+                                    Barcode: {item.barcode_number}
+                                  </p>
+                                )}
+                              </div>
+                              <span className="shrink-0 text-sm font-black">{money(Number(item.selling_price || 0))}</span>
                             </div>
                             <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-bold text-neutral-500">
                               <span>{item.current_location || 'No location'}</span>
