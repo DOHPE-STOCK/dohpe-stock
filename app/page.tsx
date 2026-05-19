@@ -366,7 +366,7 @@ export default function SkuSearchPage() {
           image_order
         )
       `)
-      .eq('sku', rawSku)
+      .or(`sku.eq.${rawSku},barcode_number.eq.${rawSku}`)
       .maybeSingle()
 
     setBusy(false)
@@ -396,6 +396,22 @@ export default function SkuSearchPage() {
         itemData = createdItem
         setMessage(`Created item ${rawSku} by ${staff.name}`)
       }
+    }
+
+    const matchedSku = itemData?.sku || rawSku
+    const matchedBarcode = itemData?.barcode_number || ''
+
+    const alreadyScannedMatched = scannedItems.find(
+      (item) =>
+        item.sku === matchedSku ||
+        (matchedBarcode && item.barcode_number === matchedBarcode)
+    )
+
+    if (alreadyScannedMatched) {
+      setMessage(`Already scanned: ${matchedSku}`)
+      setScanValue('')
+      setTimeout(() => scanInputRef.current?.focus(), 50)
+      return
     }
 
     const loanedByName =
@@ -1256,6 +1272,12 @@ export default function SkuSearchPage() {
                           {item.sku}
                         </p>
 
+                        {item.barcode_number && item.barcode_number !== item.sku && (
+                          <p className="font-mono text-xs text-neutral-600">
+                            Barcode: {item.barcode_number}
+                          </p>
+                        )}
+
                         <h3 className="truncate text-base font-semibold">
                           {item.ai_title || item.basic_title || 'Untitled item'}
                         </h3>
@@ -1413,16 +1435,21 @@ export default function SkuSearchPage() {
 
             <button
               type="button"
-              onClick={createReusableSku}
-              disabled={
-                reusableBusy ||
-                !staff ||
-                !reusableSearch.trim() ||
-                Boolean(exactReusableMatch)
-              }
-              className="rounded-xl bg-emerald-400 px-4 py-2 font-semibold text-black disabled:opacity-50"
+              onClick={() => {
+                if (exactReusableMatch) {
+                  editReusableSku(exactReusableMatch)
+                } else {
+                  createReusableSku()
+                }
+              }}
+              disabled={reusableBusy || !staff || !reusableSearch.trim()}
+              className={`rounded-xl px-4 py-2 font-semibold disabled:opacity-50 ${
+                exactReusableMatch
+                  ? 'bg-white text-black'
+                  : 'bg-emerald-400 text-black'
+              }`}
             >
-              Create
+              {exactReusableMatch ? 'Edit' : 'Create'}
             </button>
 
             <button
