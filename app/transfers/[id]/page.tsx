@@ -8,9 +8,12 @@ import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
+const DEFAULT_BIN = 'Default'
+
 type LinkedItem = {
   id: string
   sku: string
+  sku_type?: string | null
   brand: string | null
   reporting_category: string | null
   colour_primary: string | null
@@ -24,6 +27,14 @@ type LinkedItem = {
     original_url: string | null
     image_order: number | null
   }[]
+}
+
+type StockItemRow = {
+  id: string
+  sku: string
+  sku_type: string | null
+  current_location: string | null
+  current_bin: string | null
 }
 
 type TransferItem = {
@@ -45,6 +56,27 @@ type Transfer = {
   sent_at: string | null
   received_at: string | null
   stock_transfer_items: TransferItem[]
+}
+
+function text(value: any) {
+  if (value === null || value === undefined) return ''
+  return String(value).trim()
+}
+
+function isReusableStockItem(item: StockItemRow | LinkedItem | null | undefined) {
+  return text(item?.sku_type).toLowerCase() === 'reusable'
+}
+
+function groupBySku(rows: TransferItem[]) {
+  const grouped = new Map<string, number>()
+
+  rows.forEach((row) => {
+    const sku = text(row.sku).toUpperCase()
+    if (!sku) return
+    grouped.set(sku, (grouped.get(sku) || 0) + 1)
+  })
+
+  return grouped
 }
 
 function getSizeText(item: LinkedItem | null | undefined) {
@@ -73,6 +105,34 @@ function getThumbnail(item?: LinkedItem | null) {
   )
 
   return sorted[0]?.processed_url || sorted[0]?.original_url || null
+}
+
+function formatDate(value: string | null) {
+  if (!value) return '-'
+
+  return new Date(value).toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function statusClass(status: string) {
+  if (status === 'received') {
+    return 'bg-green-950 text-green-300 border-green-800'
+  }
+
+  if (status === 'missing') {
+    return 'bg-red-950 text-red-300 border-red-800'
+  }
+
+  if (status === 'part_received') {
+    return 'bg-yellow-950 text-yellow-300 border-yellow-800'
+  }
+
+  return 'bg-blue-950 text-blue-300 border-blue-800'
 }
 
 export default function TransferDetailPage() {
@@ -112,6 +172,7 @@ export default function TransferDetailPage() {
           items (
             id,
             sku,
+            sku_type,
             brand,
             reporting_category,
             colour_primary,
@@ -152,32 +213,167 @@ export default function TransferDetailPage() {
     }
   }
 
-  function formatDate(value: string | null) {
-    if (!value) return '-'
+  async function loadItemsBySku(skus: string[]) {
+    const uniqueSkus = Array.from(
+      new Set(skus.map((sku) => text(sku).toUpperCase()).filter(Boolean))
+    )
 
-    return new Date(value).toLocaleString('en-GB', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    if (uniqueSkus.length === 0) return new Map<string, StockItemRow>()
+
+    const { data, error } = await supabase
+      .from('items')
+      .select('id, sku, sku_type, current_location, current_bin')
+      .in('sku', uniqueSkus)
+
+    if (error) throw new Error(error.message)
+
+    return new Map(
+      (data || []).map((item: any) => [
+        text(item.sku).toUpperCase(),
+        item as StockItemRow,
+      ])
+    )
   }
 
-  function statusClass(status: string) {
-    if (status === 'received') {
-      return 'bg-green-950 text-green-300 border-green-800'
+  async function adjustLocalStockLocation(params: {
+    item: StockItemRow
+    location: string
+    bin: string
+    delta: number
+  }) {
+    const locationName = text(params.location) || 'WAREHOUSE'
+    const binCode = text(params.bin) || DEFAULT_BIN
+    const now = new Date().toISOString()
+
+    const { data, error } = await supabase
+      .from('item_stock_locations')
+      .select('id, stock_level')
+      .eq('item_id', params.item.id)
+      .eq('location_name', locationName)
+      .eq('bin_code', binCode)
+      .limit(1)
+
+    if (error) throw new Error(error.message)
+
+    const existing = data?.[0]
+    const currentStock = Number(existing?.stock_level || 0)
+    const nextStock = currentStock + params.delta
+
+    if (nextStock < 0) {
+      throw new Error(
+        `${params.item.sku} does not have enough stock in ${locationName} / ${binCode}. Current: ${currentStock}, trying to move: ${Math.abs(params.delta)}.`
+      )
     }
 
-    if (status === 'missing') {
-      return 'bg-red-950 text-red-300 border-red-800'
+    if (existing) {
+      const { error: updateError } = await supabase
+        .from('item_stock_locations')
+        .update({
+          stock_level: nextStock,
+          source: 'app_transfer',
+          updated_at: now,
+        })
+        .eq('id', existing.id)
+
+      if (updateError) throw new Error(updateError.message)
+      return
     }
 
-    if (status === 'part_received') {
-      return 'bg-yellow-950 text-yellow-300 border-yellow-800'
+    const { error: insertError } = await supabase
+      .from('item_stock_locations')
+      .insert({
+        item_id: params.item.id,
+        sku: params.item.sku,
+        location_name: locationName,
+        location_id: null,
+        bin_code: binCode,
+        stock_level: nextStock,
+        source: 'app_transfer',
+        synced_at: null,
+        updated_at: now,
+      })
+
+    if (insertError) throw new Error(insertError.message)
+  }
+
+  async function moveReusableTransferStock(params: {
+    transfer: Transfer
+    receivableItems: TransferItem[]
+    itemMap: Map<string, StockItemRow>
+    movedAt: string
+  }) {
+    const reusableRows = params.receivableItems.filter((row) =>
+      isReusableStockItem(params.itemMap.get(text(row.sku).toUpperCase()))
+    )
+
+    if (reusableRows.length === 0) return
+
+    const grouped = groupBySku(reusableRows)
+    const queueRows: any[] = []
+
+    for (const [sku, quantity] of grouped) {
+      const item = params.itemMap.get(sku)
+      if (!item) continue
+
+      await adjustLocalStockLocation({
+        item,
+        location: params.transfer.from_location,
+        bin: DEFAULT_BIN,
+        delta: -quantity,
+      })
+
+      await adjustLocalStockLocation({
+        item,
+        location: params.transfer.to_location,
+        bin: DEFAULT_BIN,
+        delta: quantity,
+      })
+
+      queueRows.push(
+        {
+          item_id: item.id,
+          sku,
+          action: 'adjust_stock',
+          payload: {
+            sku,
+            delta: -quantity,
+            quantity,
+            location: params.transfer.from_location,
+            bin: DEFAULT_BIN,
+            strict_location: true,
+            reason: 'transfer_reusable_from_source',
+            transfer_id: params.transfer.id,
+            transfer_number: params.transfer.transfer_number,
+            moved_at: params.movedAt,
+            moved_by: staff?.name || null,
+          },
+          status: 'pending',
+        },
+        {
+          item_id: item.id,
+          sku,
+          action: 'adjust_stock',
+          payload: {
+            sku,
+            delta: quantity,
+            quantity,
+            location: params.transfer.to_location,
+            bin: DEFAULT_BIN,
+            reason: 'transfer_reusable_to_destination',
+            transfer_id: params.transfer.id,
+            transfer_number: params.transfer.transfer_number,
+            moved_at: params.movedAt,
+            moved_by: staff?.name || null,
+          },
+          status: 'pending',
+        }
+      )
     }
 
-    return 'bg-blue-950 text-blue-300 border-blue-800'
+    if (queueRows.length > 0) {
+      const { error } = await supabase.from('linnworks_sync_queue').insert(queueRows)
+      if (error) throw new Error(error.message)
+    }
   }
 
   async function markTransferReceived() {
@@ -208,65 +404,99 @@ export default function TransferDetailPage() {
 
     const now = new Date().toISOString()
 
-    const itemIds = receivableItems
-      .map((item) => item.item_id)
-      .filter(Boolean) as string[]
+    try {
+      const itemMap = await loadItemsBySku(receivableItems.map((item) => item.sku))
+      const reusableSkus = new Set(
+        Array.from(itemMap.values())
+          .filter(isReusableStockItem)
+          .map((item) => text(item.sku).toUpperCase())
+      )
 
-    const transferItemIds = receivableItems.map((item) => item.id)
+      const singleUseItemIds = receivableItems
+        .filter((item) => !reusableSkus.has(text(item.sku).toUpperCase()))
+        .map((item) => item.item_id)
+        .filter(Boolean) as string[]
 
-    const { error: transferItemsError } = await supabase
-      .from('stock_transfer_items')
-      .update({
-        status: 'received',
-        received_at: now,
+      const transferItemIds = receivableItems.map((item) => item.id)
+
+      await moveReusableTransferStock({
+        transfer,
+        receivableItems,
+        itemMap,
+        movedAt: now,
       })
-      .in('id', transferItemIds)
 
-    if (transferItemsError) {
-      setLoading(false)
-      setMessage(transferItemsError.message)
-      return
-    }
-
-    if (itemIds.length > 0) {
-      const { error: itemsError } = await supabase
-        .from('items')
+      const { error: transferItemsError } = await supabase
+        .from('stock_transfer_items')
         .update({
-          location_status: 'received',
-          current_location: transfer.to_location,
-          current_bin: transfer.to_location,
-          last_saved_by: staff.id,
-          updated_at: now,
+          status: 'received',
+          received_at: now,
         })
-        .in('id', itemIds)
+        .in('id', transferItemIds)
 
-      if (itemsError) {
-        setLoading(false)
-        setMessage(itemsError.message)
-        return
+      if (transferItemsError) throw new Error(transferItemsError.message)
+
+      if (singleUseItemIds.length > 0) {
+        const { error: itemsError } = await supabase
+          .from('items')
+          .update({
+            location_status: 'received',
+            current_location: transfer.to_location,
+            current_bin: DEFAULT_BIN,
+            last_saved_by: staff.id,
+            linnworks_location_sync_status: 'pending',
+            updated_at: now,
+          })
+          .in('id', singleUseItemIds)
+
+        if (itemsError) throw new Error(itemsError.message)
+
+        const queueRows = receivableItems
+          .filter((item) => item.item_id && !reusableSkus.has(text(item.sku).toUpperCase()))
+          .map((item) => ({
+            item_id: item.item_id,
+            sku: item.sku,
+            action: 'update_location',
+            payload: {
+              sku: item.sku,
+              location: transfer.to_location,
+              bin: DEFAULT_BIN,
+              movement_type: 'transfer_receive',
+              transfer_id: transfer.id,
+              transfer_number: transfer.transfer_number,
+              received_at: now,
+              received_by: staff.name,
+            },
+            status: 'pending',
+          }))
+
+        if (queueRows.length > 0) {
+          const { error: queueError } = await supabase
+            .from('linnworks_sync_queue')
+            .insert(queueRows)
+
+          if (queueError) throw new Error(queueError.message)
+        }
       }
-    }
 
-    const { error: transferError } = await supabase
-      .from('stock_transfers')
-      .update({
-        status: 'received',
-        received_at: now,
-        received_by: staff.id,
-      })
-      .eq('id', transfer.id)
+      const { error: transferError } = await supabase
+        .from('stock_transfers')
+        .update({
+          status: 'received',
+          received_at: now,
+          received_by: staff.id,
+        })
+        .eq('id', transfer.id)
 
-    if (transferError) {
+      if (transferError) throw new Error(transferError.message)
+
+      setMessage(`Transfer #${transfer.transfer_number} received.`)
+      await fetchTransfer()
+    } catch (error: any) {
+      setMessage(error.message || 'Transfer receive failed.')
+    } finally {
       setLoading(false)
-      setMessage(transferError.message)
-      return
     }
-
-    setMessage(`Transfer #${transfer.transfer_number} received.`)
-
-    await fetchTransfer()
-
-    setLoading(false)
   }
 
   if (!transfer) {
@@ -412,7 +642,7 @@ export default function TransferDetailPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {transfer.stock_transfer_items.map((transferItem) => {
+              {transfer.stock_transfer_items.map((transferItem: TransferItem) => {
                 const linkedItem = Array.isArray(transferItem.items)
                   ? transferItem.items[0] || null
                   : transferItem.items
@@ -450,21 +680,11 @@ export default function TransferDetailPage() {
                       </h3>
 
                       <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-400">
-                        <span>
-                          {linkedItem?.brand || 'No brand'}
-                        </span>
-
+                        <span>{linkedItem?.brand || 'No brand'}</span>
                         <span>·</span>
-
-                        <span>
-                          {linkedItem?.reporting_category || 'No category'}
-                        </span>
-
+                        <span>{linkedItem?.reporting_category || 'No category'}</span>
                         <span>·</span>
-
-                        <span>
-                          {linkedItem?.colour_primary || 'No colour'}
-                        </span>
+                        <span>{linkedItem?.colour_primary || 'No colour'}</span>
 
                         {linkedItem?.colour_secondary && (
                           <>
@@ -477,6 +697,13 @@ export default function TransferDetailPage() {
                           <>
                             <span>·</span>
                             <span>{getSizeText(linkedItem)}</span>
+                          </>
+                        )}
+
+                        {isReusableStockItem(linkedItem) && (
+                          <>
+                            <span>·</span>
+                            <span className="font-bold text-yellow-300">Reusable qty unit</span>
                           </>
                         )}
                       </div>

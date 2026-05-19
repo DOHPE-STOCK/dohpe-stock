@@ -32,6 +32,43 @@ function formatTransferNumber(value: number) {
   return String(value).padStart(7, '0')
 }
 
+type StockItemRow = {
+  id: string
+  sku: string
+  sku_type: string | null
+  current_location: string | null
+  current_bin: string | null
+}
+
+const DEFAULT_BIN = 'Default'
+
+function text(value: any) {
+  if (value === null || value === undefined) return ''
+  return String(value).trim()
+}
+
+function isReusableStockItem(item: StockItemRow | undefined) {
+  return text(item?.sku_type).toLowerCase() === 'reusable'
+}
+
+function linnworksLocation(location: string) {
+  const value = text(location).toUpperCase()
+  if (!value || value === 'WAREHOUSE') return 'Default'
+  return value
+}
+
+function groupBySku(items: TransferItem[]) {
+  const groups = new Map<string, number>()
+
+  for (const item of items) {
+    const sku = text(item.sku).toUpperCase()
+    if (!sku) continue
+    groups.set(sku, (groups.get(sku) || 0) + 1)
+  }
+
+  return groups
+}
+
 export default function TransfersPage() {
   const { staff } = useStaff()
 
@@ -39,6 +76,164 @@ export default function TransfersPage() {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('month')
+
+  async function loadItemsBySku(skus: string[]) {
+    const uniqueSkus = Array.from(new Set(skus.map((sku) => text(sku).toUpperCase()).filter(Boolean)))
+
+    if (uniqueSkus.length === 0) return new Map<string, StockItemRow>()
+
+    const { data, error } = await supabase
+      .from('items')
+      .select('id, sku, sku_type, current_location, current_bin')
+      .in('sku', uniqueSkus)
+
+    if (error) throw new Error(error.message)
+
+    return new Map(
+      (data || []).map((item: any) => [text(item.sku).toUpperCase(), item as StockItemRow])
+    )
+  }
+
+  async function adjustLocalStockLocation(params: {
+    item: StockItemRow
+    location: string
+    bin: string
+    delta: number
+  }) {
+    const locationName = linnworksLocation(params.location)
+    const binCode = text(params.bin) || DEFAULT_BIN
+    const now = new Date().toISOString()
+
+    const { data, error } = await supabase
+      .from('item_stock_locations')
+      .select('id, stock_level')
+      .eq('item_id', params.item.id)
+      .eq('location_name', locationName)
+      .eq('bin_code', binCode)
+      .limit(1)
+
+    if (error) throw new Error(error.message)
+
+    const existing = data?.[0]
+    const currentStock = Number(existing?.stock_level || 0)
+    const nextStock = currentStock + params.delta
+
+    if (nextStock < 0) {
+      throw new Error(
+        `${params.item.sku} does not have enough stock in ${params.location} / ${binCode}. Current: ${currentStock}, trying to move: ${Math.abs(params.delta)}.`
+      )
+    }
+
+    if (existing) {
+      const { error: updateError } = await supabase
+        .from('item_stock_locations')
+        .update({
+          stock_level: nextStock,
+          source: 'app_transfer',
+          updated_at: now,
+        })
+        .eq('id', existing.id)
+
+      if (updateError) throw new Error(updateError.message)
+      return
+    }
+
+    const { error: insertError } = await supabase
+      .from('item_stock_locations')
+      .insert({
+        item_id: params.item.id,
+        sku: params.item.sku,
+        location_name: locationName,
+        location_id: null,
+        bin_code: binCode,
+        stock_level: nextStock,
+        source: 'app_transfer',
+        synced_at: null,
+        updated_at: now,
+      })
+
+    if (insertError) throw new Error(insertError.message)
+  }
+
+  async function moveReusableTransferStock(params: {
+    transfer: Transfer
+    receivableItems: TransferItem[]
+    itemMap: Map<string, StockItemRow>
+    movedAt: string
+  }) {
+    const reusableRows = params.receivableItems.filter((row) =>
+      isReusableStockItem(params.itemMap.get(text(row.sku).toUpperCase()))
+    )
+
+    if (reusableRows.length === 0) return
+
+    const grouped = groupBySku(reusableRows)
+    const queueRows: any[] = []
+
+    for (const [sku, quantity] of grouped) {
+      const item = params.itemMap.get(sku)
+      if (!item) continue
+
+      await adjustLocalStockLocation({
+        item,
+        location: params.transfer.from_location,
+        bin: DEFAULT_BIN,
+        delta: -quantity,
+      })
+
+      await adjustLocalStockLocation({
+        item,
+        location: params.transfer.to_location,
+        bin: DEFAULT_BIN,
+        delta: quantity,
+      })
+
+      queueRows.push(
+        {
+          item_id: item.id,
+          sku,
+          action: 'adjust_stock',
+          payload: {
+            sku,
+            delta: -quantity,
+            quantity,
+            location: params.transfer.from_location,
+            bin: DEFAULT_BIN,
+            strict_location: true,
+            reason: 'transfer_reusable_from_source',
+            transfer_id: params.transfer.id,
+            transfer_number: params.transfer.transfer_number,
+            moved_at: params.movedAt,
+            moved_by: staff?.name || null,
+          },
+          status: 'pending',
+        },
+        {
+          item_id: item.id,
+          sku,
+          action: 'adjust_stock',
+          payload: {
+            sku,
+            delta: quantity,
+            quantity,
+            location: params.transfer.to_location,
+            bin: DEFAULT_BIN,
+            reason: 'transfer_reusable_to_destination',
+            transfer_id: params.transfer.id,
+            transfer_number: params.transfer.transfer_number,
+            moved_at: params.movedAt,
+            moved_by: staff?.name || null,
+          },
+          status: 'pending',
+        }
+      )
+    }
+
+    if (queueRows.length > 0) {
+      const { error } = await supabase.from('linnworks_sync_queue').insert(queueRows)
+      if (error) throw new Error(error.message)
+    }
+  }
 
   useEffect(() => {
     fetchTransfers(timePeriod)
@@ -146,7 +341,7 @@ export default function TransfersPage() {
     const transferNo = formatTransferNumber(transfer.transfer_number)
 
     const confirmed = window.confirm(
-      `Accept transfer #${transferNo} by ${staff.name}?\n\nThis will mark ${receivableItems.length} item(s) as received into ${transfer.to_location}.`
+      `Accept transfer #${transferNo} by ${staff.name}?\n\nThis will mark ${receivableItems.length} unit(s) as received into ${transfer.to_location}.`
     )
 
     if (!confirmed) return
@@ -154,64 +349,101 @@ export default function TransfersPage() {
     setLoading(true)
     setMessage('Receiving transfer...')
 
-    const itemIds = receivableItems
-      .map((item) => item.item_id)
-      .filter(Boolean) as string[]
-
-    const transferItemIds = receivableItems.map((item) => item.id)
     const receivedAt = new Date().toISOString()
 
-    const { error: transferItemsError } = await supabase
-      .from('stock_transfer_items')
-      .update({
-        status: 'received',
-        received_at: receivedAt,
+    try {
+      const itemMap = await loadItemsBySku(receivableItems.map((item) => item.sku))
+      const reusableSkus = new Set(
+        Array.from(itemMap.values())
+          .filter(isReusableStockItem)
+          .map((item) => text(item.sku).toUpperCase())
+      )
+
+      const singleUseItemIds = receivableItems
+        .filter((item) => !reusableSkus.has(text(item.sku).toUpperCase()))
+        .map((item) => item.item_id)
+        .filter(Boolean) as string[]
+
+      const transferItemIds = receivableItems.map((item) => item.id)
+
+      await moveReusableTransferStock({
+        transfer,
+        receivableItems,
+        itemMap,
+        movedAt: receivedAt,
       })
-      .in('id', transferItemIds)
 
-    if (transferItemsError) {
-      setLoading(false)
-      setMessage(transferItemsError.message)
-      return
-    }
-
-    if (itemIds.length > 0) {
-      const { error: itemsError } = await supabase
-        .from('items')
+      const { error: transferItemsError } = await supabase
+        .from('stock_transfer_items')
         .update({
-          location_status: 'received',
-          current_location: transfer.to_location,
-          current_bin: transfer.to_location,
-          last_saved_by: staff.id,
-          updated_at: receivedAt,
+          status: 'received',
+          received_at: receivedAt,
         })
-        .in('id', itemIds)
+        .in('id', transferItemIds)
 
-      if (itemsError) {
-        setLoading(false)
-        setMessage(itemsError.message)
-        return
+      if (transferItemsError) throw new Error(transferItemsError.message)
+
+      if (singleUseItemIds.length > 0) {
+        const { error: itemsError } = await supabase
+          .from('items')
+          .update({
+            location_status: 'received',
+            current_location: transfer.to_location,
+            current_bin: DEFAULT_BIN,
+            last_saved_by: staff.id,
+            linnworks_location_sync_status: 'pending',
+            updated_at: receivedAt,
+          })
+          .in('id', singleUseItemIds)
+
+        if (itemsError) throw new Error(itemsError.message)
+
+        const queueRows = receivableItems
+          .filter((item) => item.item_id && !reusableSkus.has(text(item.sku).toUpperCase()))
+          .map((item) => ({
+            item_id: item.item_id,
+            sku: item.sku,
+            action: 'update_location',
+            payload: {
+              sku: item.sku,
+              location: transfer.to_location,
+              bin: DEFAULT_BIN,
+              movement_type: 'transfer_receive',
+              transfer_id: transfer.id,
+              transfer_number: transfer.transfer_number,
+              received_at: receivedAt,
+              received_by: staff.name,
+            },
+            status: 'pending',
+          }))
+
+        if (queueRows.length > 0) {
+          const { error: queueError } = await supabase
+            .from('linnworks_sync_queue')
+            .insert(queueRows)
+
+          if (queueError) throw new Error(queueError.message)
+        }
       }
-    }
 
-    const { error: transferError } = await supabase
-      .from('stock_transfers')
-      .update({
-        status: 'received',
-        received_at: receivedAt,
-        received_by: staff.id,
-      })
-      .eq('id', transfer.id)
+      const { error: transferError } = await supabase
+        .from('stock_transfers')
+        .update({
+          status: 'received',
+          received_at: receivedAt,
+          received_by: staff.id,
+        })
+        .eq('id', transfer.id)
 
-    if (transferError) {
+      if (transferError) throw new Error(transferError.message)
+
+      setMessage(`Transfer #${transferNo} received by ${staff.name}.`)
+      await fetchTransfers()
+    } catch (error: any) {
+      setMessage(error.message || 'Transfer receive failed.')
+    } finally {
       setLoading(false)
-      setMessage(transferError.message)
-      return
     }
-
-    setMessage(`Transfer #${transferNo} received by ${staff.name}.`)
-    await fetchTransfers()
-    setLoading(false)
   }
 
   return (

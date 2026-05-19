@@ -102,6 +102,16 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+function mapAppLocationToLinnworksLocation(locationName: string) {
+  const value = normaliseText(locationName)
+  const lower = value.toLowerCase()
+
+  if (!value) return 'Default'
+  if (lower === 'warehouse') return 'Default'
+
+  return value
+}
+
 function normaliseAction(value: any) {
   return normaliseText(value).toLowerCase()
 }
@@ -210,7 +220,7 @@ async function findLinnworksItemBySku(server: string, token: string, sku: string
 }
 
 function findLocationId(locations: any[], locationName: string) {
-  const wanted = locationName.toLowerCase().trim()
+  const wanted = mapAppLocationToLinnworksLocation(locationName).toLowerCase().trim()
 
   const match = locations.find((location) => {
     const possibleNames = [
@@ -544,11 +554,12 @@ function chooseLocationForAdjustment(params: {
 
   const reason = normaliseText(payload.reason).toLowerCase()
 
-  const wantedLocation =
+  const rawWantedLocation =
     normaliseText(payload.location) ||
     normaliseText(payload.sale_location) ||
     ''
 
+  const wantedLocation = mapAppLocationToLinnworksLocation(rawWantedLocation)
   const wantedLocationLower = wantedLocation.toLowerCase()
   const rowsWithStock = stockRows.filter((row) => row.locationId && row.stockLevel > 0)
 
@@ -641,7 +652,7 @@ function chooseLocationForAdjustment(params: {
       }
     }
 
-    const itemLocation = normaliseText(item?.current_location).toLowerCase()
+    const itemLocation = mapAppLocationToLinnworksLocation(normaliseText(item?.current_location)).toLowerCase()
 
     if (itemLocation) {
       const itemLocationRow = stockRows.find(
@@ -991,10 +1002,12 @@ async function processUpdateStockQueueRow(params: {
   const costPrice = normaliseNumber(item?.cost_price) ?? 0
   const stockValue = Number((stockLevel * costPrice).toFixed(2))
 
-  const locationName =
+  const appLocationName =
     normaliseText(payload.location) ||
     normaliseText(item?.current_location) ||
     'Default'
+
+  const locationName = mapAppLocationToLinnworksLocation(appLocationName)
 
   const binRack =
     normaliseText(payload.bin) ||
@@ -1061,7 +1074,7 @@ Bin: ${binRack}`,
     .from('items')
     .update({
       stock_level: stockLevel,
-      current_location: locationName,
+      current_location: appLocationName,
       current_bin: binRack,
       linnworks_location_sync_status: 'synced',
       linnworks_location_synced_at: new Date().toISOString(),
@@ -1079,6 +1092,131 @@ Bin: ${binRack}`,
     stockLevel,
     stockValue,
     locationName,
+    locationId,
+    binRack,
+    results,
+  }
+}
+
+async function processUpdateLocationQueueRow(params: {
+  row: any
+  supabase: any
+  server: string
+  token: string
+  locations: any[]
+}) {
+  const { row, supabase, server, token, locations } = params
+  const payload = row.payload || {}
+
+  const sku = normaliseText(payload.sku || row.sku)
+  if (!sku) throw new Error('Missing SKU in queue payload.')
+
+  const appLocationName =
+    normaliseText(payload.location) ||
+    'WAREHOUSE'
+
+  const linnworksLocationName = mapAppLocationToLinnworksLocation(appLocationName)
+
+  const binRack =
+    normaliseText(payload.bin) ||
+    'Default'
+
+  const stockItemId =
+    normaliseText(payload.linnworks_item_id) ||
+    normaliseText(payload.stockItemId) ||
+    (await findLinnworksItemBySku(server, token, sku))
+
+  if (!stockItemId) {
+    throw new Error(`Could not find Linnworks item for SKU ${sku}`)
+  }
+
+  const locationId = findLocationId(locations, linnworksLocationName)
+
+  if (!locationId) {
+    throw new Error(`Linnworks location not found: ${linnworksLocationName}`)
+  }
+
+  const results: any = {}
+
+  results.binrack = await updateStockField(server, token, {
+    stockItemId,
+    fieldName: 'BinRack',
+    fieldValue: binRack,
+    locationId,
+  })
+
+  const now = new Date().toISOString()
+
+  const { data: item, error: itemReadError } = await supabase
+    .from('items')
+    .select('id, sku')
+    .eq('sku', sku)
+    .maybeSingle()
+
+  if (itemReadError) throw new Error(itemReadError.message)
+
+  const { error: itemUpdateError } = await supabase
+    .from('items')
+    .update({
+      current_location: appLocationName,
+      current_bin: binRack,
+      linnworks_location_sync_status: 'synced',
+      linnworks_location_synced_at: now,
+      linnworks_status: 'synced',
+      linnworks_sync_error: null,
+      updated_at: now,
+    })
+    .eq('sku', sku)
+
+  if (itemUpdateError) throw new Error(itemUpdateError.message)
+
+  if (item?.id) {
+    try {
+      const { data: existingRows, error: existingError } = await supabase
+        .from('item_stock_locations')
+        .select('id, stock_level')
+        .eq('item_id', item.id)
+        .eq('location_name', linnworksLocationName)
+        .limit(1)
+
+      if (!existingError) {
+        const existing = existingRows?.[0]
+
+        if (existing) {
+          await supabase
+            .from('item_stock_locations')
+            .update({
+              bin_code: binRack,
+              updated_at: now,
+            })
+            .eq('id', existing.id)
+        } else {
+          await supabase
+            .from('item_stock_locations')
+            .insert({
+              item_id: item.id,
+              sku,
+              location_name: linnworksLocationName,
+              location_id: locationId,
+              bin_code: binRack,
+              stock_level: 0,
+              source: 'app_location_update',
+              synced_at: now,
+              updated_at: now,
+            })
+        }
+      }
+    } catch {
+      // item_stock_locations may not exist yet in older deployments. Do not fail location sync for that.
+    }
+  }
+
+  return {
+    sku,
+    stockItemId,
+    action: 'update_location',
+    appLocationName,
+    linnworksLocationName,
     locationId,
     binRack,
     results,
@@ -1159,6 +1297,14 @@ async function processQueue(request: Request) {
           })
         } else if (action === 'update_stock') {
           result = await processUpdateStockQueueRow({
+            row,
+            supabase,
+            server,
+            token,
+            locations: Array.isArray(locations) ? locations : [],
+          })
+        } else if (action === 'update_location') {
+          result = await processUpdateLocationQueueRow({
             row,
             supabase,
             server,

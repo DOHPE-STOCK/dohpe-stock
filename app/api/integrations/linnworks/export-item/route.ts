@@ -91,6 +91,16 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+function mapAppLocationToLinnworksLocation(locationName: string) {
+  const value = normaliseText(locationName)
+  const lower = value.toLowerCase()
+
+  if (!value) return 'Default'
+  if (lower === 'warehouse') return 'Default'
+
+  return value
+}
+
 function normalisePropertyName(value: string) {
   return value
     .trim()
@@ -159,7 +169,7 @@ function getInventoryItemObject(data: any) {
 }
 
 function findLocationId(locations: any[], locationName: string) {
-  const wanted = locationName.toLowerCase().trim()
+  const wanted = mapAppLocationToLinnworksLocation(locationName).toLowerCase().trim()
 
   const match = locations.find((location) => {
     const possibleNames = [
