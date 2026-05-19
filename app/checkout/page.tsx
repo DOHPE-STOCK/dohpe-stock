@@ -2587,16 +2587,18 @@ export default function CheckoutPage() {
                               {[item.reporting_category, colour].filter(Boolean).join(' · ')}
                             </p>
                             <div className="mt-2 flex items-end justify-between gap-2">
-                              <div className="min-w-0">
-                                <p className="truncate text-xs font-black">{item.sku}</p>
-                                {item.sku_type === 'reusable' && item.barcode_number && (
-                                  <p className="truncate font-mono text-[11px] font-bold text-neutral-500">
-                                    Barcode: {item.barcode_number}
-                                  </p>
-                                )}
-                              </div>
-                              <span className="shrink-0 text-sm font-black">{money(Number(item.selling_price || 0))}</span>
-                            </div>
+  <div className="min-w-0">
+    <p className="truncate text-xs font-black">
+      {item.sku_type === 'reusable' && item.barcode_number
+        ? item.barcode_number
+        : item.sku}
+    </p>
+  </div>
+
+  <span className="shrink-0 text-sm font-black">
+    {money(Number(item.selling_price || 0))}
+  </span>
+</div>
                             <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-bold text-neutral-500">
                               <span>{item.current_location || 'No location'}</span>
                               <span>{libraryStatus === 'sold' ? 'Sold' : `Stock ${stock}`}</span>
