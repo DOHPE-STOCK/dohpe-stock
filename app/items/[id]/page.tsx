@@ -373,6 +373,84 @@ function PhotoPreview({
   )
 }
 
+
+const MEASUREMENT_FIELDS = [
+  'pit_to_pit_in',
+  'collar_to_hem_in',
+  'pit_to_cuff_in',
+  'sleeve_in',
+  'waist_in',
+  'inside_leg_in',
+  'rise_in',
+  'hem_width_in',
+]
+
+function getExportTitle(item: any) {
+  return item.final_title || item.ai_title || item.basic_title || item.website_title || item.sku
+}
+
+function getExportDescription(item: any) {
+  return item.final_description || item.ai_description || item.basic_description || ''
+}
+
+function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
+  const payload: any = {
+    id: item.id,
+    sku: item.sku,
+    barcode_number: item.barcode_number,
+    sku_type: item.sku_type,
+    linnworks_item_id: item.linnworks_item_id,
+
+    title: getExportTitle(item),
+    final_title: item.final_title,
+    ai_title: item.ai_title,
+    basic_title: item.basic_title,
+    website_title: item.website_title,
+
+    final_description: item.final_description,
+    ai_description: item.ai_description,
+    basic_description: item.basic_description,
+    description: getExportDescription(item),
+
+    brand: item.brand,
+    reporting_category: item.reporting_category,
+    tagged_size: item.tagged_size,
+    size_label: item.size_label,
+    condition: item.condition,
+
+    material: item.material,
+    colour_primary: item.colour_primary,
+    colour_secondary: item.colour_secondary,
+    style: item.style,
+    sub_type: item.sub_type,
+    era: item.era,
+    gender: item.gender,
+    flaws: item.flaws,
+
+    selling_price: item.selling_price,
+    cost_price: item.cost_price,
+    stock_level: item.stock_level ?? 1,
+    weight_grams: item.weight_grams,
+
+    current_location: item.current_location,
+    current_bin: item.current_bin,
+
+    processed_image_urls: processedImageUrls,
+  }
+
+  for (const field of MEASUREMENT_FIELDS) {
+    if (item[field] !== null && item[field] !== undefined && String(item[field]).trim() !== '') {
+      payload[field] = item[field]
+    }
+  }
+
+  if (item.measurements) {
+    payload.measurements = item.measurements
+  }
+
+  return payload
+}
+
 export default function ItemPage() {
   const params = useParams()
   const id = params.id as string
@@ -382,6 +460,7 @@ export default function ItemPage() {
   const [message, setMessage] = useState('')
   const [generatingAi, setGeneratingAi] = useState(false)
   const [processingImages, setProcessingImages] = useState(false)
+  const [exportingLinnworks, setExportingLinnworks] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0)
 
@@ -438,6 +517,23 @@ export default function ItemPage() {
     if (!data || data.length === 0) return []
 
     return data
+      .map((image) => image.processed_url || image.original_url)
+      .filter(Boolean)
+  }
+
+
+  async function getProcessedImageUrls() {
+    const { data, error } = await supabase
+      .from('item_images')
+      .select('processed_url, original_url, image_order')
+      .eq('item_id', id)
+      .order('image_order', { ascending: true })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return (data || [])
       .map((image) => image.processed_url || image.original_url)
       .filter(Boolean)
   }
@@ -599,21 +695,30 @@ export default function ItemPage() {
   }
 
   function missingFinaliseFields(itemToCheck: any, imageCount: number) {
-    const required = [
-      ['reporting_category', 'Category'],
-      ['cost_price', 'Cost Price'],
-      ['selling_price', 'Sale Price'],
-      ['brand', 'Brand'],
-      ['ai_title', 'AI Marketplace Title'],
-      ['ai_description', 'AI Description'],
-      ['website_title', 'Website Title'],
-    ]
+    const isReusableSku = itemToCheck?.sku_type === 'reusable'
+
+    const required = isReusableSku
+      ? [
+          ['brand', 'Brand'],
+          ['reporting_category', 'Reporting Category'],
+          ['sub_type', 'Sub Type'],
+          ['selling_price', 'Sale Price'],
+        ]
+      : [
+          ['reporting_category', 'Category'],
+          ['cost_price', 'Cost Price'],
+          ['selling_price', 'Sale Price'],
+          ['brand', 'Brand'],
+          ['ai_title', 'AI Marketplace Title'],
+          ['ai_description', 'AI Description'],
+          ['website_title', 'Website Title'],
+        ]
 
     const missing = required
       .filter(([key]) => !itemToCheck[key])
       .map(([_, label]) => label)
 
-    if (imageCount < 1) {
+    if (!isReusableSku && imageCount < 1) {
       missing.push('Image')
     }
 
@@ -659,6 +764,79 @@ export default function ItemPage() {
     }
   }
 
+  async function exportItemToLinnworks(itemToExport: any) {
+    setExportingLinnworks(true)
+    setMessage(`Exporting ${itemToExport.sku} to Linnworks...`)
+
+    try {
+      const processedImageUrls = await getProcessedImageUrls()
+
+      await supabase
+        .from('items')
+        .update({
+          linnworks_status: 'pending',
+          linnworks_sync_error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+
+      const response = await fetch('/api/integrations/linnworks/export-item', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(buildLinnworksPayload(itemToExport, processedImageUrls)),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || 'Linnworks export failed.')
+      }
+
+      const exportedItem = {
+        ...itemToExport,
+        linnworks_status: 'synced',
+        linnworks_managed: true,
+        linnworks_item_id: data.linnworks_item_id,
+        linnworks_item_number: data.linnworks_item_number,
+        linnworks_synced_at: new Date().toISOString(),
+        linnworks_sync_error: null,
+        updated_at: new Date().toISOString(),
+      }
+
+      const { error: updateError } = await supabase
+        .from('items')
+        .update({
+          linnworks_status: exportedItem.linnworks_status,
+          linnworks_managed: exportedItem.linnworks_managed,
+          linnworks_item_id: exportedItem.linnworks_item_id,
+          linnworks_item_number: exportedItem.linnworks_item_number,
+          linnworks_synced_at: exportedItem.linnworks_synced_at,
+          linnworks_sync_error: null,
+          updated_at: exportedItem.updated_at,
+        })
+        .eq('id', id)
+
+      if (updateError) {
+        throw new Error(updateError.message)
+      }
+
+      return exportedItem
+    } catch (error: any) {
+      await supabase
+        .from('items')
+        .update({
+          linnworks_status: 'failed',
+          linnworks_sync_error: error.message || 'Unknown export error.',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+
+      throw error
+    } finally {
+      setExportingLinnworks(false)
+    }
+  }
+
   async function saveItem() {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
@@ -676,6 +854,20 @@ export default function ItemPage() {
         String(item.cost_price || '') ||
       String(originalItemRef.current?.selling_price || '') !==
         String(item.selling_price || '')
+
+    const isReusableSku = item.sku_type === 'reusable'
+    const isLinnworksManaged =
+      originalItemRef.current?.linnworks_managed === true || item.linnworks_managed === true
+
+    let exportReusableNow = false
+
+    if (stockLevelChanged && isReusableSku && !isLinnworksManaged) {
+      exportReusableNow = window.confirm(
+        `Reusable SKU ${item.sku} is not synced with Linnworks yet.\n\nExport to Linnworks now?\n\nYes = save locally and export now.\nNo = save locally only and do not create a Linnworks stock queue.`
+      )
+    }
+
+    const shouldQueueStockSync = stockLevelChanged && (!isReusableSku || isLinnworksManaged)
 
     const cleanedItem = {
       ...item,
@@ -698,7 +890,7 @@ export default function ItemPage() {
 
       last_saved_by: staff.id,
       ...(priceChanged ? { priced_by: staff.id } : {}),
-      ...(stockLevelChanged
+      ...(shouldQueueStockSync
         ? {
             linnworks_location_sync_status: 'pending',
             linnworks_sync_error: null,
@@ -716,7 +908,9 @@ export default function ItemPage() {
       return null
     }
 
-    if (stockLevelChanged) {
+    let savedItem = cleanedItem
+
+    if (shouldQueueStockSync) {
       const { error: queueError } = await supabase
         .from('linnworks_sync_queue')
         .insert({
@@ -744,17 +938,39 @@ export default function ItemPage() {
       }
     }
 
-    originalItemRef.current = cleanedItem
-    setItem(cleanedItem)
+    if (exportReusableNow) {
+      try {
+        savedItem = await exportItemToLinnworks(cleanedItem)
+      } catch (error: any) {
+        setMessage(
+          `Saved locally, but Linnworks export failed: ${error.message || 'Unknown export error.'}`
+        )
+        originalItemRef.current = cleanedItem
+        setItem(cleanedItem)
+        setHasUnsavedChanges(false)
+        return cleanedItem
+      }
+    }
+
+    originalItemRef.current = savedItem
+    setItem(savedItem)
     setHasUnsavedChanges(false)
 
-    setMessage(
-      stockLevelChanged
-        ? `Saved by ${staff.name}. Linnworks stock sync queued.`
-        : `Saved by ${staff.name}`
-    )
+    if (stockLevelChanged && isReusableSku && !isLinnworksManaged && !exportReusableNow) {
+      setMessage(
+        `Saved by ${staff.name}. Reusable SKU is not synced with Linnworks, so no stock sync queue was created.`
+      )
+    } else if (exportReusableNow) {
+      setMessage(`Saved by ${staff.name}. Reusable SKU exported to Linnworks.`)
+    } else {
+      setMessage(
+        shouldQueueStockSync
+          ? `Saved by ${staff.name}. Linnworks stock sync queued.`
+          : `Saved by ${staff.name}`
+      )
+    }
 
-    return cleanedItem
+    return savedItem
   }
 
   async function sendToReview() {
@@ -804,7 +1020,8 @@ export default function ItemPage() {
 
     if (!item) return
 
-    const imageCount = await getImageCount()
+    const isReusableSku = item.sku_type === 'reusable'
+    const imageCount = isReusableSku ? 0 : await getImageCount()
     const missing = missingFinaliseFields(item, imageCount)
 
     if (missing.length > 0) {
@@ -821,14 +1038,16 @@ export default function ItemPage() {
     if (!confirmed) return
 
     setProcessingImages(true)
-    setMessage('Saving and processing images...')
+    setMessage(isReusableSku ? 'Saving reusable SKU...' : 'Saving and processing images...')
 
     try {
       const savedItem = await saveItem()
 
       if (!savedItem) return
 
-      await ensureProcessedImages()
+      if (!isReusableSku) {
+        await ensureProcessedImages()
+      }
 
       const updatedItem = {
         ...savedItem,
@@ -905,6 +1124,8 @@ export default function ItemPage() {
 
               <p className="text-sm text-zinc-400">
                 Status: {item.status}
+                {item.sku_type === 'reusable' ? ' · Reusable SKU' : ''}
+                {item.linnworks_managed ? ' · Linnworks synced' : ''}
                 {hasUnsavedChanges ? ' · Unsaved changes' : ''}
               </p>
 
@@ -931,7 +1152,7 @@ export default function ItemPage() {
 
             <button
               onClick={saveItem}
-              disabled={!staff || processingImages}
+              disabled={!staff || processingImages || exportingLinnworks}
               className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
             >
               Save Item
@@ -939,7 +1160,7 @@ export default function ItemPage() {
 
             <button
               onClick={sendToReview}
-              disabled={!staff || processingImages}
+              disabled={!staff || processingImages || exportingLinnworks}
               className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
             >
               Send to Review
@@ -947,7 +1168,7 @@ export default function ItemPage() {
 
             <button
               onClick={finaliseItem}
-              disabled={!staff || processingImages}
+              disabled={!staff || processingImages || exportingLinnworks}
               className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
             >
               {processingImages ? 'Finalising...' : 'Finalise'}
