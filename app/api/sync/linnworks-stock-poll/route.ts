@@ -14,6 +14,13 @@ type LocalItem = {
   linnworks_managed: boolean | null
 }
 
+type MappedStockRow = {
+  locationId: string | null
+  locationName: string
+  stockLevel: number
+  binRack: string
+}
+
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -64,13 +71,13 @@ async function linnworksPost(server: string, token: string, path: string, body: 
     body: JSON.stringify(body),
   })
 
-  const text = await response.text()
+  const responseText = await response.text()
   let data: any = null
 
   try {
-    data = text ? JSON.parse(text) : null
+    data = responseText ? JSON.parse(responseText) : null
   } catch {
-    data = text
+    data = responseText
   }
 
   if (!response.ok) {
@@ -86,13 +93,13 @@ async function linnworksGet(server: string, token: string, path: string) {
     headers: { accept: 'application/json', Authorization: token },
   })
 
-  const text = await response.text()
+  const responseText = await response.text()
   let data: any = null
 
   try {
-    data = text ? JSON.parse(text) : null
+    data = responseText ? JSON.parse(responseText) : null
   } catch {
-    data = text
+    data = responseText
   }
 
   if (!response.ok) {
@@ -321,7 +328,7 @@ async function getLinnworksStockRows(params: {
 
   const stockLevelRows = fullItem ? getStockLevelsFromFullItem(fullItem) : []
 
-  const mappedRows = stockLevelRows.map((stockRow) => {
+  const mappedRows: MappedStockRow[] = stockLevelRows.map((stockRow) => {
     const locationId = getLocationId(stockRow)
 
     const matchingLocationRow = locationId
@@ -341,14 +348,14 @@ async function getLinnworksStockRows(params: {
       locationId,
       locationName,
       stockLevel: getStockLevel(stockRow),
-      binRack: getBinRack(stockRow) || getBinRack(matchingLocationRow),
+      binRack: getBinRack(stockRow) || getBinRack(matchingLocationRow) || 'Default',
     }
   })
 
   return mappedRows
 }
 
-function chooseDisplayLocation(rows: any[], currentLocation: string | null) {
+function chooseDisplayLocation(rows: MappedStockRow[], currentLocation: string | null) {
   const rowsWithStock = rows.filter((row) => row.stockLevel > 0)
   const current = text(currentLocation).toLowerCase()
 
@@ -369,15 +376,22 @@ function chooseDisplayLocation(rows: any[], currentLocation: string | null) {
   return rows[0] || null
 }
 
-function sumLocationType(rows: any[], type: 'shop' | 'warehouse') {
-  return rows.reduce((sum, row) => {
-    const name = text(row.locationName).toLowerCase()
+function isShopLocation(locationName: string) {
+  return text(locationName).toLowerCase().startsWith('shop')
+}
 
-    if (type === 'shop' && (name.startsWith('shop') || name.includes('shop-'))) {
+function isWarehouseLocation(locationName: string) {
+  const value = text(locationName).toLowerCase()
+  return value === 'default' || value === 'warehouse' || value.includes('warehouse')
+}
+
+function sumLocationType(rows: MappedStockRow[], type: 'shop' | 'warehouse') {
+  return rows.reduce((sum, row) => {
+    if (type === 'shop' && isShopLocation(row.locationName)) {
       return sum + Number(row.stockLevel || 0)
     }
 
-    if (type === 'warehouse' && name.includes('warehouse')) {
+    if (type === 'warehouse' && isWarehouseLocation(row.locationName)) {
       return sum + Number(row.stockLevel || 0)
     }
 
@@ -424,6 +438,42 @@ async function hasBlockingQueueRows(supabase: any, sku: string) {
   if (error) throw new Error(error.message)
 
   return Boolean(data && data.length > 0)
+}
+
+async function replaceItemLocationRows(params: {
+  supabase: any
+  item: LocalItem
+  rows: MappedStockRow[]
+}) {
+  const { supabase, item, rows } = params
+  const now = new Date().toISOString()
+
+  const { error: deleteError } = await supabase
+    .from('item_stock_locations')
+    .delete()
+    .eq('item_id', item.id)
+
+  if (deleteError) throw new Error(deleteError.message)
+
+  const rowsToInsert = rows.map((row) => ({
+    item_id: item.id,
+    sku: item.sku,
+    location_name: row.locationName || 'Unknown',
+    location_id: row.locationId || null,
+    bin_code: row.binRack || 'Default',
+    stock_level: Number(row.stockLevel || 0),
+    source: 'linnworks',
+    synced_at: now,
+    updated_at: now,
+  }))
+
+  if (rowsToInsert.length === 0) return
+
+  const { error: insertError } = await supabase
+    .from('item_stock_locations')
+    .insert(rowsToInsert)
+
+  if (insertError) throw new Error(insertError.message)
 }
 
 async function processStockPoll(request: Request) {
@@ -498,6 +548,12 @@ async function processStockPoll(request: Request) {
 
         const displayLocation = chooseDisplayLocation(rows, item.current_location)
 
+        await replaceItemLocationRows({
+          supabase,
+          item,
+          rows,
+        })
+
         const updatePayload = {
           stock_level: totalStockLevel,
           shop_floor_stock: sumLocationType(rows, 'shop'),
@@ -527,6 +583,7 @@ async function processStockPoll(request: Request) {
           bin: updatePayload.current_bin,
           shop_floor_stock: updatePayload.shop_floor_stock,
           warehouse_stock: updatePayload.warehouse_stock,
+          location_rows_written: rows.length,
           rows: debug ? rows : undefined,
         })
       } catch (error: any) {
