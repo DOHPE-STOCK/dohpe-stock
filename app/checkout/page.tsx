@@ -233,6 +233,16 @@ function getSavedCheckoutLocation() {
   return localStorage.getItem(CHECKOUT_LOCATION_KEY) || 'SHOP-1'
 }
 
+function getDefaultCheckoutBin(location: string) {
+  const cleanLocation = text(location).toUpperCase()
+
+  if (cleanLocation.startsWith('SHOP-')) {
+    return 'FLOOR'
+  }
+
+  return 'Default'
+}
+
 function makeSaleNumber() {
   const date = new Date()
   const y = date.getFullYear()
@@ -599,7 +609,7 @@ export default function CheckoutPage() {
         price,
         quantity,
         location: checkoutLocation || 'SHOP-1',
-        bin: checkoutLocation || 'SHOP-1',
+        bin: getDefaultCheckoutBin(checkoutLocation || 'SHOP-1'),
         stockLevel: 999,
         lineDiscountPercent: 0,
         isReturnLine: false,
@@ -665,7 +675,7 @@ export default function CheckoutPage() {
           price: 0.2,
           quantity: 1,
           location: checkoutLocation || 'SHOP-1',
-          bin: checkoutLocation || 'SHOP-1',
+          bin: getDefaultCheckoutBin(checkoutLocation || 'SHOP-1'),
           stockLevel: 999,
           lineDiscountPercent: 0,
           isReturnLine: false,
@@ -748,7 +758,7 @@ export default function CheckoutPage() {
             price: Number(line.unit_price || 0),
             quantity: 0,
             location: returnLocation,
-            bin: returnLocation,
+            bin: getDefaultCheckoutBin(returnLocation),
             stockLevel: 0,
             lineDiscountPercent: Number(line.discount_percent || 0),
             originalLineId: line.id,
@@ -926,7 +936,7 @@ export default function CheckoutPage() {
             price,
             quantity: 1,
             location: activeLocation,
-            bin: activeLocation,
+            bin: getDefaultCheckoutBin(activeLocation),
             stockLevel: Number(item.stock_level || 0),
             lineDiscountPercent: 0,
             isReturnLine: false,
@@ -1182,7 +1192,7 @@ export default function CheckoutPage() {
           quantity: line.quantity,
           total: Number(returnValue.toFixed(2)),
           location: line.location || activeReturnLocation,
-          bin: line.bin || activeReturnLocation,
+          bin: line.bin || getDefaultCheckoutBin(activeReturnLocation),
           local_first: true,
         },
         status: 'pending',
@@ -1208,7 +1218,7 @@ export default function CheckoutPage() {
           quantity: line.quantity,
           total: Number(displayedTotal.toFixed(2)),
           location: line.location || checkoutLocation || 'SHOP-1',
-          bin: line.bin || checkoutLocation || 'SHOP-1',
+          bin: line.bin || getDefaultCheckoutBin(checkoutLocation || 'SHOP-1'),
           local_first: true,
         },
         status: 'pending',
