@@ -1,4 +1,4 @@
-'use client'
+ï»¿'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -45,7 +45,7 @@ function text(value: any) {
 
 function currency(value: number | null | undefined) {
   const amount = Number(value || 0)
-  return `£${amount.toFixed(2)}`
+  return `Â£${amount.toFixed(2)}`
 }
 
 function formatDate(value: string | null) {
@@ -288,7 +288,7 @@ export default function InventoryPage() {
                         {item.brand || 'No brand'}
                       </span>
 
-                      <span className="mx-1 text-neutral-600">·</span>
+                      <span className="mx-1 text-neutral-600">Â·</span>
 
                       <span className="text-neutral-300">
                         {item.reporting_category || 'No category'}
@@ -296,7 +296,7 @@ export default function InventoryPage() {
 
                       {getSize(item) && (
                         <>
-                          <span className="mx-1 text-neutral-600">·</span>
+                          <span className="mx-1 text-neutral-600">Â·</span>
 
                           <span className="text-neutral-500">
                             {getSize(item)}
@@ -346,3 +346,4 @@ export default function InventoryPage() {
     </StaffPermissionGate>
   )
 }
+
