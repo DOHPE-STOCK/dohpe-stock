@@ -855,19 +855,10 @@ export default function ItemPage() {
       String(originalItemRef.current?.selling_price || '') !==
         String(item.selling_price || '')
 
-    const isReusableSku = item.sku_type === 'reusable'
     const isLinnworksManaged =
       originalItemRef.current?.linnworks_managed === true || item.linnworks_managed === true
 
-    let exportReusableNow = false
-
-    if (stockLevelChanged && isReusableSku && !isLinnworksManaged) {
-      exportReusableNow = window.confirm(
-        `Reusable SKU ${item.sku} is not synced with Linnworks yet.\n\nExport to Linnworks now?\n\nYes = save locally and export now.\nNo = save locally only and do not create a Linnworks stock queue.`
-      )
-    }
-
-    const shouldQueueStockSync = stockLevelChanged && (!isReusableSku || isLinnworksManaged)
+    const shouldQueueStockSync = stockLevelChanged && isLinnworksManaged
 
     const cleanedItem = {
       ...item,
@@ -938,30 +929,14 @@ export default function ItemPage() {
       }
     }
 
-    if (exportReusableNow) {
-      try {
-        savedItem = await exportItemToLinnworks(cleanedItem)
-      } catch (error: any) {
-        setMessage(
-          `Saved locally, but Linnworks export failed: ${error.message || 'Unknown export error.'}`
-        )
-        originalItemRef.current = cleanedItem
-        setItem(cleanedItem)
-        setHasUnsavedChanges(false)
-        return cleanedItem
-      }
-    }
-
     originalItemRef.current = savedItem
     setItem(savedItem)
     setHasUnsavedChanges(false)
 
-    if (stockLevelChanged && isReusableSku && !isLinnworksManaged && !exportReusableNow) {
+    if (stockLevelChanged && !isLinnworksManaged) {
       setMessage(
-        `Saved by ${staff.name}. Reusable SKU is not synced with Linnworks, so no stock sync queue was created.`
+        `Saved by ${staff.name}. Stock was saved locally. Linnworks stock sync will happen after this item is exported/synced.`
       )
-    } else if (exportReusableNow) {
-      setMessage(`Saved by ${staff.name}. Reusable SKU exported to Linnworks.`)
     } else {
       setMessage(
         shouldQueueStockSync
@@ -1031,6 +1006,70 @@ export default function ItemPage() {
       return
     }
 
+    if (isReusableSku) {
+      const confirmed = window.confirm(
+        `Finalise reusable SKU ${item.sku}?\n\nThis will save the item and mark it as finalised.`
+      )
+
+      if (!confirmed) return
+
+      const exportNow = window.confirm(
+        `Export ${item.sku} to Linnworks now?\n\nYes = finalise and export now.\nNo = finalise locally only.`
+      )
+
+      setProcessingImages(true)
+      setMessage(exportNow ? 'Saving and exporting reusable SKU...' : 'Saving reusable SKU...')
+
+      try {
+        const savedItem = await saveItem()
+
+        if (!savedItem) return
+
+        let updatedItem = {
+          ...savedItem,
+          status: 'finalised',
+          last_saved_by: staff.id,
+          updated_at: new Date().toISOString(),
+        }
+
+        const { error } = await supabase
+          .from('items')
+          .update(updatedItem)
+          .eq('id', id)
+
+        if (error) {
+          setMessage(error.message)
+          return
+        }
+
+        if (exportNow) {
+          try {
+            updatedItem = await exportItemToLinnworks(updatedItem)
+            setMessage(`Reusable SKU ${item.sku} finalised and exported to Linnworks.`)
+          } catch (error: any) {
+            setMessage(
+              `Reusable SKU finalised locally, but Linnworks export failed: ${
+                error.message || 'Unknown export error.'
+              }`
+            )
+          }
+        } else {
+          setMessage(`Reusable SKU ${item.sku} finalised locally. Not exported to Linnworks.`)
+        }
+
+        setItem(updatedItem)
+        originalItemRef.current = updatedItem
+        setHasUnsavedChanges(false)
+        window.location.href = '/'
+      } catch (error: any) {
+        setMessage(error.message || 'Finalise failed.')
+      } finally {
+        setProcessingImages(false)
+      }
+
+      return
+    }
+
     const confirmed = window.confirm(
       `Finalise SKU ${item.sku}?\n\nThis will save the item, create/overwrite processed image URLs, and move it to Review.`
     )
@@ -1038,16 +1077,14 @@ export default function ItemPage() {
     if (!confirmed) return
 
     setProcessingImages(true)
-    setMessage(isReusableSku ? 'Saving reusable SKU...' : 'Saving and processing images...')
+    setMessage('Saving and processing images...')
 
     try {
       const savedItem = await saveItem()
 
       if (!savedItem) return
 
-      if (!isReusableSku) {
-        await ensureProcessedImages()
-      }
+      await ensureProcessedImages()
 
       const updatedItem = {
         ...savedItem,
@@ -1158,13 +1195,15 @@ export default function ItemPage() {
               Save Item
             </button>
 
-            <button
-              onClick={sendToReview}
-              disabled={!staff || processingImages || exportingLinnworks}
-              className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
-            >
-              Send to Review
-            </button>
+            {item.sku_type !== 'reusable' && (
+              <button
+                onClick={sendToReview}
+                disabled={!staff || processingImages || exportingLinnworks}
+                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
+              >
+                Send to Review
+              </button>
+            )}
 
             <button
               onClick={finaliseItem}

@@ -1384,9 +1384,11 @@ export default function SkuSearchPage() {
                   }
                 }}
                 placeholder="Reusable SKU, brand, or title"
-                list="reusable-sku-suggestions"
                 disabled={!staff}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-white disabled:opacity-50"
+                autoComplete="new-password"
+              name="dohpe-reusable-sku-no-autofill"
+              id="dohpe-reusable-sku-no-autofill"
+              className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-white disabled:opacity-50"
               />
 
               <datalist id="reusable-sku-suggestions">
