@@ -8,14 +8,13 @@ import { useStaff } from '@/app/context/StaffContext'
 type ItemRow = {
   id: string
   sku: string
+  barcode_number?: string | null
   brand?: string | null
   reporting_category?: string | null
   sub_type?: string | null
   subtype?: string | null
   item_sub_type?: string | null
-  colour?: string | null
-  color?: string | null
-  main_colour?: string | null
+  colour_primary?: string | null
   final_title?: string | null
   basic_title?: string | null
   selling_price?: number | null
@@ -131,9 +130,7 @@ type LibraryItem = {
   sku: string
   brand: string | null
   reporting_category: string | null
-  colour?: string | null
-  color?: string | null
-  main_colour?: string | null
+  colour_primary?: string | null
   final_title?: string | null
   basic_title?: string | null
   selling_price?: number | null
@@ -211,6 +208,14 @@ function escapeHtml(value: any) {
     .replaceAll("'", '&#039;')
 }
 
+function escapePostgrestOrValue(value: string) {
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('%', '\\%')
+    .replaceAll('_', '\\_')
+    .replaceAll(',', '\\,')
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return ''
   const date = new Date(value)
@@ -271,7 +276,7 @@ function getSubType(item: ItemRow) {
 }
 
 function getColour(item: ItemRow) {
-  return text(item.colour || item.color || item.main_colour)
+  return text(item.colour_primary)
 }
 
 function getLineTitle(item: ItemRow) {
@@ -872,10 +877,12 @@ export default function CheckoutPage() {
     setMessage('')
 
     try {
+      const safeSkuLookup = escapePostgrestOrValue(sku)
+
       const { data, error } = await supabase
         .from('items')
         .select('*')
-        .eq('sku', sku)
+        .or(`sku.eq.${safeSkuLookup},barcode_number.eq.${safeSkuLookup}`)
         .maybeSingle()
 
       if (error) throw new Error(error.message)
@@ -891,13 +898,15 @@ export default function CheckoutPage() {
       const activeLocation = checkoutLocation || item.current_location || 'SHOP-1'
 
       setBasket((current) => {
+        const canonicalSku = item.sku || sku
+
         const existing = current.find(
-          (line) => !line.isReturnLine && line.sku.toLowerCase() === sku.toLowerCase()
+          (line) => !line.isReturnLine && line.sku.toLowerCase() === canonicalSku.toLowerCase()
         )
 
         if (existing) {
           return current.map((line) =>
-            !line.isReturnLine && line.sku.toLowerCase() === sku.toLowerCase()
+            !line.isReturnLine && line.sku.toLowerCase() === canonicalSku.toLowerCase()
               ? { ...line, quantity: line.quantity + 1 }
               : line
           )
@@ -1896,7 +1905,7 @@ export default function CheckoutPage() {
   }
 
   function getLibraryItemColour(item: LibraryItem) {
-    return text(item.colour || item.color || item.main_colour)
+    return text(item.colour_primary)
   }
 
   function getLibraryItemSubType(_item: LibraryItem) {
@@ -1932,9 +1941,7 @@ export default function CheckoutPage() {
           sku,
           brand,
           reporting_category,
-          colour,
-          color,
-          main_colour,
+          colour_primary,
           final_title,
           basic_title,
           selling_price,
@@ -1953,9 +1960,7 @@ export default function CheckoutPage() {
         .limit(libraryLimit)
 
       if (colour) {
-        query = query.or(
-          `colour.ilike.%${colour}%,color.ilike.%${colour}%,main_colour.ilike.%${colour}%`
-        )
+        query = query.ilike('colour_primary', `%${colour}%`)
       }
 
       if (libraryStatus === 'unsold') {
@@ -2477,7 +2482,7 @@ export default function CheckoutPage() {
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') searchLibrary()
                     }}
-                    placeholder="Colour optional"
+                    placeholder="Primary colour optional"
                     className="rounded-lg border border-neutral-300 px-3 py-3 text-sm font-bold outline-none focus:border-black"
                   />
 
