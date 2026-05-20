@@ -444,8 +444,17 @@ function mapPollLocationToStoredLocation(locationName: string) {
   const value = text(locationName)
   const lower = value.toLowerCase()
 
-  if (!value) return 'Default'
-  if (lower === 'warehouse') return 'Default'
+  if (!value) return 'WAREHOUSE'
+  if (lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
+  return value
+}
+
+function canonicalLocationName(locationName: string) {
+  const value = text(locationName)
+  const lower = value.toLowerCase()
+
+  if (!value) return 'WAREHOUSE'
+  if (lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
   return value
 }
 
@@ -513,6 +522,61 @@ async function upsertPollLocationRow(params: {
   if (insertError) throw new Error(insertError.message)
 }
 
+async function mergeLegacyWarehouseRows(supabase: any, item: LocalItem) {
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('id, location_name, bin_code, stock_level')
+    .eq('item_id', item.id)
+
+  if (error) throw new Error(error.message)
+
+  const rows = data || []
+  const legacyRows = rows.filter(
+    (row: any) =>
+      text(row.bin_code).toLowerCase() === 'default' &&
+      ['default', 'warehouse'].includes(text(row.location_name).toLowerCase())
+  )
+
+  if (legacyRows.length <= 1) return
+
+  const total = legacyRows.reduce(
+    (sum: number, row: any) => sum + Number(row.stock_level || 0),
+    0
+  )
+
+  const preferred =
+    legacyRows.find((row: any) => text(row.location_name).toLowerCase() === 'warehouse') ||
+    legacyRows[0]
+
+  const now = new Date().toISOString()
+
+  const { error: updateError } = await supabase
+    .from('item_stock_locations')
+    .update({
+      location_name: 'WAREHOUSE',
+      bin_code: 'Default',
+      stock_level: total,
+      source: 'linnworks_poll_warehouse_merge',
+      updated_at: now,
+    })
+    .eq('id', preferred.id)
+
+  if (updateError) throw new Error(updateError.message)
+
+  const duplicateIds = legacyRows
+    .filter((row: any) => row.id !== preferred.id)
+    .map((row: any) => row.id)
+
+  if (duplicateIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from('item_stock_locations')
+      .delete()
+      .in('id', duplicateIds)
+
+    if (deleteError) throw new Error(deleteError.message)
+  }
+}
+
 async function reconcileAppBinsFromLinnworksRows(params: {
   supabase: any
   item: LocalItem
@@ -535,7 +599,9 @@ async function reconcileAppBinsFromLinnworksRows(params: {
     const linnworksStock = Number(row.stockLevel || 0)
 
     const localRowsForLocation = appRows.filter(
-      (appRow: any) => text(appRow.location_name).toLowerCase() === locationName.toLowerCase()
+      (appRow: any) =>
+        canonicalLocationName(appRow.location_name).toLowerCase() ===
+        canonicalLocationName(locationName).toLowerCase()
     )
 
     const localTotal = localRowsForLocation.reduce(
@@ -720,6 +786,8 @@ async function processStockPoll(request: Request) {
           item,
           rows,
         })
+
+        await mergeLegacyWarehouseRows(supabase, item)
 
         const operationalRows = await readOperationalRows(supabase, item.id)
         const displayOperationalRow = operationalRows
