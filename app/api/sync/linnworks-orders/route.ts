@@ -449,6 +449,187 @@ async function getAlreadyCheckedOrderIds(supabase: any, orderIds: string[]) {
   return checked
 }
 
+
+function isShopLocationName(locationName: string) {
+  return normaliseText(locationName).toUpperCase().startsWith('SHOP-')
+}
+
+function canonicalAppLocationName(locationName: string) {
+  const value = normaliseText(locationName)
+  const lower = value.toLowerCase()
+
+  if (!value) return 'WAREHOUSE'
+  if (lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
+  return value
+}
+
+type AppStockRow = {
+  id: string
+  location_name: string
+  bin_code: string
+  stock_level: number
+}
+
+async function getAppStockRows(supabase: any, itemId: string) {
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('id, location_name, bin_code, stock_level')
+    .eq('item_id', itemId)
+
+  if (error) throw new Error(error.message)
+
+  return (data || []) as AppStockRow[]
+}
+
+async function updateAppStockRow(params: {
+  supabase: any
+  rowId: string
+  stockLevel: number
+  source: string
+}) {
+  const { error } = await params.supabase
+    .from('item_stock_locations')
+    .update({
+      stock_level: params.stockLevel,
+      source: params.source,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', params.rowId)
+
+  if (error) throw new Error(error.message)
+}
+
+function sortOnlineDeductionRows(rows: AppStockRow[]) {
+  const priority = (row: AppStockRow) => {
+    const locationName = canonicalAppLocationName(row.location_name).toUpperCase()
+    const binCode = normaliseText(row.bin_code).toUpperCase()
+
+    if (locationName === 'WAREHOUSE') return 10
+    if (isShopLocationName(locationName) && binCode === 'STOCK') return 20
+    if (isShopLocationName(locationName) && binCode === 'FLOOR') return 30
+    if (isShopLocationName(locationName)) return 40
+    return 90
+  }
+
+  return [...rows].sort((a, b) => {
+    const ap = priority(a)
+    const bp = priority(b)
+    if (ap !== bp) return ap - bp
+    return Number(b.stock_level || 0) - Number(a.stock_level || 0)
+  })
+}
+
+async function deductOperationalBinsForOnlineOrder(params: {
+  supabase: any
+  itemId: string
+  quantity: number
+}) {
+  const rows = await getAppStockRows(params.supabase, params.itemId)
+  let remaining = Math.max(0, Number(params.quantity || 0))
+  const deductions: any[] = []
+
+  for (const row of sortOnlineDeductionRows(rows)) {
+    if (remaining <= 0) break
+
+    const currentStock = Number(row.stock_level || 0)
+    if (currentStock <= 0) continue
+
+    const deduct = Math.min(currentStock, remaining)
+    const nextStock = currentStock - deduct
+
+    await updateAppStockRow({
+      supabase: params.supabase,
+      rowId: row.id,
+      stockLevel: nextStock,
+      source: 'linnworks_open_order',
+    })
+
+    deductions.push({
+      location_name: canonicalAppLocationName(row.location_name),
+      bin_code: row.bin_code,
+      quantity: deduct,
+      previous_stock_level: currentStock,
+      new_stock_level: nextStock,
+    })
+
+    remaining -= deduct
+  }
+
+  return {
+    requested_quantity: params.quantity,
+    deducted_quantity: params.quantity - remaining,
+    remaining_quantity: remaining,
+    deductions,
+  }
+}
+
+function summariseOperationalRows(rows: AppStockRow[]) {
+  let total = 0
+  let warehouseStock = 0
+  let shopFloorStock = 0
+
+  for (const row of rows) {
+    const quantity = Number(row.stock_level || 0)
+    const locationName = canonicalAppLocationName(row.location_name).toUpperCase()
+    const binCode = normaliseText(row.bin_code).toUpperCase()
+
+    total += quantity
+
+    if (locationName === 'WAREHOUSE') {
+      warehouseStock += quantity
+    }
+
+    if (isShopLocationName(locationName) && binCode === 'FLOOR') {
+      shopFloorStock += quantity
+    }
+  }
+
+  return {
+    total,
+    warehouseStock,
+    shopFloorStock,
+  }
+}
+
+async function updateItemOperationalSummary(supabase: any, itemId: string) {
+  const rows = await getAppStockRows(supabase, itemId)
+  const summary = summariseOperationalRows(rows)
+
+  const displayRow =
+    rows
+      .filter((row) => Number(row.stock_level || 0) > 0)
+      .sort((a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0] || null
+
+  const { error } = await supabase
+    .from('items')
+    .update({
+      stock_level: summary.total,
+      warehouse_stock: summary.warehouseStock,
+      shop_floor_stock: summary.shopFloorStock,
+      current_location: displayRow ? canonicalAppLocationName(displayRow.location_name) : null,
+      current_bin: displayRow ? displayRow.bin_code : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', itemId)
+
+  if (error) throw new Error(error.message)
+
+  return summary
+}
+
+function formatDeductions(deductions: any[]) {
+  if (!deductions.length) return 'No app stock bins deducted.'
+
+  return deductions
+    .map((row) => `${row.location_name} / ${row.bin_code}: ${row.quantity}`)
+    .join('\n')
+}
+
+function deductionsRequireTelegram(deductions: any[]) {
+  return deductions.some((row) => isShopLocationName(row.location_name))
+}
+
+
 async function markOrderChecked(params: {
   supabase: any
   orderId: string
@@ -608,24 +789,60 @@ async function processLinnworksOpenOrders(request: Request) {
           continue
         }
 
+        const liveStock = await getLiveLinnworksStock(server, token, sku)
+        const targetLinnworksStock =
+          liveStock.totalAvailable !== null
+            ? Number(liveStock.totalAvailable || 0)
+            : Number(liveStock.totalStockLevel || 0)
+
+        const appStockBefore = Number(localItem.stock_level || 0)
+        const quantityNeededToMatchLinnworks = Math.max(
+          0,
+          appStockBefore - targetLinnworksStock
+        )
+
+        let operationalDeduction: any = {
+          requested_quantity: quantity,
+          deducted_quantity: 0,
+          remaining_quantity: quantity,
+          deductions: [],
+          skipped: true,
+          reason:
+            quantityNeededToMatchLinnworks <= 0
+              ? 'App stock already matches Linnworks available/stock total. Stock poll probably reconciled first.'
+              : 'No deduction required.',
+        }
+
+        if (quantityNeededToMatchLinnworks > 0) {
+          operationalDeduction = await deductOperationalBinsForOnlineOrder({
+            supabase,
+            itemId: localItem.id,
+            quantity: Math.min(quantity, quantityNeededToMatchLinnworks),
+          })
+
+          await updateItemOperationalSummary(supabase, localItem.id)
+        }
+
         const location =
+          operationalDeduction.deductions?.[0]?.location_name ||
           normaliseText(localItem.current_location) ||
           normaliseText(body.default_location) ||
           'WAREHOUSE'
 
         const bin =
+          operationalDeduction.deductions?.[0]?.bin_code ||
           normaliseText(localItem.current_bin) ||
           normaliseText(body.default_bin) ||
           'Default'
 
         let telegramResult: any = {
           skipped: true,
-          reason: 'Item is not currently in a shop location.',
+          reason: 'Online order was fulfilled from warehouse or no app-bin deduction was required.',
         }
 
         let telegramSent = Boolean(existingSale.data?.telegram_sent)
 
-        if (!telegramSent && location.toLowerCase().startsWith('shop')) {
+        if (!telegramSent && deductionsRequireTelegram(operationalDeduction.deductions || [])) {
           try {
             telegramResult = await sendTelegramMessage(
               `🛒 Online order needs picking
@@ -634,8 +851,8 @@ SKU: ${sku}
 Brand: ${normaliseText(localItem.brand) || 'Unknown'}
 Category: ${normaliseText(localItem.reporting_category) || 'Unknown'}
 Qty: ${quantity}
-Location: ${location}
-Bin: ${bin}
+App bins deducted:
+${formatDeductions(operationalDeduction.deductions || [])}
 Source: ${source || 'Unknown'}
 Sub source: ${subSource || 'Unknown'}
 Order ID: ${orderId}
@@ -690,7 +907,12 @@ If this sells to an in-store customer first, complete the shop sale and cancel/r
           bin,
           queueAction: null,
           stockAction: 'none',
-          reason: 'online_sale_notification_only',
+          reason: 'online_sale_operational_deduction',
+          live_linnworks_stock_level: liveStock.totalStockLevel,
+          live_linnworks_available: liveStock.totalAvailable,
+          app_stock_before: appStockBefore,
+          target_linnworks_stock: targetLinnworksStock,
+          operational_deduction: operationalDeduction,
           telegram: telegramResult,
         })
       }
@@ -713,7 +935,7 @@ If this sells to an in-store customer first, complete the shop sale and cancel/r
       checked_this_run_count: uncheckedOrderIds.length,
       order_count: orders.length,
       created_queue_rows: 0,
-      notification_rows: results.filter((row) => row.reason === 'online_sale_notification_only').length,
+      notification_rows: results.filter((row) => row.telegram && row.telegram.ok).length,
       results,
     })
   } catch (error: any) {

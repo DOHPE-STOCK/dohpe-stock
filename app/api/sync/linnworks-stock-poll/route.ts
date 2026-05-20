@@ -220,6 +220,22 @@ function getStockLevel(row: any) {
   )
 }
 
+function getAvailableStock(row: any) {
+  const value =
+    row?.Available ??
+    row?.available ??
+    row?.AvailableStock ??
+    row?.availableStock ??
+    row?.AvailableQuantity ??
+    row?.availableQuantity ??
+    null
+
+  if (value === null || value === undefined || value === '') return null
+
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
 function getBinRack(row: any) {
   return text(
     row?.Location?.BinRack ||
@@ -347,7 +363,7 @@ async function getLinnworksStockRows(params: {
     return {
       locationId,
       locationName,
-      stockLevel: getStockLevel(stockRow),
+      stockLevel: getAvailableStock(stockRow) ?? getStockLevel(stockRow),
       binRack: getBinRack(stockRow) || getBinRack(matchingLocationRow) || 'Default',
     }
   })
@@ -475,7 +491,8 @@ async function upsertPollLocationRow(params: {
   stockLevel: number
   source: string
 }) {
-  const { supabase, item, locationName, binCode, stockLevel, source } = params
+  const { supabase, item, binCode, stockLevel, source } = params
+  const locationName = canonicalLocationName(params.locationName)
   const now = new Date().toISOString()
 
   const { data, error } = await supabase
