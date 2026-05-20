@@ -4,9 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-type LoanAction = 'loan_out' | 'return'
-
-type ReturnTarget = 'original' | 'shop' | 'warehouse'
+type LoanAction = 'lookup' | 'loan_out' | 'return'
 
 type StockRow = {
   id: string
@@ -19,8 +17,6 @@ type StockRow = {
 
 const WAREHOUSE_LOCATION = 'WAREHOUSE'
 const WAREHOUSE_BIN = 'Default'
-const SHOP_LOCATION = 'SHOP-1'
-const SHOP_STOCK_BIN = 'STOCK'
 const ON_LOAN_LOCATION = 'ON-LOAN'
 const ON_LOAN_BIN = 'ON-LOAN'
 
@@ -68,25 +64,9 @@ function canonicalBin(value: any, locationName: string) {
 
   if (clean) return clean
   if (canonicalLocation(locationName) === WAREHOUSE_LOCATION) return WAREHOUSE_BIN
-  if (canonicalLocation(locationName).startsWith('SHOP-')) return SHOP_STOCK_BIN
+  if (canonicalLocation(locationName).startsWith('SHOP-')) return 'STOCK'
 
   return WAREHOUSE_BIN
-}
-
-function parseLoanNotes(value: any) {
-  const raw = text(value)
-
-  if (!raw) return {}
-
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return {}
-  }
-}
-
-function makeLoanNotes(value: any) {
-  return JSON.stringify(value)
 }
 
 async function findItemByScan(supabase: any, scanValue: string) {
@@ -134,34 +114,38 @@ async function getStockRows(supabase: any, itemId: string) {
   return (data || []) as StockRow[]
 }
 
-function chooseLoanOutStockRow(item: any, rows: StockRow[]) {
-  const stockedRows = rows.filter((row) => Number(row.stock_level || 0) > 0)
-
-  if (stockedRows.length === 0) return null
-
-  const itemLocation = canonicalLocation(item.current_location)
-  const itemBin = text(item.current_bin)
-
-  if (itemLocation && itemBin) {
-    const exact = stockedRows.find((row) => {
-      return (
-        canonicalLocation(row.location_name) === itemLocation &&
-        text(row.bin_code).toUpperCase() === itemBin.toUpperCase()
-      )
+function getAvailableRows(rows: StockRow[]) {
+  return rows
+    .filter((row) => Number(row.stock_level || 0) > 0)
+    .map((row) => ({
+      id: row.id,
+      location_name: canonicalLocation(row.location_name),
+      bin_code: canonicalBin(row.bin_code, canonicalLocation(row.location_name)),
+      stock_level: Number(row.stock_level || 0),
+    }))
+    .sort((a, b) => {
+      const aKey = `${a.location_name}/${a.bin_code}`
+      const bKey = `${b.location_name}/${b.bin_code}`
+      return aKey.localeCompare(bKey)
     })
+}
 
-    if (exact) return exact
-  }
-
-  if (itemLocation) {
-    const locationMatch = stockedRows.find((row) => {
-      return canonicalLocation(row.location_name) === itemLocation
+async function setStockRowLevel(params: {
+  supabase: any
+  rowId: string
+  nextStock: number
+  source: string
+}) {
+  const { error } = await params.supabase
+    .from('item_stock_locations')
+    .update({
+      stock_level: Math.max(0, params.nextStock),
+      source: params.source,
+      updated_at: new Date().toISOString(),
     })
+    .eq('id', params.rowId)
 
-    if (locationMatch) return locationMatch
-  }
-
-  return [...stockedRows].sort((a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0]
+  if (error) throw new Error(error.message)
 }
 
 async function upsertStockRow(params: {
@@ -203,7 +187,12 @@ async function upsertStockRow(params: {
 
     if (updateError) throw new Error(updateError.message)
 
-    return { id: existing.id, location_name: locationName, bin_code: binCode, stock_level: nextStock }
+    return {
+      id: existing.id,
+      location_name: locationName,
+      bin_code: binCode,
+      stock_level: nextStock,
+    }
   }
 
   const stockLevel = Math.max(0, params.stockLevelDelta)
@@ -227,24 +216,6 @@ async function upsertStockRow(params: {
   if (insertError) throw new Error(insertError.message)
 
   return inserted
-}
-
-async function setStockRowLevel(params: {
-  supabase: any
-  rowId: string
-  nextStock: number
-  source: string
-}) {
-  const { error } = await params.supabase
-    .from('item_stock_locations')
-    .update({
-      stock_level: Math.max(0, params.nextStock),
-      source: params.source,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', params.rowId)
-
-  if (error) throw new Error(error.message)
 }
 
 async function updateItemSummary(params: {
@@ -360,11 +331,31 @@ async function fetchLoans(supabase: any) {
   return data || []
 }
 
+async function lookupLoanItem(params: {
+  supabase: any
+  scanValue: string
+}) {
+  const item = await findItemByScan(params.supabase, params.scanValue)
+
+  if (!item) {
+    throw new Error(`Item not found: ${cleanScan(params.scanValue)}`)
+  }
+
+  const stockRows = await getStockRows(params.supabase, item.id)
+
+  return {
+    item,
+    available_locations: getAvailableRows(stockRows),
+  }
+}
+
 async function loanOut(params: {
   supabase: any
   scanValue: string
   staffId: string
   staffName: string
+  sourceLocation: string
+  sourceBin: string
 }) {
   const item = await findItemByScan(params.supabase, params.scanValue)
 
@@ -376,17 +367,22 @@ async function loanOut(params: {
     throw new Error(`${item.sku} is already on loan.`)
   }
 
-  const stockRows = await getStockRows(params.supabase, item.id)
-  const sourceRow = chooseLoanOutStockRow(item, stockRows)
+  const sourceLocation = canonicalLocation(params.sourceLocation)
+  const sourceBin = canonicalBin(params.sourceBin, sourceLocation)
 
-  if (!sourceRow) {
-    throw new Error(`${item.sku} has no available stock row to loan out.`)
+  const stockRows = await getStockRows(params.supabase, item.id)
+  const sourceRow = stockRows.find(
+    (row) =>
+      canonicalLocation(row.location_name) === sourceLocation &&
+      canonicalBin(row.bin_code, sourceLocation).toUpperCase() === sourceBin.toUpperCase()
+  )
+
+  if (!sourceRow || Number(sourceRow.stock_level || 0) <= 0) {
+    throw new Error(`${item.sku} has no available stock in ${sourceLocation} / ${sourceBin}.`)
   }
 
-  const sourceLocation = canonicalLocation(sourceRow.location_name)
-  const sourceBin = canonicalBin(sourceRow.bin_code, sourceLocation)
   const beforeStock = Number(sourceRow.stock_level || 0)
-  const afterStock = Math.max(0, beforeStock - 1)
+  const afterStock = beforeStock - 1
   const now = new Date().toISOString()
 
   await setStockRowLevel({
@@ -396,7 +392,7 @@ async function loanOut(params: {
     source: 'loan_out',
   })
 
-  const loanNotes = makeLoanNotes({
+  const loanNotes = JSON.stringify({
     source_location: sourceLocation,
     source_bin: sourceBin,
     loaned_out_at: now,
@@ -470,38 +466,13 @@ async function loanOut(params: {
   }
 }
 
-function getReturnDestination(item: any, target: ReturnTarget) {
-  const notes = parseLoanNotes(item.loan_notes)
-
-  if (target === 'original') {
-    return {
-      location: canonicalLocation(notes.source_location || item.current_location || WAREHOUSE_LOCATION),
-      bin: canonicalBin(notes.source_bin || item.current_bin || WAREHOUSE_BIN, notes.source_location || WAREHOUSE_LOCATION),
-      reason: 'loan_returned_to_original',
-    }
-  }
-
-  if (target === 'shop') {
-    return {
-      location: SHOP_LOCATION,
-      bin: SHOP_STOCK_BIN,
-      reason: 'loan_returned_to_shop',
-    }
-  }
-
-  return {
-    location: WAREHOUSE_LOCATION,
-    bin: WAREHOUSE_BIN,
-    reason: 'loan_returned_to_warehouse',
-  }
-}
-
 async function returnLoan(params: {
   supabase: any
   scanValue: string
   staffId: string
   staffName: string
-  target: ReturnTarget
+  returnLocation: string
+  returnBin: string
 }) {
   const item = await findItemByScan(params.supabase, params.scanValue)
 
@@ -513,17 +484,18 @@ async function returnLoan(params: {
     throw new Error(`${item.sku} is not currently on loan.`)
   }
 
-  const destination = getReturnDestination(item, params.target)
+  const returnLocation = canonicalLocation(params.returnLocation)
+  const returnBin = canonicalBin(params.returnBin, returnLocation)
   const now = new Date().toISOString()
 
   const returnedRow = await upsertStockRow({
     supabase: params.supabase,
     itemId: item.id,
     sku: item.sku,
-    locationName: destination.location,
-    binCode: destination.bin,
+    locationName: returnLocation,
+    binCode: returnBin,
     stockLevelDelta: 1,
-    source: destination.reason,
+    source: 'loan_return',
   })
 
   const { error: loanUpdateError } = await params.supabase
@@ -559,9 +531,9 @@ async function returnLoan(params: {
     itemId: item.id,
     sku: item.sku,
     delta: 1,
-    locationName: destination.location,
-    binCode: destination.bin,
-    reason: destination.reason,
+    locationName: returnLocation,
+    binCode: returnBin,
+    reason: 'loan_return',
     staffName: params.staffName,
     timestampField: 'returned_at',
     timestamp: now,
@@ -582,8 +554,8 @@ async function returnLoan(params: {
 
   return {
     item,
-    destination_location: destination.location,
-    destination_bin: destination.bin,
+    destination_location: returnLocation,
+    destination_bin: returnBin,
     returned_row: returnedRow,
     summary,
   }
@@ -619,7 +591,7 @@ export async function POST(request: Request) {
     const staffId = text(body.staff_id)
     const staffName = text(body.staff_name) || 'staff'
 
-    if (!action || !['loan_out', 'return'].includes(action)) {
+    if (!action || !['lookup', 'loan_out', 'return'].includes(action)) {
       return NextResponse.json({ ok: false, message: 'Invalid loan action.' }, { status: 400 })
     }
 
@@ -627,16 +599,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, message: 'Missing scanned SKU/barcode.' }, { status: 400 })
     }
 
+    if (action === 'lookup') {
+      const result = await lookupLoanItem({ supabase, scanValue })
+
+      return NextResponse.json({
+        ok: true,
+        result,
+      })
+    }
+
     if (!staffId) {
       return NextResponse.json({ ok: false, message: 'Missing staff id.' }, { status: 400 })
     }
 
     if (action === 'loan_out') {
+      const sourceLocation = text(body.source_location)
+      const sourceBin = text(body.source_bin)
+
+      if (!sourceLocation || !sourceBin) {
+        return NextResponse.json({ ok: false, message: 'Missing source location/bin.' }, { status: 400 })
+      }
+
       const result = await loanOut({
         supabase,
         scanValue,
         staffId,
         staffName,
+        sourceLocation,
+        sourceBin,
       })
 
       return NextResponse.json({
@@ -646,10 +636,11 @@ export async function POST(request: Request) {
       })
     }
 
-    const target = text(body.target) as ReturnTarget
+    const returnLocation = text(body.return_location)
+    const returnBin = text(body.return_bin)
 
-    if (!['original', 'shop', 'warehouse'].includes(target)) {
-      return NextResponse.json({ ok: false, message: 'Invalid return target.' }, { status: 400 })
+    if (!returnLocation || !returnBin) {
+      return NextResponse.json({ ok: false, message: 'Missing return location/bin.' }, { status: 400 })
     }
 
     const result = await returnLoan({
@@ -657,7 +648,8 @@ export async function POST(request: Request) {
       scanValue,
       staffId,
       staffName,
-      target,
+      returnLocation,
+      returnBin,
     })
 
     return NextResponse.json({

@@ -5,7 +5,12 @@ import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
-type ReturnTarget = 'original' | 'shop' | 'warehouse'
+type StockChoice = {
+  id: string
+  location_name: string
+  bin_code: string
+  stock_level: number
+}
 
 type LoanItem = {
   id: string
@@ -24,6 +29,24 @@ type LoanItem = {
   loan_notes: string | null
   ai_title: string | null
   basic_title: string | null
+}
+
+type LookupResult = {
+  item: LoanItem
+  available_locations: StockChoice[]
+}
+
+type PendingLoanOut = {
+  scanValue: string
+  item: LoanItem
+  choices: StockChoice[]
+}
+
+type PendingReturn = {
+  item: LoanItem
+  returnLocation: string | null
+  returnBin: string | null
+  step: 'scan_bin' | 'scan_item'
 }
 
 type PreviewLabelItem = {
@@ -61,6 +84,67 @@ function parseLoanNotes(value: string | null | undefined) {
   }
 }
 
+function cleanScan(value: string) {
+  return value.trim().replace(/\s+/g, '').toUpperCase()
+}
+
+function parseBinScan(value: string) {
+  const cleaned = value.trim()
+  const match = cleaned.match(/[?&]bin=([^&#]+)/i)
+
+  if (match?.[1]) {
+    return decodeURIComponent(match[1]).trim().toUpperCase()
+  }
+
+  return cleanScan(cleaned)
+}
+
+function splitLocationBin(binScan: string) {
+  const clean = parseBinScan(binScan)
+
+  if (!clean) return { location: '', bin: '' }
+
+  if (clean.includes('/')) {
+    const [location, ...rest] = clean.split('/')
+    return {
+      location: cleanScan(location),
+      bin: rest.join('/').trim().toUpperCase(),
+    }
+  }
+
+  if (clean.startsWith('SHOP-')) {
+    const parts = clean.split('-')
+
+    if (parts.length >= 3) {
+      return {
+        location: `${parts[0]}-${parts[1]}`,
+        bin: parts.slice(2).join('-') || 'STOCK',
+      }
+    }
+  }
+
+  if (clean === 'WAREHOUSE' || clean === 'DEFAULT') {
+    return {
+      location: 'WAREHOUSE',
+      bin: 'Default',
+    }
+  }
+
+  return {
+    location: 'WAREHOUSE',
+    bin: clean,
+  }
+}
+
+function validItemScan(item: LoanItem, scanned: string) {
+  const clean = cleanScan(scanned)
+  const valid = [item.sku, item.barcode_number]
+    .filter(Boolean)
+    .map((value) => cleanScan(String(value)))
+
+  return valid.includes(clean)
+}
+
 export default function LoanPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const { staff } = useStaff()
@@ -68,10 +152,8 @@ export default function LoanPage() {
   const [scanValue, setScanValue] = useState('')
   const [loanItems, setLoanItems] = useState<LoanItem[]>([])
   const [selectedItems, setSelectedItems] = useState<string[]>([])
-  const [pendingReturn, setPendingReturn] = useState<{
-    item: LoanItem
-    target: ReturnTarget
-  } | null>(null)
+  const [pendingLoanOut, setPendingLoanOut] = useState<PendingLoanOut | null>(null)
+  const [pendingReturn, setPendingReturn] = useState<PendingReturn | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -82,10 +164,6 @@ export default function LoanPage() {
 
   function focusInput() {
     setTimeout(() => inputRef.current?.focus(), 50)
-  }
-
-  function cleanScan(value: string) {
-    return value.trim().replace(/\s+/g, '').toUpperCase()
   }
 
   async function fetchLoans() {
@@ -137,29 +215,6 @@ export default function LoanPage() {
     )
   }
 
-  async function handleScan() {
-    const scanned = cleanScan(scanValue)
-
-    if (!scanned || busy) return
-
-    if (!staff) {
-      setMessage('No active staff selected. Go to staff PIN screen first.')
-      return
-    }
-
-    setScanValue('')
-    setMessage('')
-
-    if (pendingReturn) {
-      await confirmReturnScan(scanned)
-      focusInput()
-      return
-    }
-
-    await loanOutItem(scanned)
-    focusInput()
-  }
-
   async function postLoanAction(body: Record<string, any>) {
     const response = await fetch('/api/scanner/loan', {
       method: 'POST',
@@ -176,14 +231,76 @@ export default function LoanPage() {
     return data
   }
 
-  async function loanOutItem(scanned: string) {
+  async function handleScan() {
+    const scanned = scanValue.trim()
+
+    if (!scanned || busy) return
+
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
+    setScanValue('')
+    setMessage('')
+
+    if (pendingReturn) {
+      await handleReturnScan(scanned)
+      focusInput()
+      return
+    }
+
+    await lookupForLoanOut(scanned)
+    focusInput()
+  }
+
+  async function lookupForLoanOut(scanned: string) {
+    setBusy(true)
+    setMessage('Checking available locations...')
+
+    try {
+      const data = await postLoanAction({
+        action: 'lookup',
+        scan_value: scanned,
+      })
+
+      const result = data.result as LookupResult
+
+      if (result.item.loan_status === 'on_loan') {
+        setMessage(`${result.item.sku} is already on loan.`)
+        await fetchLoans()
+        return
+      }
+
+      if (result.available_locations.length === 0) {
+        setMessage(`${result.item.sku} has no available stock location to loan from.`)
+        return
+      }
+
+      if (result.available_locations.length === 1) {
+        await loanOutFromChoice(scanned, result.item, result.available_locations[0])
+        return
+      }
+
+      setPendingLoanOut({
+        scanValue: scanned,
+        item: result.item,
+        choices: result.available_locations,
+      })
+
+      setMessage(`Choose where ${result.item.sku} is being loaned from.`)
+    } catch (error: any) {
+      setMessage(error.message || 'Could not check loan item.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function loanOutFromChoice(scanned: string, item: LoanItem, choice: StockChoice) {
+    if (!staff) return
+
     const confirmed = window.confirm(
-      `Mark scanned item ${scanned} as ON LOAN by ${staff.name}?\n\nThis will deduct 1 from its current app stock location/bin.`
+      `Loan ${item.sku} from ${choice.location_name} / ${choice.bin_code} by ${staff.name}?\n\nThis will deduct 1 from that exact bin.`
     )
 
     if (!confirmed) {
@@ -198,14 +315,17 @@ export default function LoanPage() {
       const data = await postLoanAction({
         action: 'loan_out',
         scan_value: scanned,
+        source_location: choice.location_name,
+        source_bin: choice.bin_code,
         staff_id: staff.id,
         staff_name: staff.name,
       })
 
       const result = data.result
 
+      setPendingLoanOut(null)
       setMessage(
-        `${result.item.sku} marked on loan by ${staff.name}. Deducted from ${result.source_location} / ${result.source_bin}.`
+        `${result.item.sku} marked on loan. Deducted from ${result.source_location} / ${result.source_bin}.`
       )
 
       await fetchLoans()
@@ -216,23 +336,27 @@ export default function LoanPage() {
     }
   }
 
-  function startReturn(item: LoanItem, target: ReturnTarget) {
+  function cancelLoanChoice() {
+    setPendingLoanOut(null)
+    setScanValue('')
+    setMessage('Loan-out cancelled.')
+    focusInput()
+  }
+
+  function startReturn(item: LoanItem) {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
-    setPendingReturn({ item, target })
+    setPendingReturn({
+      item,
+      returnLocation: null,
+      returnBin: null,
+      step: 'scan_bin',
+    })
     setScanValue('')
-
-    const targetText =
-      target === 'original'
-        ? 'ORIGINAL LOCATION'
-        : target === 'shop'
-          ? 'SHOP-1 / STOCK'
-          : 'WAREHOUSE / Default'
-
-    setMessage(`Scan ${item.sku} or barcode now to confirm return to ${targetText}.`)
+    setMessage(`Scan destination bin QR first, then scan ${item.sku} to confirm return.`)
     focusInput()
   }
 
@@ -243,38 +367,43 @@ export default function LoanPage() {
     focusInput()
   }
 
-  async function confirmReturnScan(scannedValue: string) {
+  async function handleReturnScan(scanned: string) {
     if (!pendingReturn || !staff) return
 
-    const item = pendingReturn.item
-    const scanned = cleanScan(scannedValue)
-    const validValues = [item.sku, item.barcode_number].filter(Boolean).map((value) => cleanScan(String(value)))
+    if (pendingReturn.step === 'scan_bin') {
+      const parsed = splitLocationBin(scanned)
 
-    if (!validValues.includes(scanned)) {
+      if (!parsed.location || !parsed.bin) {
+        setMessage('Could not read bin. Scan a bin QR/label first.')
+        return
+      }
+
+      setPendingReturn({
+        ...pendingReturn,
+        returnLocation: parsed.location,
+        returnBin: parsed.bin,
+        step: 'scan_item',
+      })
+
+      setMessage(`Destination set to ${parsed.location} / ${parsed.bin}. Now scan item ${pendingReturn.item.sku}.`)
+      return
+    }
+
+    if (!validItemScan(pendingReturn.item, scanned)) {
       setMessage(
-        `Wrong item scanned. Expected ${item.sku}${item.barcode_number ? ` or ${item.barcode_number}` : ''}, scanned ${scanned}.`
+        `Wrong item scanned. Expected ${pendingReturn.item.sku}${pendingReturn.item.barcode_number ? ` or ${pendingReturn.item.barcode_number}` : ''}.`
       )
       return
     }
 
-    await markReturned(item, pendingReturn.target, scanned)
+    await markReturned(pendingReturn.item, scanned)
   }
 
-  async function markReturned(item: LoanItem, target: ReturnTarget, scannedValue: string) {
-    if (!staff) {
-      setMessage('No active staff selected. Go to staff PIN screen first.')
-      return
-    }
-
-    const targetText =
-      target === 'original'
-        ? 'original location/bin'
-        : target === 'shop'
-          ? 'SHOP-1 / STOCK'
-          : 'WAREHOUSE / Default'
+  async function markReturned(item: LoanItem, scannedValue: string) {
+    if (!staff || !pendingReturn?.returnLocation || !pendingReturn.returnBin) return
 
     const confirmed = window.confirm(
-      `Return ${item.sku} to ${targetText} by ${staff.name}?\n\nStock will only increase after this confirmed scan.`
+      `Return ${item.sku} to ${pendingReturn.returnLocation} / ${pendingReturn.returnBin} by ${staff.name}?\n\nStock will only increase after this confirmed scan.`
     )
 
     if (!confirmed) return
@@ -286,7 +415,8 @@ export default function LoanPage() {
       const data = await postLoanAction({
         action: 'return',
         scan_value: scannedValue,
-        target,
+        return_location: pendingReturn.returnLocation,
+        return_bin: pendingReturn.returnBin,
         staff_id: staff.id,
         staff_name: staff.name,
       })
@@ -296,7 +426,7 @@ export default function LoanPage() {
       setPendingReturn(null)
       setSelectedItems((prev) => prev.filter((id) => id !== item.id))
       setMessage(
-        `${result.item.sku} returned to ${result.destination_location} / ${result.destination_bin} by ${staff.name}.`
+        `${result.item.sku} returned to ${result.destination_location} / ${result.destination_bin}.`
       )
 
       await fetchLoans()
@@ -323,7 +453,7 @@ export default function LoanPage() {
   function getOriginalLocationText(item: LoanItem) {
     const notes = parseLoanNotes(item.loan_notes)
 
-    if (!notes?.source_location && !notes?.source_bin) return 'Original location'
+    if (!notes?.source_location && !notes?.source_bin) return 'Original location unknown'
 
     return `${notes.source_location || 'Original'} / ${notes.source_bin || 'Default'}`
   }
@@ -341,7 +471,7 @@ export default function LoanPage() {
                 <h1 className="text-2xl font-bold sm:text-3xl">Loans</h1>
 
                 <p className="text-sm text-neutral-400">
-                  Scan SKU or barcode. Loaning out deducts from the current stock location/bin. Returns add stock only after the return destination is confirmed.
+                  Loan-out asks which location/bin to deduct from if stock exists in more than one place. Return requires scanning destination bin first, then item barcode/SKU.
                 </p>
 
                 {staff ? (
@@ -359,34 +489,67 @@ export default function LoanPage() {
             </div>
           </header>
 
+          {pendingLoanOut && (
+            <section className="rounded-2xl border border-blue-700 bg-blue-950 p-4">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-black text-blue-200">
+                    Choose Loan Source
+                  </h2>
+
+                  <p className="font-mono text-lg font-black">
+                    {pendingLoanOut.item.sku}
+                  </p>
+
+                  <p className="text-sm text-blue-200">
+                    This item has stock in multiple locations. Choose exactly where it is being loaned from.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={cancelLoanChoice}
+                  className="rounded-xl border border-blue-500 px-4 py-3 text-sm font-black text-blue-100"
+                >
+                  CANCEL
+                </button>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {pendingLoanOut.choices.map((choice) => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    onClick={() =>
+                      loanOutFromChoice(pendingLoanOut.scanValue, pendingLoanOut.item, choice)
+                    }
+                    disabled={busy}
+                    className="rounded-xl border border-blue-700 bg-blue-900 p-4 text-left hover:border-white disabled:opacity-50"
+                  >
+                    <p className="text-lg font-black">
+                      {choice.location_name} / {choice.bin_code}
+                    </p>
+                    <p className="mt-1 text-sm text-blue-200">
+                      Available: {choice.stock_level}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
           {pendingReturn && (
             <section className="rounded-2xl border border-orange-700 bg-orange-950 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-xl font-black text-orange-200">
-                    Confirm Return Scan
+                    Return Scan Required
                   </h2>
 
                   <p className="text-sm text-orange-200">
-                    Scan{' '}
-                    <span className="font-mono font-black">
-                      {pendingReturn.item.sku}
-                    </span>
-                    {pendingReturn.item.barcode_number ? (
-                      <>
-                        {' '}or barcode{' '}
-                        <span className="font-mono font-black">
-                          {pendingReturn.item.barcode_number}
-                        </span>
-                      </>
-                    ) : null}{' '}
-                    to return to{' '}
-                    {pendingReturn.target === 'original'
-                      ? getOriginalLocationText(pendingReturn.item)
-                      : pendingReturn.target === 'shop'
-                        ? 'SHOP-1 / STOCK'
-                        : 'WAREHOUSE / Default'}
-                    .
+                    {pendingReturn.step === 'scan_bin'
+                      ? 'Scan destination bin QR/label first.'
+                      : `Destination: ${pendingReturn.returnLocation} / ${pendingReturn.returnBin}. Now scan item ${pendingReturn.item.sku}.`}
                   </p>
                 </div>
 
@@ -403,7 +566,11 @@ export default function LoanPage() {
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
             <h2 className="mb-3 text-2xl font-black">
-              {pendingReturn ? 'Scan Item to Confirm Return' : 'Scan Item Out on Loan'}
+              {pendingReturn
+                ? pendingReturn.step === 'scan_bin'
+                  ? 'Scan Return Bin'
+                  : 'Scan Item to Confirm Return'
+                : 'Scan Item Out on Loan'}
             </h2>
 
             <input
@@ -416,11 +583,13 @@ export default function LoanPage() {
               placeholder={
                 staff
                   ? pendingReturn
-                    ? 'Scan same SKU/barcode to confirm return'
+                    ? pendingReturn.step === 'scan_bin'
+                      ? 'Scan destination bin QR/label'
+                      : 'Scan same item barcode/SKU'
                     : 'Scan item SKU or barcode'
                   : 'Go to staff PIN screen first'
               }
-              disabled={busy || !staff}
+              disabled={busy || !staff || Boolean(pendingLoanOut)}
               inputMode="none"
               autoComplete="off"
               autoCorrect="off"
@@ -431,13 +600,15 @@ export default function LoanPage() {
 
             <button
               onClick={handleScan}
-              disabled={busy || !scanValue.trim() || !staff}
+              disabled={busy || !scanValue.trim() || !staff || Boolean(pendingLoanOut)}
               className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
             >
               {busy
                 ? 'PROCESSING...'
                 : pendingReturn
-                  ? 'CONFIRM RETURN'
+                  ? pendingReturn.step === 'scan_bin'
+                    ? 'SET RETURN BIN'
+                    : 'CONFIRM RETURN'
                   : 'MARK ON LOAN'}
             </button>
           </section>
@@ -528,34 +699,18 @@ export default function LoanPage() {
                           </p>
 
                           <p className="mt-1 text-xs text-orange-300">
-                            Original: {getOriginalLocationText(item)}
+                            Loaned from: {getOriginalLocationText(item)}
                           </p>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-1 gap-2 sm:flex">
                         <button
-                          onClick={() => startReturn(item, 'original')}
-                          disabled={busy || !staff}
-                          className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white hover:bg-emerald-500 disabled:opacity-40"
-                        >
-                          RETURN ORIGINAL
-                        </button>
-
-                        <button
-                          onClick={() => startReturn(item, 'shop')}
-                          disabled={busy || !staff}
-                          className="rounded-xl bg-green-600 px-4 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
-                        >
-                          RETURN SHOP STOCK
-                        </button>
-
-                        <button
-                          onClick={() => startReturn(item, 'warehouse')}
+                          onClick={() => startReturn(item)}
                           disabled={busy || !staff}
                           className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-500 disabled:opacity-40"
                         >
-                          RETURN WAREHOUSE
+                          RETURN / SCAN BIN
                         </button>
                       </div>
                     </div>
