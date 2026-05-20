@@ -1,72 +1,35 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
-type ReturnTarget = 'shop' | 'warehouse'
+type ReturnTarget = 'original' | 'shop' | 'warehouse'
 
 type LoanItem = {
   id: string
   sku: string
+  barcode_number?: string | null
   brand: string | null
   reporting_category: string | null
   tagged_size: string | null
   waist_in: string | number | null
   selling_price: number | null
   stock_level: number | null
+  current_location?: string | null
+  current_bin?: string | null
   loan_status: string | null
   loaned_at: string | null
   loan_notes: string | null
   ai_title: string | null
   basic_title: string | null
-  current_location: string | null
-  current_bin: string | null
 }
 
 type PreviewLabelItem = {
   sku: string
   sizeText?: string | null
   price?: number | null
-}
-
-type StockLocationRow = {
-  id: string
-  item_id: string
-  sku: string
-  location_name: string | null
-  bin_code: string | null
-  stock_level: number | null
-}
-
-const WAREHOUSE_LOCATION = 'WAREHOUSE'
-const WAREHOUSE_BIN = 'Default'
-const DEFAULT_SHOP_LOCATION = 'SHOP-1'
-const DEFAULT_SHOP_RETURN_BIN = 'STOCK'
-
-function text(value: any) {
-  if (value === null || value === undefined) return ''
-  return String(value).trim()
-}
-
-function canonicalLocation(value: any) {
-  const clean = text(value)
-  const lower = clean.toLowerCase()
-
-  if (!clean) return WAREHOUSE_LOCATION
-  if (lower === 'default' || lower === 'warehouse') return WAREHOUSE_LOCATION
-
-  return clean.toUpperCase().startsWith('SHOP-') ? clean.toUpperCase() : clean
-}
-
-function normaliseBin(value: any, locationName?: string) {
-  const clean = text(value)
-  if (clean) return clean
-
-  if (canonicalLocation(locationName) === WAREHOUSE_LOCATION) return WAREHOUSE_BIN
-  return DEFAULT_SHOP_RETURN_BIN
 }
 
 function getSizeText(item: LoanItem) {
@@ -88,24 +51,13 @@ function openLabelPreview(items: PreviewLabelItem[]) {
   window.open('/labels/preview', '_blank')
 }
 
-function getCurrentStockLevel(value: number | null | undefined) {
-  const stock = Number(value ?? 0)
-  return Number.isFinite(stock) ? stock : 0
-}
+function parseLoanNotes(value: string | null | undefined) {
+  if (!value) return null
 
-function getReturnDestination(target: ReturnTarget) {
-  if (target === 'shop') {
-    return {
-      location: DEFAULT_SHOP_LOCATION,
-      bin: DEFAULT_SHOP_RETURN_BIN,
-      reason: 'loan_returned_to_shop',
-    }
-  }
-
-  return {
-    location: WAREHOUSE_LOCATION,
-    bin: WAREHOUSE_BIN,
-    reason: 'loan_returned_to_warehouse',
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
   }
 }
 
@@ -133,45 +85,29 @@ export default function LoanPage() {
   }
 
   function cleanScan(value: string) {
-    return value.trim().replace(/\s+/g, '')
-  }
-
-  function isValidSku(value: string) {
-    return /^\d{10}$/.test(value)
+    return value.trim().replace(/\s+/g, '').toUpperCase()
   }
 
   async function fetchLoans() {
-    const { data, error } = await supabase
-      .from('items')
-      .select(`
-        id,
-        sku,
-        brand,
-        reporting_category,
-        tagged_size,
-        waist_in,
-        selling_price,
-        stock_level,
-        loan_status,
-        loaned_at,
-        loan_notes,
-        ai_title,
-        basic_title,
-        current_location,
-        current_bin
-      `)
-      .eq('loan_status', 'on_loan')
-      .order('loaned_at', { ascending: false })
+    try {
+      const response = await fetch('/api/scanner/loan', {
+        method: 'GET',
+        cache: 'no-store',
+      })
 
-    if (error) {
-      setMessage(error.message)
-      return
+      const data = await response.json()
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not fetch loans.')
+      }
+
+      setLoanItems((data.loans || []) as LoanItem[])
+      setSelectedItems((prev) =>
+        prev.filter((id) => (data.loans || []).some((item: LoanItem) => item.id === id))
+      )
+    } catch (error: any) {
+      setMessage(error.message || 'Could not fetch loans.')
     }
-
-    setLoanItems((data || []) as LoanItem[])
-    setSelectedItems((prev) =>
-      prev.filter((id) => (data || []).some((item) => item.id === id))
-    )
   }
 
   function toggleSelected(itemId: string) {
@@ -194,7 +130,7 @@ export default function LoanPage() {
 
     openLabelPreview(
       selectedLoanItems.map((item) => ({
-        sku: item.sku,
+        sku: item.barcode_number || item.sku,
         sizeText: getSizeText(item),
         price: item.selling_price,
       }))
@@ -202,9 +138,9 @@ export default function LoanPage() {
   }
 
   async function handleScan() {
-    const sku = cleanScan(scanValue)
+    const scanned = cleanScan(scanValue)
 
-    if (!sku || busy) return
+    if (!scanned || busy) return
 
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
@@ -214,340 +150,67 @@ export default function LoanPage() {
     setScanValue('')
     setMessage('')
 
-    if (!isValidSku(sku)) {
-      setMessage(`Invalid SKU: ${sku}`)
-      focusInput()
-      return
-    }
-
     if (pendingReturn) {
-      await confirmReturnScan(sku)
+      await confirmReturnScan(scanned)
       focusInput()
       return
     }
 
-    await loanOutItem(sku)
+    await loanOutItem(scanned)
     focusInput()
   }
 
-  async function getItemStockRows(itemId: string) {
-    const { data, error } = await supabase
-      .from('item_stock_locations')
-      .select('id, item_id, sku, location_name, bin_code, stock_level')
-      .eq('item_id', itemId)
+  async function postLoanAction(body: Record<string, any>) {
+    const response = await fetch('/api/scanner/loan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
 
-    if (error) throw new Error(error.message)
+    const data = await response.json()
 
-    return (data || []) as StockLocationRow[]
-  }
-
-  function chooseLoanSourceRow(item: LoanItem, rows: StockLocationRow[]) {
-    const currentLocation = canonicalLocation(item.current_location)
-    const currentBin = text(item.current_bin)
-
-    const positiveRows = rows.filter((row) => Number(row.stock_level || 0) > 0)
-
-    if (currentLocation && currentBin) {
-      const exact = positiveRows.find(
-        (row) =>
-          canonicalLocation(row.location_name) === currentLocation &&
-          text(row.bin_code).toLowerCase() === currentBin.toLowerCase()
-      )
-
-      if (exact) return exact
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.message || 'Loan action failed.')
     }
 
-    const currentLocationFallback = positiveRows.find(
-      (row) => canonicalLocation(row.location_name) === currentLocation
-    )
-
-    if (currentLocationFallback) return currentLocationFallback
-
-    return [...positiveRows].sort(
-      (a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0)
-    )[0] || null
+    return data
   }
 
-  async function updateExistingStockRow(rowId: string, stockLevel: number, source: string) {
-    const { error } = await supabase
-      .from('item_stock_locations')
-      .update({
-        stock_level: stockLevel,
-        source,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', rowId)
-
-    if (error) throw new Error(error.message)
-  }
-
-  async function upsertStockLocation(params: {
-    itemId: string
-    sku: string
-    locationName: string
-    binCode: string
-    delta: number
-    source: string
-  }) {
-    const locationName = canonicalLocation(params.locationName)
-    const binCode = normaliseBin(params.binCode, locationName)
-    const now = new Date().toISOString()
-
-    const { data, error } = await supabase
-      .from('item_stock_locations')
-      .select('id, stock_level')
-      .eq('item_id', params.itemId)
-      .eq('location_name', locationName)
-      .eq('bin_code', binCode)
-      .limit(1)
-
-    if (error) throw new Error(error.message)
-
-    const existing = data?.[0]
-    const nextStock = Number(existing?.stock_level || 0) + params.delta
-
-    if (nextStock < 0) {
-      throw new Error(
-        `${params.sku} does not have enough stock in ${locationName} / ${binCode}.`
-      )
-    }
-
-    if (existing) {
-      const { error: updateError } = await supabase
-        .from('item_stock_locations')
-        .update({
-          stock_level: nextStock,
-          source: params.source,
-          updated_at: now,
-        })
-        .eq('id', existing.id)
-
-      if (updateError) throw new Error(updateError.message)
-      return { locationName, binCode, stockLevel: nextStock }
-    }
-
-    const { error: insertError } = await supabase
-      .from('item_stock_locations')
-      .insert({
-        item_id: params.itemId,
-        sku: params.sku,
-        location_name: locationName,
-        location_id: null,
-        bin_code: binCode,
-        stock_level: nextStock,
-        source: params.source,
-        synced_at: null,
-        updated_at: now,
-      })
-
-    if (insertError) throw new Error(insertError.message)
-
-    return { locationName, binCode, stockLevel: nextStock }
-  }
-
-  async function updateItemStockSummary(itemId: string) {
-    const rows = await getItemStockRows(itemId)
-
-    const stockLevel = rows.reduce(
-      (sum, row) => sum + Number(row.stock_level || 0),
-      0
-    )
-
-    const warehouseStock = rows
-      .filter((row) => canonicalLocation(row.location_name) === WAREHOUSE_LOCATION)
-      .reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
-
-    const shopFloorStock = rows
-      .filter(
-        (row) =>
-          canonicalLocation(row.location_name).startsWith('SHOP-') &&
-          text(row.bin_code).toUpperCase() === 'FLOOR'
-      )
-      .reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
-
-    const displayRow =
-      rows
-        .filter((row) => Number(row.stock_level || 0) > 0)
-        .sort((a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0] || null
-
-    const payload = {
-      stock_level: stockLevel,
-      warehouse_stock: warehouseStock,
-      shop_floor_stock: shopFloorStock,
-      current_location: displayRow ? canonicalLocation(displayRow.location_name) : null,
-      current_bin: displayRow?.bin_code || null,
-      updated_at: new Date().toISOString(),
-    }
-
-    const { error } = await supabase.from('items').update(payload).eq('id', itemId)
-
-    if (error) throw new Error(error.message)
-
-    return payload
-  }
-
-  async function loanOutItem(sku: string) {
+  async function loanOutItem(scanned: string) {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
+    const confirmed = window.confirm(
+      `Mark scanned item ${scanned} as ON LOAN by ${staff.name}?\n\nThis will deduct 1 from its current app stock location/bin.`
+    )
+
+    if (!confirmed) {
+      setMessage('Cancelled.')
+      return
+    }
+
     setBusy(true)
-    setMessage('Checking item...')
+    setMessage('Marking item on loan...')
 
     try {
-      const { data: item, error: itemError } = await supabase
-        .from('items')
-        .select(`
-          id,
-          sku,
-          brand,
-          reporting_category,
-          tagged_size,
-          waist_in,
-          selling_price,
-          stock_level,
-          loan_status,
-          loaned_at,
-          loan_notes,
-          ai_title,
-          basic_title,
-          current_location,
-          current_bin
-        `)
-        .eq('sku', sku)
-        .maybeSingle()
-
-      if (itemError) throw new Error(itemError.message)
-
-      if (!item) {
-        setMessage(`Item not found: ${sku}`)
-        return
-      }
-
-      const itemRow = item as LoanItem
-
-      if (itemRow.loan_status === 'on_loan') {
-        setMessage(`${sku} is already on loan.`)
-        await fetchLoans()
-        return
-      }
-
-      const currentStockLevel = getCurrentStockLevel(itemRow.stock_level)
-
-      if (currentStockLevel <= 0) {
-        setMessage(`${sku} has no available stock to loan out.`)
-        return
-      }
-
-      const stockRows = await getItemStockRows(itemRow.id)
-      let sourceRow = chooseLoanSourceRow(itemRow, stockRows)
-
-      if (!sourceRow && currentStockLevel > 0) {
-        const fallbackLocation = canonicalLocation(itemRow.current_location)
-        const fallbackBin = normaliseBin(itemRow.current_bin, fallbackLocation)
-
-        await upsertStockLocation({
-          itemId: itemRow.id,
-          sku: itemRow.sku,
-          locationName: fallbackLocation,
-          binCode: fallbackBin,
-          delta: currentStockLevel,
-          source: 'loan_stock_row_seed',
-        })
-
-        const seededRows = await getItemStockRows(itemRow.id)
-        sourceRow = chooseLoanSourceRow(itemRow, seededRows)
-      }
-
-      if (!sourceRow) {
-        setMessage(`${sku} has no stock location row available to deduct.`)
-        return
-      }
-
-      const sourceLocation = canonicalLocation(sourceRow.location_name)
-      const sourceBin = normaliseBin(sourceRow.bin_code, sourceLocation)
-      const sourceCurrentStock = Number(sourceRow.stock_level || 0)
-      const newSourceStock = sourceCurrentStock - 1
-      const newTotalStockLevel = currentStockLevel - 1
-
-      const confirmed = window.confirm(
-        `Mark SKU ${sku} as ON LOAN by ${staff.name}?\n\nThis will deduct 1 from ${sourceLocation} / ${sourceBin}.\n\nTotal stock will change from ${currentStockLevel} to ${newTotalStockLevel}.`
-      )
-
-      if (!confirmed) {
-        setMessage('Cancelled.')
-        return
-      }
-
-      const now = new Date().toISOString()
-
-      await updateExistingStockRow(sourceRow.id, newSourceStock, 'loan_out')
-      const summary = await updateItemStockSummary(itemRow.id)
-
-      const loanNotes = JSON.stringify({
-        loaned_from_location: sourceLocation,
-        loaned_from_bin: sourceBin,
-        loaned_at: now,
-        loaned_by: staff.name,
+      const data = await postLoanAction({
+        action: 'loan_out',
+        scan_value: scanned,
+        staff_id: staff.id,
+        staff_name: staff.name,
       })
 
-      const { error: updateError } = await supabase
-        .from('items')
-        .update({
-          loan_status: 'on_loan',
-          loaned_at: now,
-          loan_returned_at: null,
-          loaned_by: staff.id,
-          loan_notes: loanNotes,
-          current_location: summary.stock_level > 0 ? summary.current_location : 'ON_LOAN',
-          current_bin: summary.stock_level > 0 ? summary.current_bin : 'ON_LOAN',
-          linnworks_location_sync_status: 'pending',
-          updated_at: now,
-        })
-        .eq('id', itemRow.id)
-
-      if (updateError) throw new Error(updateError.message)
-
-      const { error: loanError } = await supabase.from('item_loans').insert({
-        item_id: itemRow.id,
-        sku: itemRow.sku,
-        status: 'on_loan',
-        loaned_at: now,
-        loaned_by: staff.id,
-      })
-
-      if (loanError) throw new Error(loanError.message)
-
-      const { error: queueError } = await supabase
-        .from('linnworks_sync_queue')
-        .insert({
-          item_id: itemRow.id,
-          sku: itemRow.sku,
-          action: 'adjust_stock',
-          payload: {
-            sku: itemRow.sku,
-            delta: -1,
-            quantity: 1,
-            location: sourceLocation,
-            bin: sourceBin,
-            strict_location: true,
-            reason: 'loan_out',
-            source: 'dohpe_app',
-            loaned_at: now,
-            loaned_by: staff.name,
-          },
-          status: 'pending',
-        })
-
-      if (queueError) throw new Error(queueError.message)
+      const result = data.result
 
       setMessage(
-        `${sku} marked as on loan by ${staff.name}. Deducted from ${sourceLocation} / ${sourceBin}. Stock ${currentStockLevel} → ${newTotalStockLevel}.`
+        `${result.item.sku} marked on loan by ${staff.name}. Deducted from ${result.source_location} / ${result.source_bin}.`
       )
+
       await fetchLoans()
     } catch (error: any) {
-      setMessage(error.message || 'Could not loan item out.')
+      setMessage(error.message || 'Could not mark item on loan.')
     } finally {
       setBusy(false)
     }
@@ -562,11 +225,14 @@ export default function LoanPage() {
     setPendingReturn({ item, target })
     setScanValue('')
 
-    const destination = getReturnDestination(target)
+    const targetText =
+      target === 'original'
+        ? 'ORIGINAL LOCATION'
+        : target === 'shop'
+          ? 'SHOP-1 / STOCK'
+          : 'WAREHOUSE / Default'
 
-    setMessage(
-      `Scan SKU ${item.sku} now to confirm return to ${destination.location} / ${destination.bin}.`
-    )
+    setMessage(`Scan ${item.sku} or barcode now to confirm return to ${targetText}.`)
     focusInput()
   }
 
@@ -577,31 +243,38 @@ export default function LoanPage() {
     focusInput()
   }
 
-  async function confirmReturnScan(scannedSku: string) {
-    if (!pendingReturn) return
+  async function confirmReturnScan(scannedValue: string) {
+    if (!pendingReturn || !staff) return
 
-    if (scannedSku !== pendingReturn.item.sku) {
+    const item = pendingReturn.item
+    const scanned = cleanScan(scannedValue)
+    const validValues = [item.sku, item.barcode_number].filter(Boolean).map((value) => cleanScan(String(value)))
+
+    if (!validValues.includes(scanned)) {
       setMessage(
-        `Wrong SKU scanned. Expected ${pendingReturn.item.sku}, scanned ${scannedSku}.`
+        `Wrong item scanned. Expected ${item.sku}${item.barcode_number ? ` or ${item.barcode_number}` : ''}, scanned ${scanned}.`
       )
       return
     }
 
-    await markReturned(pendingReturn.item, pendingReturn.target)
+    await markReturned(item, pendingReturn.target, scanned)
   }
 
-  async function markReturned(item: LoanItem, target: ReturnTarget) {
+  async function markReturned(item: LoanItem, target: ReturnTarget, scannedValue: string) {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
-    const destination = getReturnDestination(target)
-    const currentStockLevel = getCurrentStockLevel(item.stock_level)
-    const newStockLevel = currentStockLevel + 1
+    const targetText =
+      target === 'original'
+        ? 'original location/bin'
+        : target === 'shop'
+          ? 'SHOP-1 / STOCK'
+          : 'WAREHOUSE / Default'
 
     const confirmed = window.confirm(
-      `Return SKU ${item.sku} to ${destination.location} / ${destination.bin} by ${staff.name}?\n\nStock level will change from ${currentStockLevel} to ${newStockLevel}.`
+      `Return ${item.sku} to ${targetText} by ${staff.name}?\n\nStock will only increase after this confirmed scan.`
     )
 
     if (!confirmed) return
@@ -610,76 +283,22 @@ export default function LoanPage() {
     setMessage('Returning item...')
 
     try {
-      const now = new Date().toISOString()
-
-      await upsertStockLocation({
-        itemId: item.id,
-        sku: item.sku,
-        locationName: destination.location,
-        binCode: destination.bin,
-        delta: 1,
-        source: destination.reason,
+      const data = await postLoanAction({
+        action: 'return',
+        scan_value: scannedValue,
+        target,
+        staff_id: staff.id,
+        staff_name: staff.name,
       })
 
-      await updateItemStockSummary(item.id)
-
-      const { error: updateError } = await supabase
-        .from('items')
-        .update({
-          loan_status: 'not_on_loan',
-          loan_returned_at: now,
-          loan_notes: null,
-          returned_by: staff.id,
-          current_location: destination.location,
-          current_bin: destination.bin,
-          location_status: 'available',
-          linnworks_location_sync_status: 'pending',
-          updated_at: now,
-        })
-        .eq('id', item.id)
-
-      if (updateError) throw new Error(updateError.message)
-
-      const { error: loanUpdateError } = await supabase
-        .from('item_loans')
-        .update({
-          status: 'returned',
-          returned_at: now,
-          returned_by: staff.id,
-          updated_at: now,
-        })
-        .eq('item_id', item.id)
-        .eq('status', 'on_loan')
-
-      if (loanUpdateError) throw new Error(loanUpdateError.message)
-
-      const { error: queueError } = await supabase
-        .from('linnworks_sync_queue')
-        .insert({
-          item_id: item.id,
-          sku: item.sku,
-          action: 'adjust_stock',
-          payload: {
-            sku: item.sku,
-            delta: 1,
-            quantity: 1,
-            location: destination.location,
-            bin: destination.bin,
-            reason: destination.reason,
-            source: 'dohpe_app',
-            returned_at: now,
-            returned_by: staff.name,
-          },
-          status: 'pending',
-        })
-
-      if (queueError) throw new Error(queueError.message)
+      const result = data.result
 
       setPendingReturn(null)
       setSelectedItems((prev) => prev.filter((id) => id !== item.id))
       setMessage(
-        `${item.sku} returned to ${destination.location} / ${destination.bin} by ${staff.name}. Stock ${currentStockLevel} → ${newStockLevel}.`
+        `${result.item.sku} returned to ${result.destination_location} / ${result.destination_bin} by ${staff.name}.`
       )
+
       await fetchLoans()
       focusInput()
     } catch (error: any) {
@@ -701,6 +320,14 @@ export default function LoanPage() {
     })
   }
 
+  function getOriginalLocationText(item: LoanItem) {
+    const notes = parseLoanNotes(item.loan_notes)
+
+    if (!notes?.source_location && !notes?.source_bin) return 'Original location'
+
+    return `${notes.source_location || 'Original'} / ${notes.source_bin || 'Default'}`
+  }
+
   return (
     <StaffPermissionGate permission="scanner">
       <main
@@ -714,7 +341,7 @@ export default function LoanPage() {
                 <h1 className="text-2xl font-bold sm:text-3xl">Loans</h1>
 
                 <p className="text-sm text-neutral-400">
-                  Scan SKU before removing the tag. Loan-out deducts from the current app stock location/bin. Return items here to put stock back live.
+                  Scan SKU or barcode. Loaning out deducts from the current stock location/bin. Returns add stock only after the return destination is confirmed.
                 </p>
 
                 {staff ? (
@@ -741,13 +368,25 @@ export default function LoanPage() {
                   </h2>
 
                   <p className="text-sm text-orange-200">
-                    Scan SKU{' '}
+                    Scan{' '}
                     <span className="font-mono font-black">
                       {pendingReturn.item.sku}
-                    </span>{' '}
+                    </span>
+                    {pendingReturn.item.barcode_number ? (
+                      <>
+                        {' '}or barcode{' '}
+                        <span className="font-mono font-black">
+                          {pendingReturn.item.barcode_number}
+                        </span>
+                      </>
+                    ) : null}{' '}
                     to return to{' '}
-                    {getReturnDestination(pendingReturn.target).location} /{' '}
-                    {getReturnDestination(pendingReturn.target).bin}.
+                    {pendingReturn.target === 'original'
+                      ? getOriginalLocationText(pendingReturn.item)
+                      : pendingReturn.target === 'shop'
+                        ? 'SHOP-1 / STOCK'
+                        : 'WAREHOUSE / Default'}
+                    .
                   </p>
                 </div>
 
@@ -764,7 +403,7 @@ export default function LoanPage() {
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
             <h2 className="mb-3 text-2xl font-black">
-              {pendingReturn ? 'Scan SKU to Confirm Return' : 'Scan Item Out on Loan'}
+              {pendingReturn ? 'Scan Item to Confirm Return' : 'Scan Item Out on Loan'}
             </h2>
 
             <input
@@ -777,8 +416,8 @@ export default function LoanPage() {
               placeholder={
                 staff
                   ? pendingReturn
-                    ? `Scan ${pendingReturn.item.sku} to confirm return`
-                    : 'Scan item SKU'
+                    ? 'Scan same SKU/barcode to confirm return'
+                    : 'Scan item SKU or barcode'
                   : 'Go to staff PIN screen first'
               }
               disabled={busy || !staff}
@@ -871,6 +510,12 @@ export default function LoanPage() {
                             {item.sku}
                           </p>
 
+                          {item.barcode_number && (
+                            <p className="font-mono text-xs text-neutral-500">
+                              Barcode: {item.barcode_number}
+                            </p>
+                          )}
+
                           <p className="truncate text-sm text-neutral-300">
                             {item.ai_title || item.basic_title || 'Untitled item'}
                           </p>
@@ -882,21 +527,27 @@ export default function LoanPage() {
                             {formatDate(item.loaned_at)}
                           </p>
 
-                          <p className="mt-1 text-xs text-neutral-500">
-                            Current app location:{' '}
-                            {item.current_location || 'No location'} /{' '}
-                            {item.current_bin || 'No bin'}
+                          <p className="mt-1 text-xs text-orange-300">
+                            Original: {getOriginalLocationText(item)}
                           </p>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-1 gap-2 sm:flex">
                         <button
+                          onClick={() => startReturn(item, 'original')}
+                          disabled={busy || !staff}
+                          className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white hover:bg-emerald-500 disabled:opacity-40"
+                        >
+                          RETURN ORIGINAL
+                        </button>
+
+                        <button
                           onClick={() => startReturn(item, 'shop')}
                           disabled={busy || !staff}
                           className="rounded-xl bg-green-600 px-4 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
                         >
-                          RETURN TO SHOP STOCK
+                          RETURN SHOP STOCK
                         </button>
 
                         <button
@@ -904,7 +555,7 @@ export default function LoanPage() {
                           disabled={busy || !staff}
                           className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-500 disabled:opacity-40"
                         >
-                          RETURN TO WAREHOUSE
+                          RETURN WAREHOUSE
                         </button>
                       </div>
                     </div>
