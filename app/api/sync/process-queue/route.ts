@@ -517,6 +517,208 @@ function getPreferredReturnLocation(payload: any, item: any) {
   )
 }
 
+function mapOperationalLocationToStoredLocation(locationName: string) {
+  const value = normaliseText(locationName)
+  const lower = value.toLowerCase()
+
+  if (!value) return 'Default'
+  if (lower === 'warehouse') return 'Default'
+  return value
+}
+
+function isShopLocationName(locationName: string) {
+  return normaliseText(locationName).toLowerCase().startsWith('shop-')
+}
+
+function getOperationalDeductionPriority(locationName: string, reason: string) {
+  const isShop = isShopLocationName(locationName)
+
+  if (isShop && isPosSaleDeductionReason(reason)) {
+    return ['FLOOR', 'STOCK', 'Default']
+  }
+
+  if (isShop) {
+    return ['STOCK', 'FLOOR', 'Default']
+  }
+
+  return ['Default']
+}
+
+async function upsertOperationalStockRow(params: {
+  supabase: any
+  item: any
+  locationName: string
+  binCode: string
+  nextStock: number
+  source: string
+}) {
+  const { supabase, item, locationName, binCode, nextStock, source } = params
+  const now = new Date().toISOString()
+
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('id')
+    .eq('item_id', item.id)
+    .eq('location_name', locationName)
+    .eq('bin_code', binCode)
+    .limit(1)
+
+  if (error) throw new Error(error.message)
+
+  const existing = data?.[0]
+
+  if (existing) {
+    const { error: updateError } = await supabase
+      .from('item_stock_locations')
+      .update({
+        stock_level: nextStock,
+        source,
+        updated_at: now,
+      })
+      .eq('id', existing.id)
+
+    if (updateError) throw new Error(updateError.message)
+    return
+  }
+
+  const { error: insertError } = await supabase
+    .from('item_stock_locations')
+    .insert({
+      item_id: item.id,
+      sku: item.sku,
+      location_name: locationName,
+      location_id: null,
+      bin_code: binCode,
+      stock_level: nextStock,
+      source,
+      synced_at: null,
+      updated_at: now,
+    })
+
+  if (insertError) throw new Error(insertError.message)
+}
+
+async function recalcItemStockFromOperationalRows(supabase: any, item: any) {
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('location_name, bin_code, stock_level')
+    .eq('item_id', item.id)
+
+  if (error) throw new Error(error.message)
+
+  const rows = data || []
+  const total = rows.reduce((sum: number, row: any) => sum + Number(row.stock_level || 0), 0)
+  const shopFloor = rows.reduce((sum: number, row: any) => {
+    return isShopLocationName(row.location_name) && normaliseText(row.bin_code).toUpperCase() === 'FLOOR'
+      ? sum + Number(row.stock_level || 0)
+      : sum
+  }, 0)
+  const warehouse = rows.reduce((sum: number, row: any) => {
+    const loc = normaliseText(row.location_name).toLowerCase()
+    return loc === 'default' || loc === 'warehouse'
+      ? sum + Number(row.stock_level || 0)
+      : sum
+  }, 0)
+
+  const displayRow = rows
+    .filter((row: any) => Number(row.stock_level || 0) > 0)
+    .sort((a: any, b: any) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0]
+
+  const { error: updateError } = await supabase
+    .from('items')
+    .update({
+      stock_level: total,
+      shop_floor_stock: shopFloor,
+      warehouse_stock: warehouse,
+      current_location: displayRow?.location_name || item.current_location || null,
+      current_bin: displayRow?.bin_code || item.current_bin || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', item.id)
+
+  if (updateError) throw new Error(updateError.message)
+
+  return { total, shopFloor, warehouse }
+}
+
+async function applyOperationalStockAdjustment(params: {
+  supabase: any
+  item: any
+  payload: any
+  delta: number
+}) {
+  const { supabase, item, payload, delta } = params
+  const reason = normaliseText(payload.reason).toLowerCase()
+  const locationName = mapOperationalLocationToStoredLocation(
+    normaliseText(payload.location) || normaliseText(item?.current_location) || 'Default'
+  )
+  const requestedBin = normaliseText(payload.bin) || (isShopLocationName(locationName) ? 'FLOOR' : 'Default')
+
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('id, location_name, bin_code, stock_level')
+    .eq('item_id', item.id)
+    .eq('location_name', locationName)
+
+  if (error) throw new Error(error.message)
+
+  const rows = data || []
+
+  if (delta > 0) {
+    const existing = rows.find((row: any) => normaliseText(row.bin_code).toUpperCase() === requestedBin.toUpperCase())
+    const nextStock = Number(existing?.stock_level || 0) + delta
+
+    await upsertOperationalStockRow({
+      supabase,
+      item,
+      locationName,
+      binCode: requestedBin,
+      nextStock,
+      source: 'app_queue',
+    })
+
+    return await recalcItemStockFromOperationalRows(supabase, item)
+  }
+
+  const quantityToDeduct = Math.abs(delta)
+  let remaining = quantityToDeduct
+  const priority = [requestedBin, ...getOperationalDeductionPriority(locationName, reason)]
+  const uniquePriority = Array.from(new Set(priority.map((bin) => normaliseText(bin) || 'Default')))
+
+  for (const binCode of uniquePriority) {
+    if (remaining <= 0) break
+
+    const row = rows.find((candidate: any) => normaliseText(candidate.bin_code).toUpperCase() === binCode.toUpperCase())
+    if (!row) continue
+
+    const currentStock = Number(row.stock_level || 0)
+    if (currentStock <= 0) continue
+
+    const deduction = Math.min(currentStock, remaining)
+    const nextStock = currentStock - deduction
+
+    await upsertOperationalStockRow({
+      supabase,
+      item,
+      locationName,
+      binCode: row.bin_code,
+      nextStock,
+      source: 'app_queue',
+    })
+
+    remaining -= deduction
+  }
+
+  if (remaining > 0) {
+    throw new Error(
+      `${item.sku} has insufficient app stock in ${locationName}. Needed ${quantityToDeduct}, short by ${remaining}.`
+    )
+  }
+
+  return await recalcItemStockFromOperationalRows(supabase, item)
+}
+
+
 function getLocationPriority(locationName: string, payload: any, item: any) {
   const value = locationName.toLowerCase()
   const reason = normaliseText(payload.reason).toLowerCase()
@@ -830,11 +1032,12 @@ async function processAdjustStockQueueRow(params: {
   })
 
   const reason = normaliseText(payload.reason).toLowerCase()
-  const expectedLocation =
+  const expectedLocation = mapAppLocationToLinnworksLocation(
     normaliseText(payload.location) ||
-    normaliseText(payload.sale_location) ||
-    normaliseText(item?.current_location) ||
-    ''
+      normaliseText(payload.sale_location) ||
+      normaliseText(item?.current_location) ||
+      ''
+  )
 
   const usedFallbackLocation =
     delta < 0 &&
@@ -844,13 +1047,6 @@ async function processAdjustStockQueueRow(params: {
 
   const costPrice = normaliseNumber(item?.cost_price) ?? 0
   const stockValue = Number((selected.newStockLevel * costPrice).toFixed(2))
-
-  const binRack =
-    normaliseText(payload.bin) ||
-    selected.binRack ||
-    normaliseText(item?.current_bin) ||
-    selected.locationName ||
-    'Default'
 
   const results: any = {}
 
@@ -868,12 +1064,14 @@ async function processAdjustStockQueueRow(params: {
     locationId: selected.locationId,
   })
 
-  if (binRack) {
-    results.binrack = await updateStockField(server, token, {
-      stockItemId,
-      fieldName: 'BinRack',
-      fieldValue: binRack,
-      locationId: selected.locationId,
+  // Do not push app FLOOR/STOCK bins into Linnworks BinRack.
+  // Linnworks stays broad-location only unless WMS is enabled later.
+  if (item?.id) {
+    results.app_operational_stock = await applyOperationalStockAdjustment({
+      supabase,
+      item,
+      payload,
+      delta,
     })
   }
 
@@ -882,57 +1080,13 @@ async function processAdjustStockQueueRow(params: {
       const thumbnailUrl = await getItemThumbnailUrl(supabase, item?.id)
 
       results.location_mismatch_telegram = await sendTelegramMessage(
-        `⚠️ POS stock location mismatch
-
-SKU: ${sku}
-Brand: ${normaliseText(item?.brand) || 'Unknown'}
-Category: ${normaliseText(item?.reporting_category) || 'Unknown'}
-Sale: ${normaliseText(payload.sale_number) || normaliseText(payload.sale_id) || 'Unknown'}
-Reason: ${formatTelegramReason(payload)}
-Expected location: ${expectedLocation}
-Deducted from: ${selected.locationName}
-Stock at selected location: ${selected.stockLevel} → ${selected.newStockLevel}
-
-This usually means the item was physically sold in the shop, but Linnworks stock was not allocated to the shop location.`,
+        `⚠️ POS stock location mismatch\n\nSKU: ${sku}\nBrand: ${normaliseText(item?.brand) || 'Unknown'}\nCategory: ${normaliseText(item?.reporting_category) || 'Unknown'}\nSale: ${normaliseText(payload.sale_number) || normaliseText(payload.sale_id) || 'Unknown'}\nReason: ${formatTelegramReason(payload)}\nExpected location: ${expectedLocation}\nDeducted from: ${selected.locationName}\nStock at selected location: ${selected.stockLevel} → ${selected.newStockLevel}`,
         thumbnailUrl
       )
     } catch (error: any) {
       results.location_mismatch_telegram = { ok: false, error: error.message }
     }
   }
-
-  const updatedStockRows = stockData.mappedRows.map((row) => {
-    if (
-      row.locationId &&
-      selected.locationId &&
-      String(row.locationId).toLowerCase() === String(selected.locationId).toLowerCase()
-    ) {
-      return {
-        ...row,
-        stockLevel: selected.newStockLevel,
-      }
-    }
-
-    return row
-  })
-
-  const totalStockLevel = updatedStockRows.reduce((sum, row) => {
-    return sum + (normaliseNumber(row.stockLevel) ?? 0)
-  }, 0)
-
-  await supabase
-    .from('items')
-    .update({
-      stock_level: totalStockLevel,
-      current_location: selected.locationName,
-      current_bin: binRack,
-      linnworks_location_sync_status: 'synced',
-      linnworks_location_synced_at: new Date().toISOString(),
-      linnworks_status: 'synced',
-      linnworks_sync_error: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('sku', sku)
 
   return {
     sku,
@@ -941,11 +1095,8 @@ This usually means the item was physically sold in the shop, but Linnworks stock
     delta,
     previousLocationStock: selected.stockLevel,
     newLocationStock: selected.newStockLevel,
-    totalStockLevel,
-    stockValue,
     locationName: selected.locationName,
     locationId: selected.locationId,
-    binRack,
     selectionReason: selected.selectionReason,
     expectedLocation,
     usedFallbackLocation,
@@ -1138,12 +1289,7 @@ async function processUpdateLocationQueueRow(params: {
 
   const results: any = {}
 
-  results.binrack = await updateStockField(server, token, {
-    stockItemId,
-    fieldName: 'BinRack',
-    fieldValue: binRack,
-    locationId,
-  })
+  results.binrack = { skipped: true, reason: 'App bin only. Linnworks BinRack not updated without WMS.' }
 
   const now = new Date().toISOString()
 

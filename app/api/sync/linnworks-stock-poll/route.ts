@@ -440,40 +440,207 @@ async function hasBlockingQueueRows(supabase: any, sku: string) {
   return Boolean(data && data.length > 0)
 }
 
-async function replaceItemLocationRows(params: {
+function mapPollLocationToStoredLocation(locationName: string) {
+  const value = text(locationName)
+  const lower = value.toLowerCase()
+
+  if (!value) return 'Default'
+  if (lower === 'warehouse') return 'Default'
+  return value
+}
+
+function isShopPollLocation(locationName: string) {
+  return text(locationName).toLowerCase().startsWith('shop-')
+}
+
+function getOnlinePollDeductionPriority(locationName: string) {
+  if (isShopPollLocation(locationName)) return ['STOCK', 'FLOOR', 'Default']
+  return ['Default']
+}
+
+async function upsertPollLocationRow(params: {
+  supabase: any
+  item: LocalItem
+  locationName: string
+  binCode: string
+  stockLevel: number
+  source: string
+}) {
+  const { supabase, item, locationName, binCode, stockLevel, source } = params
+  const now = new Date().toISOString()
+
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('id')
+    .eq('item_id', item.id)
+    .eq('location_name', locationName)
+    .eq('bin_code', binCode)
+    .limit(1)
+
+  if (error) throw new Error(error.message)
+
+  const existing = data?.[0]
+
+  if (existing) {
+    const { error: updateError } = await supabase
+      .from('item_stock_locations')
+      .update({
+        stock_level: stockLevel,
+        source,
+        synced_at: now,
+        updated_at: now,
+      })
+      .eq('id', existing.id)
+
+    if (updateError) throw new Error(updateError.message)
+    return
+  }
+
+  const { error: insertError } = await supabase
+    .from('item_stock_locations')
+    .insert({
+      item_id: item.id,
+      sku: item.sku,
+      location_name: locationName,
+      location_id: null,
+      bin_code: binCode,
+      stock_level: stockLevel,
+      source,
+      synced_at: now,
+      updated_at: now,
+    })
+
+  if (insertError) throw new Error(insertError.message)
+}
+
+async function reconcileAppBinsFromLinnworksRows(params: {
   supabase: any
   item: LocalItem
   rows: MappedStockRow[]
 }) {
   const { supabase, item, rows } = params
-  const now = new Date().toISOString()
+  const changes: any[] = []
 
-  const { error: deleteError } = await supabase
+  const { data: existingRows, error } = await supabase
     .from('item_stock_locations')
-    .delete()
+    .select('id, location_name, bin_code, stock_level')
     .eq('item_id', item.id)
 
-  if (deleteError) throw new Error(deleteError.message)
+  if (error) throw new Error(error.message)
 
-  const rowsToInsert = rows.map((row) => ({
-    item_id: item.id,
-    sku: item.sku,
-    location_name: row.locationName || 'Unknown',
-    location_id: row.locationId || null,
-    bin_code: row.binRack || 'Default',
-    stock_level: Number(row.stockLevel || 0),
-    source: 'linnworks',
-    synced_at: now,
-    updated_at: now,
-  }))
+  const appRows = existingRows || []
 
-  if (rowsToInsert.length === 0) return
+  for (const row of rows) {
+    const locationName = mapPollLocationToStoredLocation(row.locationName)
+    const linnworksStock = Number(row.stockLevel || 0)
 
-  const { error: insertError } = await supabase
+    const localRowsForLocation = appRows.filter(
+      (appRow: any) => text(appRow.location_name).toLowerCase() === locationName.toLowerCase()
+    )
+
+    const localTotal = localRowsForLocation.reduce(
+      (sum: number, appRow: any) => sum + Number(appRow.stock_level || 0),
+      0
+    )
+
+    let difference = linnworksStock - localTotal
+
+    if (localRowsForLocation.length === 0) {
+      const defaultBin = isShopPollLocation(locationName) ? 'STOCK' : 'Default'
+      await upsertPollLocationRow({
+        supabase,
+        item,
+        locationName,
+        binCode: defaultBin,
+        stockLevel: linnworksStock,
+        source: 'linnworks_poll_seed',
+      })
+      changes.push({ locationName, type: 'seed', stockLevel: linnworksStock })
+      continue
+    }
+
+    if (difference > 0) {
+      const defaultBin = isShopPollLocation(locationName) ? 'STOCK' : 'Default'
+      const targetRow =
+        localRowsForLocation.find((appRow: any) => text(appRow.bin_code).toUpperCase() === defaultBin) ||
+        localRowsForLocation[0]
+
+      await upsertPollLocationRow({
+        supabase,
+        item,
+        locationName,
+        binCode: targetRow?.bin_code || defaultBin,
+        stockLevel: Number(targetRow?.stock_level || 0) + difference,
+        source: 'linnworks_poll_increase',
+      })
+
+      changes.push({ locationName, type: 'increase', quantity: difference })
+      continue
+    }
+
+    if (difference < 0) {
+      let remaining = Math.abs(difference)
+      const priority = getOnlinePollDeductionPriority(locationName)
+      const sortedRows = [...localRowsForLocation].sort((a: any, b: any) => {
+        const ai = priority.indexOf(text(a.bin_code).toUpperCase())
+        const bi = priority.indexOf(text(b.bin_code).toUpperCase())
+        const ap = ai === -1 ? 99 : ai
+        const bp = bi === -1 ? 99 : bi
+        if (ap !== bp) return ap - bp
+        return Number(b.stock_level || 0) - Number(a.stock_level || 0)
+      })
+
+      for (const appRow of sortedRows) {
+        if (remaining <= 0) break
+        const currentStock = Number(appRow.stock_level || 0)
+        if (currentStock <= 0) continue
+        const deduction = Math.min(currentStock, remaining)
+
+        await upsertPollLocationRow({
+          supabase,
+          item,
+          locationName,
+          binCode: appRow.bin_code,
+          stockLevel: currentStock - deduction,
+          source: 'linnworks_poll_decrease',
+        })
+
+        remaining -= deduction
+      }
+
+      changes.push({ locationName, type: 'decrease', quantity: Math.abs(difference), unapplied: remaining })
+    }
+  }
+
+  return changes
+}
+
+async function readOperationalRows(supabase: any, itemId: string) {
+  const { data, error } = await supabase
     .from('item_stock_locations')
-    .insert(rowsToInsert)
+    .select('location_name, bin_code, stock_level')
+    .eq('item_id', itemId)
 
-  if (insertError) throw new Error(insertError.message)
+  if (error) throw new Error(error.message)
+
+  return data || []
+}
+
+function sumOperationalRows(rows: any[], type: 'shop_floor' | 'warehouse') {
+  return rows.reduce((sum, row) => {
+    const locationName = text(row.location_name).toLowerCase()
+    const binCode = text(row.bin_code).toUpperCase()
+
+    if (type === 'shop_floor' && locationName.startsWith('shop-') && binCode === 'FLOOR') {
+      return sum + Number(row.stock_level || 0)
+    }
+
+    if (type === 'warehouse' && (locationName === 'default' || locationName === 'warehouse')) {
+      return sum + Number(row.stock_level || 0)
+    }
+
+    return sum
+  }, 0)
 }
 
 async function processStockPoll(request: Request) {
@@ -548,18 +715,23 @@ async function processStockPoll(request: Request) {
 
         const displayLocation = chooseDisplayLocation(rows, item.current_location)
 
-        await replaceItemLocationRows({
+        const appBinChanges = await reconcileAppBinsFromLinnworksRows({
           supabase,
           item,
           rows,
         })
 
+        const operationalRows = await readOperationalRows(supabase, item.id)
+        const displayOperationalRow = operationalRows
+          .filter((row: any) => Number(row.stock_level || 0) > 0)
+          .sort((a: any, b: any) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0]
+
         const updatePayload = {
           stock_level: totalStockLevel,
-          shop_floor_stock: sumLocationType(rows, 'shop'),
-          warehouse_stock: sumLocationType(rows, 'warehouse'),
-          current_location: displayLocation?.locationName || item.current_location || null,
-          current_bin: displayLocation?.binRack || item.current_bin || null,
+          shop_floor_stock: sumOperationalRows(operationalRows, 'shop_floor'),
+          warehouse_stock: sumOperationalRows(operationalRows, 'warehouse'),
+          current_location: displayOperationalRow?.location_name || displayLocation?.locationName || item.current_location || null,
+          current_bin: displayOperationalRow?.bin_code || item.current_bin || null,
           linnworks_location_sync_status: 'synced',
           linnworks_location_synced_at: new Date().toISOString(),
           linnworks_status: 'synced',
@@ -583,7 +755,8 @@ async function processStockPoll(request: Request) {
           bin: updatePayload.current_bin,
           shop_floor_stock: updatePayload.shop_floor_stock,
           warehouse_stock: updatePayload.warehouse_stock,
-          location_rows_written: rows.length,
+          location_rows_reconciled: rows.length,
+          app_bin_changes: appBinChanges,
           rows: debug ? rows : undefined,
         })
       } catch (error: any) {
