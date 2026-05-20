@@ -4,6 +4,28 @@ import { createClient } from '@supabase/supabase-js'
 export const dynamic = 'force-dynamic'
 
 const DEFAULT_LOCATION_ID = '00000000-0000-0000-0000-000000000000'
+const WAREHOUSE_LOCATION = 'WAREHOUSE'
+const WAREHOUSE_BIN = 'Default'
+const TRANSFER_REASON = 'online_order_pick'
+const PENDING_TRANSFER_STATUS = 'pending_pick'
+const PICKED_ITEM_STATUS = 'picked'
+const PENDING_ITEM_STATUS = 'pending_pick'
+
+type AppStockRow = {
+  id: string
+  item_id: string
+  sku: string
+  location_name: string
+  bin_code: string
+  stock_level: number
+}
+
+type Deduction = {
+  location_name: string
+  bin_code: string
+  quantity: number
+  row_id: string
+}
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -55,13 +77,13 @@ async function linnworksPost(server: string, token: string, path: string, body: 
     body: JSON.stringify(body),
   })
 
-  const text = await response.text()
+  const responseText = await response.text()
   let data: any = null
 
   try {
-    data = text ? JSON.parse(text) : null
+    data = responseText ? JSON.parse(responseText) : null
   } catch {
-    data = text
+    data = responseText
   }
 
   if (!response.ok) {
@@ -82,32 +104,18 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
-async function sendTelegramMessage(message: string) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN
-  const chatId = process.env.TELEGRAM_CHAT_ID
+function canonicalLocation(value: any) {
+  const clean = normaliseText(value)
+  const lower = clean.toLowerCase()
 
-  if (!botToken || !chatId) {
-    return { skipped: true, reason: 'Telegram env vars missing' }
-  }
+  if (!clean) return WAREHOUSE_LOCATION
+  if (lower === 'default' || lower === 'warehouse') return WAREHOUSE_LOCATION
 
-  const response = await fetch(
-    `https://api.telegram.org/bot${botToken}/sendMessage`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-      }),
-    }
-  )
+  return clean.toUpperCase().startsWith('SHOP-') ? clean.toUpperCase() : clean
+}
 
-  if (!response.ok) {
-    const responseText = await response.text()
-    throw new Error(`Telegram send failed: ${responseText}`)
-  }
-
-  return { ok: true }
+function isShopLocation(value: any) {
+  return canonicalLocation(value).toUpperCase().startsWith('SHOP-')
 }
 
 function isUuid(value: string) {
@@ -185,20 +193,12 @@ function getOrderUuid(order: any) {
 }
 
 function getOrderSource(order: any) {
-  return normaliseText(
-    order?.Source ||
-      order?.source ||
-      order?.Channel ||
-      order?.channel
-  )
+  return normaliseText(order?.Source || order?.source || order?.Channel || order?.channel)
 }
 
 function getOrderSubSource(order: any) {
   return normaliseText(
-    order?.SubSource ||
-      order?.subSource ||
-      order?.Subsource ||
-      order?.subsource
+    order?.SubSource || order?.subSource || order?.Subsource || order?.subsource
   )
 }
 
@@ -251,85 +251,34 @@ function getItemQuantity(item: any) {
   )
 }
 
-function getStockItemsFromFullResponse(data: any) {
-  if (!data) return []
-  if (Array.isArray(data)) return data
+async function sendTelegramMessage(message: string) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN
+  const chatId = process.env.TELEGRAM_CHAT_ID
 
-  const candidates = [
-    data.Data,
-    data.data,
-    data.Items,
-    data.items,
-    data.StockItems,
-    data.stockItems,
-    data.Results,
-    data.results,
-  ]
-
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) return candidate
+  if (!botToken || !chatId) {
+    return { skipped: true, reason: 'Telegram env vars missing' }
   }
 
-  return [data]
-}
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: message,
+    }),
+  })
 
-function getStockLevelsFromFullItem(item: any) {
-  const candidates = [
-    item?.StockLevels,
-    item?.stockLevels,
-    item?.StockItemLevels,
-    item?.stockItemLevels,
-    item?.Levels,
-    item?.levels,
-    item?.Locations,
-    item?.locations,
-    item?.LocationStockLevels,
-    item?.locationStockLevels,
-  ]
+  const data = await response.json().catch(() => null)
 
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) return candidate
+  if (!response.ok) {
+    throw new Error(`Telegram send failed: ${JSON.stringify(data)}`)
   }
 
-  return []
-}
-
-function getSkuFromFullItem(item: any) {
-  return normaliseText(
-    item?.SKU ||
-      item?.Sku ||
-      item?.sku ||
-      item?.ItemNumber ||
-      item?.itemNumber ||
-      item?.ItemNumberSKU ||
-      item?.itemNumberSKU
-  )
-}
-
-function getStockLevel(row: any) {
-  return (
-    normaliseNumber(row?.StockLevel) ??
-    normaliseNumber(row?.stockLevel) ??
-    normaliseNumber(row?.Level) ??
-    normaliseNumber(row?.level) ??
-    normaliseNumber(row?.Quantity) ??
-    normaliseNumber(row?.quantity) ??
-    normaliseNumber(row?.OnHand) ??
-    normaliseNumber(row?.onHand) ??
-    normaliseNumber(row?.InStock) ??
-    normaliseNumber(row?.inStock) ??
-    0
-  )
-}
-
-function getAvailableStock(row: any) {
-  return (
-    normaliseNumber(row?.Available) ??
-    normaliseNumber(row?.available) ??
-    normaliseNumber(row?.AvailableStock) ??
-    normaliseNumber(row?.availableStock) ??
-    null
-  )
+  return {
+    ok: true,
+    chat_id: chatId,
+    message_id: data?.result?.message_id || null,
+  }
 }
 
 async function getAllOpenOrderIds(server: string, token: string) {
@@ -355,46 +304,6 @@ async function getOpenOrdersDetails(server: string, token: string, orderIds: str
   })
 
   return getOpenOrderDetailRows(data)
-}
-
-async function getLiveLinnworksStock(server: string, token: string, sku: string) {
-  const data = await linnworksPost(server, token, '/api/Stock/GetStockItemsFull', {
-    keyword: sku,
-    searchTypes: ['SKU'],
-    dataRequirements: ['StockLevels'],
-    entriesPerPage: 1,
-    pageNumber: 1,
-    loadCompositeParents: false,
-    loadVariationParents: false,
-  })
-
-  const fullItems = getStockItemsFromFullResponse(data)
-  const fullItem =
-    fullItems.find((item) => getSkuFromFullItem(item).toLowerCase() === sku.toLowerCase()) ||
-    fullItems[0] ||
-    null
-
-  const stockRows = fullItem ? getStockLevelsFromFullItem(fullItem) : []
-
-  const totalStockLevel = stockRows.reduce((sum, row) => {
-    return sum + getStockLevel(row)
-  }, 0)
-
-  const availableValues = stockRows
-    .map(getAvailableStock)
-    .filter((value) => value !== null) as number[]
-
-  const totalAvailable =
-    availableValues.length > 0
-      ? availableValues.reduce((sum, value) => sum + value, 0)
-      : null
-
-  return {
-    stockFullRaw: data,
-    stockRows,
-    totalStockLevel,
-    totalAvailable,
-  }
 }
 
 async function getWebAppSkus(supabase: any) {
@@ -449,187 +358,6 @@ async function getAlreadyCheckedOrderIds(supabase: any, orderIds: string[]) {
   return checked
 }
 
-
-function isShopLocationName(locationName: string) {
-  return normaliseText(locationName).toUpperCase().startsWith('SHOP-')
-}
-
-function canonicalAppLocationName(locationName: string) {
-  const value = normaliseText(locationName)
-  const lower = value.toLowerCase()
-
-  if (!value) return 'WAREHOUSE'
-  if (lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
-  return value
-}
-
-type AppStockRow = {
-  id: string
-  location_name: string
-  bin_code: string
-  stock_level: number
-}
-
-async function getAppStockRows(supabase: any, itemId: string) {
-  const { data, error } = await supabase
-    .from('item_stock_locations')
-    .select('id, location_name, bin_code, stock_level')
-    .eq('item_id', itemId)
-
-  if (error) throw new Error(error.message)
-
-  return (data || []) as AppStockRow[]
-}
-
-async function updateAppStockRow(params: {
-  supabase: any
-  rowId: string
-  stockLevel: number
-  source: string
-}) {
-  const { error } = await params.supabase
-    .from('item_stock_locations')
-    .update({
-      stock_level: params.stockLevel,
-      source: params.source,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', params.rowId)
-
-  if (error) throw new Error(error.message)
-}
-
-function sortOnlineDeductionRows(rows: AppStockRow[]) {
-  const priority = (row: AppStockRow) => {
-    const locationName = canonicalAppLocationName(row.location_name).toUpperCase()
-    const binCode = normaliseText(row.bin_code).toUpperCase()
-
-    if (locationName === 'WAREHOUSE') return 10
-    if (isShopLocationName(locationName) && binCode === 'STOCK') return 20
-    if (isShopLocationName(locationName) && binCode === 'FLOOR') return 30
-    if (isShopLocationName(locationName)) return 40
-    return 90
-  }
-
-  return [...rows].sort((a, b) => {
-    const ap = priority(a)
-    const bp = priority(b)
-    if (ap !== bp) return ap - bp
-    return Number(b.stock_level || 0) - Number(a.stock_level || 0)
-  })
-}
-
-async function deductOperationalBinsForOnlineOrder(params: {
-  supabase: any
-  itemId: string
-  quantity: number
-}) {
-  const rows = await getAppStockRows(params.supabase, params.itemId)
-  let remaining = Math.max(0, Number(params.quantity || 0))
-  const deductions: any[] = []
-
-  for (const row of sortOnlineDeductionRows(rows)) {
-    if (remaining <= 0) break
-
-    const currentStock = Number(row.stock_level || 0)
-    if (currentStock <= 0) continue
-
-    const deduct = Math.min(currentStock, remaining)
-    const nextStock = currentStock - deduct
-
-    await updateAppStockRow({
-      supabase: params.supabase,
-      rowId: row.id,
-      stockLevel: nextStock,
-      source: 'linnworks_open_order',
-    })
-
-    deductions.push({
-      location_name: canonicalAppLocationName(row.location_name),
-      bin_code: row.bin_code,
-      quantity: deduct,
-      previous_stock_level: currentStock,
-      new_stock_level: nextStock,
-    })
-
-    remaining -= deduct
-  }
-
-  return {
-    requested_quantity: params.quantity,
-    deducted_quantity: params.quantity - remaining,
-    remaining_quantity: remaining,
-    deductions,
-  }
-}
-
-function summariseOperationalRows(rows: AppStockRow[]) {
-  let total = 0
-  let warehouseStock = 0
-  let shopFloorStock = 0
-
-  for (const row of rows) {
-    const quantity = Number(row.stock_level || 0)
-    const locationName = canonicalAppLocationName(row.location_name).toUpperCase()
-    const binCode = normaliseText(row.bin_code).toUpperCase()
-
-    total += quantity
-
-    if (locationName === 'WAREHOUSE') {
-      warehouseStock += quantity
-    }
-
-    if (isShopLocationName(locationName) && binCode === 'FLOOR') {
-      shopFloorStock += quantity
-    }
-  }
-
-  return {
-    total,
-    warehouseStock,
-    shopFloorStock,
-  }
-}
-
-async function updateItemOperationalSummary(supabase: any, itemId: string) {
-  const rows = await getAppStockRows(supabase, itemId)
-  const summary = summariseOperationalRows(rows)
-
-  const displayRow =
-    rows
-      .filter((row) => Number(row.stock_level || 0) > 0)
-      .sort((a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0] || null
-
-  const { error } = await supabase
-    .from('items')
-    .update({
-      stock_level: summary.total,
-      warehouse_stock: summary.warehouseStock,
-      shop_floor_stock: summary.shopFloorStock,
-      current_location: displayRow ? canonicalAppLocationName(displayRow.location_name) : null,
-      current_bin: displayRow ? displayRow.bin_code : null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', itemId)
-
-  if (error) throw new Error(error.message)
-
-  return summary
-}
-
-function formatDeductions(deductions: any[]) {
-  if (!deductions.length) return 'No app stock bins deducted.'
-
-  return deductions
-    .map((row) => `${row.location_name} / ${row.bin_code}: ${row.quantity}`)
-    .join('\n')
-}
-
-function deductionsRequireTelegram(deductions: any[]) {
-  return deductions.some((row) => isShopLocationName(row.location_name))
-}
-
-
 async function markOrderChecked(params: {
   supabase: any
   orderId: string
@@ -650,6 +378,331 @@ async function markOrderChecked(params: {
     )
 
   if (error) throw new Error(error.message)
+}
+
+async function getAppStockRows(supabase: any, itemId: string) {
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('id, item_id, sku, location_name, bin_code, stock_level')
+    .eq('item_id', itemId)
+
+  if (error) throw new Error(error.message)
+
+  return (data || []) as AppStockRow[]
+}
+
+function sortOnlineDeductionRows(rows: AppStockRow[]) {
+  const priority = (row: AppStockRow) => {
+    const location = canonicalLocation(row.location_name)
+    const bin = normaliseText(row.bin_code).toUpperCase()
+
+    if (location === WAREHOUSE_LOCATION) return 10
+    if (isShopLocation(location) && bin === 'STOCK') return 20
+    if (isShopLocation(location) && bin === 'FLOOR') return 30
+    if (isShopLocation(location)) return 40
+
+    return 90
+  }
+
+  return [...rows].sort((a, b) => {
+    const ap = priority(a)
+    const bp = priority(b)
+    if (ap !== bp) return ap - bp
+    return Number(b.stock_level || 0) - Number(a.stock_level || 0)
+  })
+}
+
+async function updateStockRow(supabase: any, rowId: string, stockLevel: number, source: string) {
+  const { error } = await supabase
+    .from('item_stock_locations')
+    .update({
+      stock_level: stockLevel,
+      source,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', rowId)
+
+  if (error) throw new Error(error.message)
+}
+
+async function deductAppBinsForOnlineOrder(params: {
+  supabase: any
+  itemId: string
+  quantity: number
+}) {
+  const rows = await getAppStockRows(params.supabase, params.itemId)
+  let remaining = Math.max(0, Number(params.quantity || 0))
+  const deductions: any[] = []
+
+  for (const row of sortOnlineDeductionRows(rows)) {
+    if (remaining <= 0) break
+
+    const current = Number(row.stock_level || 0)
+    if (current <= 0) continue
+
+    const deduct = Math.min(current, remaining)
+    const next = current - deduct
+
+    await updateStockRow(params.supabase, row.id, next, 'linnworks_open_order_reserved')
+
+    deductions.push({
+      row_id: row.id,
+      location_name: canonicalLocation(row.location_name),
+      bin_code: normaliseText(row.bin_code) || WAREHOUSE_BIN,
+      quantity: deduct,
+    })
+
+    remaining -= deduct
+  }
+
+  return {
+    requested_quantity: params.quantity,
+    deducted_quantity: params.quantity - remaining,
+    remaining_quantity: remaining,
+    deductions,
+  }
+}
+
+async function updateItemSummary(supabase: any, itemId: string) {
+  const rows = await getAppStockRows(supabase, itemId)
+
+  const stockLevel = rows.reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
+  const warehouseStock = rows
+    .filter((row) => canonicalLocation(row.location_name) === WAREHOUSE_LOCATION)
+    .reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
+  const shopFloorStock = rows
+    .filter(
+      (row) =>
+        isShopLocation(row.location_name) &&
+        normaliseText(row.bin_code).toUpperCase() === 'FLOOR'
+    )
+    .reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
+
+  const displayRow =
+    rows
+      .filter((row) => Number(row.stock_level || 0) > 0)
+      .sort((a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0] || null
+
+  const { error } = await supabase
+    .from('items')
+    .update({
+      stock_level: stockLevel,
+      warehouse_stock: warehouseStock,
+      shop_floor_stock: shopFloorStock,
+      current_location: displayRow ? canonicalLocation(displayRow.location_name) : null,
+      current_bin: displayRow?.bin_code || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', itemId)
+
+  if (error) throw new Error(error.message)
+
+  return {
+    stockLevel,
+    warehouseStock,
+    shopFloorStock,
+  }
+}
+
+function todayRange() {
+  const now = new Date()
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+
+  const end = new Date(start)
+  end.setDate(end.getDate() + 1)
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  }
+}
+
+async function getNextTransferNumber(supabase: any) {
+  const { data, error } = await supabase
+    .from('stock_transfers')
+    .select('transfer_number')
+    .order('transfer_number', { ascending: false })
+    .limit(1)
+
+  if (error) throw new Error(error.message)
+
+  return Number(data?.[0]?.transfer_number || 0) + 1
+}
+
+async function getOrCreatePendingTransfer(params: {
+  supabase: any
+  fromLocation: string
+}) {
+  const { start, end } = todayRange()
+
+  const { data: existing, error: existingError } = await params.supabase
+    .from('stock_transfers')
+    .select('id, transfer_number')
+    .eq('from_location', params.fromLocation)
+    .eq('to_location', WAREHOUSE_LOCATION)
+    .eq('status', PENDING_TRANSFER_STATUS)
+    .eq('reason', TRANSFER_REASON)
+    .gte('created_at', start)
+    .lt('created_at', end)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (existingError) throw new Error(existingError.message)
+
+  if (existing?.id) {
+    return existing
+  }
+
+  const transferNumber = await getNextTransferNumber(params.supabase)
+
+  const { data: created, error: createError } = await params.supabase
+    .from('stock_transfers')
+    .insert({
+      transfer_number: transferNumber,
+      from_location: params.fromLocation,
+      to_location: WAREHOUSE_LOCATION,
+      status: PENDING_TRANSFER_STATUS,
+      reason: TRANSFER_REASON,
+    })
+    .select('id, transfer_number')
+    .single()
+
+  if (createError) throw new Error(createError.message)
+
+  return created
+}
+
+function expandDeductions(deductions: Deduction[]) {
+  const rows: Deduction[] = []
+
+  for (const deduction of deductions) {
+    for (let i = 0; i < deduction.quantity; i += 1) {
+      rows.push({
+        ...deduction,
+        quantity: 1,
+      })
+    }
+  }
+
+  return rows
+}
+
+async function addDeductionsToShopTransfers(params: {
+  supabase: any
+  itemId: string
+  sku: string
+  orderId: string
+  orderItemId: string | null
+  deductions: Deduction[]
+  telegramByShop: Map<string, any>
+}) {
+  const shopDeductions = params.deductions.filter((deduction) =>
+    isShopLocation(deduction.location_name)
+  )
+
+  const transferRows: any[] = []
+  const groupedByShop = new Map<string, Deduction[]>()
+
+  for (const deduction of shopDeductions) {
+    const shop = canonicalLocation(deduction.location_name)
+    const existing = groupedByShop.get(shop) || []
+    existing.push(deduction)
+    groupedByShop.set(shop, existing)
+  }
+
+  for (const [shop, deductions] of groupedByShop) {
+    const transfer = await getOrCreatePendingTransfer({
+      supabase: params.supabase,
+      fromLocation: shop,
+    })
+
+    const expanded = expandDeductions(deductions)
+
+    for (const deduction of expanded) {
+      transferRows.push({
+        transfer_id: transfer.id,
+        item_id: params.itemId,
+        sku: params.sku,
+        status: PENDING_ITEM_STATUS,
+        source_order_id: params.orderId,
+        source_order_item_id: params.orderItemId,
+        source_bin: deduction.bin_code,
+        telegram_chat_id: params.telegramByShop.get(shop)?.chat_id || null,
+        telegram_message_id: params.telegramByShop.get(shop)?.message_id || null,
+      })
+    }
+  }
+
+  if (transferRows.length === 0) return []
+
+  const { data, error } = await params.supabase
+    .from('stock_transfer_items')
+    .insert(transferRows)
+    .select('id, transfer_id, sku, source_bin, source_order_id')
+
+  if (error) throw new Error(error.message)
+
+  return data || []
+}
+
+function formatShopRequiredLines(deductions: Deduction[]) {
+  const grouped = new Map<string, number>()
+
+  for (const deduction of deductions.filter((row) => isShopLocation(row.location_name))) {
+    const key = `${canonicalLocation(deduction.location_name)} ${deduction.bin_code}`
+    grouped.set(key, (grouped.get(key) || 0) + deduction.quantity)
+  }
+
+  return Array.from(grouped.entries())
+    .map(([key, qty]) => `Required transfer quantity from ${key}: ${qty}`)
+    .join('\n')
+}
+
+async function sendShopTelegramMessages(params: {
+  sku: string
+  brand: string
+  category: string
+  deductions: Deduction[]
+  source: string
+  subSource: string
+  orderId: string
+}) {
+  const groupedByShop = new Map<string, Deduction[]>()
+
+  for (const deduction of params.deductions.filter((row) => isShopLocation(row.location_name))) {
+    const shop = canonicalLocation(deduction.location_name)
+    const existing = groupedByShop.get(shop) || []
+    existing.push(deduction)
+    groupedByShop.set(shop, existing)
+  }
+
+  const resultByShop = new Map<string, any>()
+
+  for (const [shop, deductions] of groupedByShop) {
+    try {
+      const message = `🛒 Online order shop transfer required
+
+SKU: ${params.sku}
+Brand: ${params.brand || 'Unknown'}
+Category: ${params.category || 'Unknown'}
+${formatShopRequiredLines(deductions)}
+Source: ${params.source || 'Unknown'}
+Sub source: ${params.subSource || 'Unknown'}
+Order ID: ${params.orderId}`
+
+      const telegramResult = await sendTelegramMessage(message)
+      resultByShop.set(shop, telegramResult)
+    } catch (error: any) {
+      resultByShop.set(shop, {
+        ok: false,
+        error: error.message || 'Telegram send failed',
+      })
+    }
+  }
+
+  return resultByShop
 }
 
 async function processLinnworksOpenOrders(request: Request) {
@@ -789,85 +842,35 @@ async function processLinnworksOpenOrders(request: Request) {
           continue
         }
 
-        const liveStock = await getLiveLinnworksStock(server, token, sku)
-        const targetLinnworksStock =
-          liveStock.totalAvailable !== null
-            ? Number(liveStock.totalAvailable || 0)
-            : Number(liveStock.totalStockLevel || 0)
+        const operationalDeduction = await deductAppBinsForOnlineOrder({
+          supabase,
+          itemId: localItem.id,
+          quantity,
+        })
 
-        const appStockBefore = Number(localItem.stock_level || 0)
-        const quantityNeededToMatchLinnworks = Math.max(
-          0,
-          appStockBefore - targetLinnworksStock
-        )
+        const summary = await updateItemSummary(supabase, localItem.id)
 
-        let operationalDeduction: any = {
-          requested_quantity: quantity,
-          deducted_quantity: 0,
-          remaining_quantity: quantity,
-          deductions: [],
-          skipped: true,
-          reason:
-            quantityNeededToMatchLinnworks <= 0
-              ? 'App stock already matches Linnworks available/stock total. Stock poll probably reconciled first.'
-              : 'No deduction required.',
-        }
+        const telegramByShop = await sendShopTelegramMessages({
+          sku,
+          brand: normaliseText(localItem.brand),
+          category: normaliseText(localItem.reporting_category),
+          deductions: operationalDeduction.deductions,
+          source,
+          subSource,
+          orderId,
+        })
 
-        if (quantityNeededToMatchLinnworks > 0) {
-          operationalDeduction = await deductOperationalBinsForOnlineOrder({
-            supabase,
-            itemId: localItem.id,
-            quantity: Math.min(quantity, quantityNeededToMatchLinnworks),
-          })
+        const transferItems = await addDeductionsToShopTransfers({
+          supabase,
+          itemId: localItem.id,
+          sku,
+          orderId,
+          orderItemId: groupedItem.orderItemId || null,
+          deductions: operationalDeduction.deductions,
+          telegramByShop,
+        })
 
-          await updateItemOperationalSummary(supabase, localItem.id)
-        }
-
-        const location =
-          operationalDeduction.deductions?.[0]?.location_name ||
-          normaliseText(localItem.current_location) ||
-          normaliseText(body.default_location) ||
-          'WAREHOUSE'
-
-        const bin =
-          operationalDeduction.deductions?.[0]?.bin_code ||
-          normaliseText(localItem.current_bin) ||
-          normaliseText(body.default_bin) ||
-          'Default'
-
-        let telegramResult: any = {
-          skipped: true,
-          reason: 'Online order was fulfilled from warehouse or no app-bin deduction was required.',
-        }
-
-        let telegramSent = Boolean(existingSale.data?.telegram_sent)
-
-        if (!telegramSent && deductionsRequireTelegram(operationalDeduction.deductions || [])) {
-          try {
-            telegramResult = await sendTelegramMessage(
-              `🛒 Online order needs picking
-
-SKU: ${sku}
-Brand: ${normaliseText(localItem.brand) || 'Unknown'}
-Category: ${normaliseText(localItem.reporting_category) || 'Unknown'}
-Qty: ${quantity}
-App bins deducted:
-${formatDeductions(operationalDeduction.deductions || [])}
-Source: ${source || 'Unknown'}
-Sub source: ${subSource || 'Unknown'}
-Order ID: ${orderId}
-
-If this sells to an in-store customer first, complete the shop sale and cancel/refund the online order.`
-            )
-
-            telegramSent = Boolean(telegramResult?.ok)
-          } catch (error: any) {
-            telegramResult = {
-              ok: false,
-              error: error.message || 'Telegram notification failed.',
-            }
-          }
-        }
+        const telegramSent = Array.from(telegramByShop.values()).some((row) => row?.ok)
 
         const salePayload = {
           linnworks_order_id: orderId,
@@ -903,17 +906,11 @@ If this sells to an in-store customer first, complete the shop sale and cancel/r
           orderId,
           sku,
           quantity,
-          location,
-          bin,
-          queueAction: null,
-          stockAction: 'none',
-          reason: 'online_sale_operational_deduction',
-          live_linnworks_stock_level: liveStock.totalStockLevel,
-          live_linnworks_available: liveStock.totalAvailable,
-          app_stock_before: appStockBefore,
-          target_linnworks_stock: targetLinnworksStock,
           operational_deduction: operationalDeduction,
-          telegram: telegramResult,
+          item_summary: summary,
+          transfer_items_created: transferItems.length,
+          telegram_sent: telegramSent,
+          reason: 'online_sale_reserved_and_transfer_created',
         })
       }
 
@@ -935,7 +932,11 @@ If this sells to an in-store customer first, complete the shop sale and cancel/r
       checked_this_run_count: uncheckedOrderIds.length,
       order_count: orders.length,
       created_queue_rows: 0,
-      notification_rows: results.filter((row) => row.telegram && row.telegram.ok).length,
+      notification_rows: results.filter((row) => row.telegram_sent).length,
+      transfer_items_created: results.reduce(
+        (sum, row) => sum + Number(row.transfer_items_created || 0),
+        0
+      ),
       results,
     })
   } catch (error: any) {
