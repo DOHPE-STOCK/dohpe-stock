@@ -457,12 +457,7 @@ async function hasBlockingQueueRows(supabase: any, sku: string) {
 }
 
 function mapPollLocationToStoredLocation(locationName: string) {
-  const value = text(locationName)
-  const lower = value.toLowerCase()
-
-  if (!value) return 'WAREHOUSE'
-  if (lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
-  return value
+  return canonicalLocationName(locationName)
 }
 
 function canonicalLocationName(locationName: string) {
@@ -471,7 +466,7 @@ function canonicalLocationName(locationName: string) {
 
   if (!value) return 'WAREHOUSE'
   if (lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
-  return value
+  return value.toUpperCase().startsWith('SHOP-') ? value.toUpperCase() : value
 }
 
 function isShopPollLocation(locationName: string) {
@@ -594,6 +589,48 @@ async function mergeLegacyWarehouseRows(supabase: any, item: LocalItem) {
   }
 }
 
+async function getReservedOnlineTransferQtyByLocation(supabase: any, item: LocalItem) {
+  const reserved = new Map<string, number>()
+
+  const { data, error } = await supabase
+    .from('stock_transfer_items')
+    .select(`
+      id,
+      status,
+      stock_transfers (
+        from_location,
+        to_location,
+        status,
+        reason
+      )
+    `)
+    .eq('item_id', item.id)
+    .in('status', ['pending_pick', 'picked', 'in_transfer', 'in_transit'])
+
+  if (error) throw new Error(error.message)
+
+  for (const row of data || []) {
+    const transfer = Array.isArray(row.stock_transfers)
+      ? row.stock_transfers[0]
+      : row.stock_transfers
+
+    if (!transfer) continue
+
+    const reason = text(transfer.reason)
+    const transferStatus = text(transfer.status)
+    const fromLocation = canonicalLocationName(transfer.from_location)
+
+    if (reason !== 'online_order_pick') continue
+    if (['received', 'cancelled', 'canceled'].includes(transferStatus.toLowerCase())) continue
+    if (!isShopPollLocation(fromLocation)) continue
+
+    const key = fromLocation.toLowerCase()
+    reserved.set(key, (reserved.get(key) || 0) + 1)
+  }
+
+  return reserved
+}
+
 async function reconcileAppBinsFromLinnworksRows(params: {
   supabase: any
   item: LocalItem
@@ -610,10 +647,15 @@ async function reconcileAppBinsFromLinnworksRows(params: {
   if (error) throw new Error(error.message)
 
   const appRows = existingRows || []
+  const reservedByLocation = await getReservedOnlineTransferQtyByLocation(supabase, item)
 
   for (const row of rows) {
     const locationName = mapPollLocationToStoredLocation(row.locationName)
-    const linnworksStock = Number(row.stockLevel || 0)
+    const rawLinnworksStock = Number(row.stockLevel || 0)
+    const reservedQty = isShopPollLocation(locationName)
+      ? Number(reservedByLocation.get(canonicalLocationName(locationName).toLowerCase()) || 0)
+      : 0
+    const linnworksStock = Math.max(0, rawLinnworksStock - reservedQty)
 
     const localRowsForLocation = appRows.filter(
       (appRow: any) =>
@@ -718,7 +760,7 @@ function sumOperationalRows(rows: any[], type: 'shop_floor' | 'warehouse') {
       return sum + Number(row.stock_level || 0)
     }
 
-    if (type === 'warehouse' && (locationName === 'default' || locationName === 'warehouse')) {
+    if (type === 'warehouse' && canonicalLocationName(locationName) === 'WAREHOUSE') {
       return sum + Number(row.stock_level || 0)
     }
 
@@ -815,7 +857,11 @@ async function processStockPoll(request: Request) {
           stock_level: totalStockLevel,
           shop_floor_stock: sumOperationalRows(operationalRows, 'shop_floor'),
           warehouse_stock: sumOperationalRows(operationalRows, 'warehouse'),
-          current_location: displayOperationalRow?.location_name || displayLocation?.locationName || item.current_location || null,
+          current_location: displayOperationalRow?.location_name
+            ? canonicalLocationName(displayOperationalRow.location_name)
+            : displayLocation?.locationName
+              ? canonicalLocationName(displayLocation.locationName)
+              : item.current_location || null,
           current_bin: displayOperationalRow?.bin_code || item.current_bin || null,
           linnworks_location_sync_status: 'synced',
           linnworks_location_synced_at: new Date().toISOString(),

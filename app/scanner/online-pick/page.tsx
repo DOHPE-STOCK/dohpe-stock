@@ -78,7 +78,7 @@ export default function OnlinePickScannerPage() {
           <div>
             <h1 className="text-2xl font-black">Online Order Pick Scanner</h1>
             <p className="text-sm text-neutral-400">
-              Scan source shelf/bin, then scan item SKU to mark online-transfer item picked.
+              Select/scan the source bin, then scan item SKU. Transfer stays pending until manifest/dispatch.
             </p>
             <p className="mt-1 text-sm font-bold text-green-300">
               {staff ? `Active staff: ${staff.name}` : 'No active staff selected'}

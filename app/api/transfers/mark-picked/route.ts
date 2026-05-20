@@ -49,7 +49,7 @@ async function sendTelegramReply(params: {
   return { ok: true }
 }
 
-async function updateTransferStatusIfFullyPicked(supabase: any, transferId: string) {
+async function getTransferPickProgress(supabase: any, transferId: string) {
   const { data, error } = await supabase
     .from('stock_transfer_items')
     .select('id, status')
@@ -58,35 +58,17 @@ async function updateTransferStatusIfFullyPicked(supabase: any, transferId: stri
   if (error) throw new Error(error.message)
 
   const rows = data || []
-  const hasRows = rows.length > 0
-  const allPicked = hasRows && rows.every((row: any) => row.status === 'picked' || row.status === 'in_transfer' || row.status === 'received')
+  const pickedCount = rows.filter((row: any) =>
+    ['picked', 'in_transfer', 'in_transit', 'received'].includes(text(row.status))
+  ).length
 
-  if (!allPicked) {
-    return { updated: false }
+  return {
+    total: rows.length,
+    picked: pickedCount,
+    all_picked: rows.length > 0 && pickedCount === rows.length,
+    transfer_status_changed: false,
+    note: 'Transfer remains pending_pick until you manually send/print/dispatch it.',
   }
-
-  const { error: updateError } = await supabase
-    .from('stock_transfers')
-    .update({
-      status: 'in_transit',
-      sent_at: new Date().toISOString(),
-    })
-    .eq('id', transferId)
-    .eq('status', 'pending_pick')
-
-  if (updateError) throw new Error(updateError.message)
-
-  const { error: itemUpdateError } = await supabase
-    .from('stock_transfer_items')
-    .update({
-      status: 'in_transfer',
-    })
-    .eq('transfer_id', transferId)
-    .eq('status', 'picked')
-
-  if (itemUpdateError) throw new Error(itemUpdateError.message)
-
-  return { updated: true }
 }
 
 export async function POST(request: Request) {
@@ -143,7 +125,8 @@ export async function POST(request: Request) {
       return (
         text(transfer?.from_location).toUpperCase() === fromLocation &&
         text(transfer?.to_location).toUpperCase() === 'WAREHOUSE' &&
-        text(transfer?.status) === 'pending_pick'
+        text(transfer?.status) === 'pending_pick' &&
+        text(transfer?.reason) === 'online_order_pick'
       )
     })
 
@@ -174,7 +157,7 @@ export async function POST(request: Request) {
       ? match.stock_transfers[0]
       : match.stock_transfers
 
-    const transferStatus = await updateTransferStatusIfFullyPicked(supabase, match.transfer_id)
+    const transferStatus = await getTransferPickProgress(supabase, match.transfer_id)
 
     let telegramReply: any = { skipped: true }
 
