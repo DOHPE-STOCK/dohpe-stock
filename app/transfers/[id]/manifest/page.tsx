@@ -21,12 +21,18 @@ type Transfer = {
   transfer_number: number
   from_location: string
   to_location: string
+  status: string
+  reason: string | null
   created_at: string
   stock_transfer_items: TransferItem[]
 }
 
 function formatTransferNumber(num: number) {
   return String(num).padStart(7, '0')
+}
+
+function isManifestItem(item: TransferItem) {
+  return !['cancelled', 'canceled', 'missing'].includes(String(item.status || '').toLowerCase())
 }
 
 export default function TransferManifestPage() {
@@ -50,6 +56,8 @@ export default function TransferManifestPage() {
         transfer_number,
         from_location,
         to_location,
+        status,
+        reason,
         created_at,
         stock_transfer_items (
           id,
@@ -83,23 +91,29 @@ export default function TransferManifestPage() {
   }
 
   const transferUrl = `${window.location.origin}/transfers/${transfer.id}`
-  const totalCount = transfer.stock_transfer_items.length
+  const activeItems = (transfer.stock_transfer_items || []).filter(isManifestItem)
+  const cancelledCount = (transfer.stock_transfer_items || []).length - activeItems.length
+  const totalCount = activeItems.length
 
-  const categoryCounts = transfer.stock_transfer_items.reduce(
+  const categoryCounts = activeItems.reduce(
     (acc: Record<string, number>, transferItem) => {
-      const category =
-        transferItem.items?.reporting_category || 'Uncategorised'
-
+      const category = transferItem.items?.reporting_category || 'Uncategorised'
       acc[category] = (acc[category] || 0) + 1
-
       return acc
     },
     {}
   )
 
-  const sortedCategoryCounts = Object.entries(categoryCounts).sort(
-    ([a], [b]) => a.localeCompare(b)
+  const skuCounts = activeItems.reduce((acc: Record<string, number>, transferItem) => {
+    acc[transferItem.sku] = (acc[transferItem.sku] || 0) + 1
+    return acc
+  }, {})
+
+  const sortedCategoryCounts = Object.entries(categoryCounts).sort(([a], [b]) =>
+    a.localeCompare(b)
   )
+
+  const sortedSkuCounts = Object.entries(skuCounts).sort(([a], [b]) => a.localeCompare(b))
 
   return (
     <StaffPermissionGate permission="scanner">
@@ -107,9 +121,7 @@ export default function TransferManifestPage() {
         <div className="mx-auto max-w-4xl">
           <div className="mb-8 flex items-start justify-between border-b-4 border-black pb-6">
             <div>
-              <h1 className="text-5xl font-black tracking-tight">
-                TRANSFER MANIFEST
-              </h1>
+              <h1 className="text-5xl font-black tracking-tight">TRANSFER MANIFEST</h1>
 
               <p className="mt-4 text-3xl font-black">
                 #{formatTransferNumber(transfer.transfer_number)}
@@ -124,25 +136,35 @@ export default function TransferManifestPage() {
                   <strong>TO:</strong> {transfer.to_location}
                 </p>
 
-                <p className="text-3xl font-black">
-                  TOTAL ITEMS: {totalCount}
+                <p>
+                  <strong>STATUS:</strong> {transfer.status}
                 </p>
+
+                {transfer.reason && (
+                  <p>
+                    <strong>REASON:</strong> {transfer.reason}
+                  </p>
+                )}
+
+                <p className="text-3xl font-black">TOTAL ITEMS: {totalCount}</p>
+
+                {cancelledCount > 0 && (
+                  <p className="text-lg font-black text-red-700">
+                    CANCELLED/REMOVED ITEMS EXCLUDED: {cancelledCount}
+                  </p>
+                )}
               </div>
             </div>
 
             <div className="rounded-xl border-4 border-black bg-white p-4">
               <QRCode value={transferUrl} size={180} />
 
-              <p className="mt-3 text-center text-sm font-bold">
-                Scan to open transfer
-              </p>
+              <p className="mt-3 text-center text-sm font-bold">Scan to open transfer</p>
             </div>
           </div>
 
           <section>
-            <h2 className="mb-4 text-3xl font-black">
-              Category Summary
-            </h2>
+            <h2 className="mb-4 text-3xl font-black">Category Summary</h2>
 
             <div className="space-y-3">
               {sortedCategoryCounts.map(([category, count]) => (
@@ -150,13 +172,24 @@ export default function TransferManifestPage() {
                   key={category}
                   className="flex items-center justify-between border-2 border-black p-4"
                 >
-                  <p className="text-2xl font-black">
-                    {category}
-                  </p>
+                  <p className="text-2xl font-black">{category}</p>
+                  <p className="text-3xl font-black">{count}x</p>
+                </div>
+              ))}
+            </div>
+          </section>
 
-                  <p className="text-3xl font-black">
-                    {count}x
-                  </p>
+          <section className="mt-8">
+            <h2 className="mb-4 text-3xl font-black">SKU Pick List</h2>
+
+            <div className="space-y-2">
+              {sortedSkuCounts.map(([sku, count]) => (
+                <div
+                  key={sku}
+                  className="flex items-center justify-between border-2 border-black p-3"
+                >
+                  <p className="text-xl font-black">{sku}</p>
+                  <p className="text-2xl font-black">{count}x</p>
                 </div>
               ))}
             </div>
