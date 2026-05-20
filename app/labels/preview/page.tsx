@@ -6,9 +6,12 @@ import Barcode from 'react-barcode'
 type PrintMode = 'zebra' | 'html'
 
 type LabelItem = {
-  sku: string
+  sku?: string
   sizeText?: string | null
   price?: number | null
+  labelType?: 'sku' | 'bin-qr'
+  code?: string
+  qrValue?: string
 }
 
 type ZebraTemplate = {
@@ -89,8 +92,45 @@ function cleanZplText(value: string) {
   return value.replace(/[\^~\\]/g, '').trim()
 }
 
+function getItemCode(item: LabelItem) {
+  return item.code || item.sku || ''
+}
+
+function getBinQrValue(item: LabelItem) {
+  return item.qrValue || getItemCode(item)
+}
+
+function getQrImageUrl(value: string) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(value)}`
+}
+
+function makeBinQrZplLabel(item: LabelItem) {
+  const code = cleanZplText(getItemCode(item))
+  const qrValue = cleanZplText(getBinQrValue(item))
+
+  return `
+^XA
+^CI28
+^PW400
+^LL240
+^LH0,0
+
+^FO22,26^BQN,2,5^FDLA,${qrValue}^FS
+
+^FO174,72^FB210,2,0,C,0^A0N,42,42^FD${code}^FS
+
+^FO174,152^FB210,1,0,C,0^A0N,20,20^FDALLOCATE BIN^FS
+
+^XZ
+`.trim()
+}
+
 function makeZplLabel(item: LabelItem, template: ZebraTemplate) {
-  const sku = cleanZplText(item.sku)
+  if (item.labelType === 'bin-qr') {
+    return makeBinQrZplLabel(item)
+  }
+
+  const sku = cleanZplText(getItemCode(item))
   const size = cleanZplText(item.sizeText || '')
   const price =
     typeof item.price === 'number'
@@ -289,6 +329,7 @@ export default function LabelPreviewPage() {
   const labelCount = useMemo(() => items.length, [items])
   const isZebra = printMode === 'zebra'
   const previewItem = items[0]
+  const isBinQrMode = previewItem?.labelType === 'bin-qr'
 
   return (
     <main className="min-h-screen bg-zinc-100 text-black print:bg-white">
@@ -299,7 +340,7 @@ export default function LabelPreviewPage() {
 
             <p className="text-sm text-zinc-600">
               {labelCount} label(s) · 50x30mm ·{' '}
-              {isZebra ? 'Zebra' : 'HTML'}
+              {isBinQrMode ? 'Bin QR' : 'SKU'} · {isZebra ? 'Zebra' : 'HTML'}
             </p>
 
             {message && (
@@ -357,7 +398,19 @@ export default function LabelPreviewPage() {
           <div className="rounded-xl bg-white p-5 shadow">
             <h2 className="mb-4 text-lg font-bold">Zebra Preview</h2>
 
-            {previewItem && (
+            {previewItem && isBinQrMode ? (
+              <div className="bin-qr-preview">
+                <img
+                  src={getQrImageUrl(getBinQrValue(previewItem))}
+                  alt=""
+                  className="bin-qr-preview-image"
+                />
+
+                <div className="bin-qr-preview-code">
+                  {getItemCode(previewItem)}
+                </div>
+              </div>
+            ) : previewItem ? (
               <div className="zebra-preview">
                 <div
                   className="z-brand"
@@ -378,7 +431,7 @@ export default function LabelPreviewPage() {
                   }}
                 >
                   <Barcode
-                    value={previewItem.sku}
+                    value={getItemCode(previewItem)}
                     format="CODE128"
                     width={1.2}
                     height={template.barcodeHeight / 2}
@@ -394,7 +447,7 @@ export default function LabelPreviewPage() {
                     fontSize: template.skuSize / 2,
                   }}
                 >
-                  {previewItem.sku}
+                  {getItemCode(previewItem)}
                 </div>
 
                 <div
@@ -429,7 +482,7 @@ export default function LabelPreviewPage() {
                     : ''}
                 </div>
               </div>
-            )}
+            ) : null}
 
             <p className="mt-3 text-sm text-zinc-500">
               Preview is approximate. Zebra print uses exact ZPL dot positions.
@@ -521,32 +574,49 @@ export default function LabelPreviewPage() {
       ) : (
         <div className="label-sheet mx-auto p-4">
           {items.map((item, index) => (
-            <section key={`${item.sku}-${index}`} className="label">
-              <div className="brand">DOHPE</div>
+            <section
+              key={`${getItemCode(item)}-${index}`}
+              className={item.labelType === 'bin-qr' ? 'label bin-label' : 'label'}
+            >
+              {item.labelType === 'bin-qr' ? (
+                <>
+                  <img
+                    src={getQrImageUrl(getBinQrValue(item))}
+                    alt=""
+                    className="bin-qr-image"
+                  />
 
-              <div className="barcode-wrap">
-                <Barcode
-                  value={item.sku}
-                  format="CODE128"
-                  width={1.12}
-                  height={44}
-                  displayValue={false}
-                  margin={0}
-                />
-              </div>
+                  <div className="bin-code">{getItemCode(item)}</div>
+                </>
+              ) : (
+                <>
+                  <div className="brand">DOHPE</div>
 
-              <div className="sku">{item.sku}</div>
-              <div className="sku-underline" />
+                  <div className="barcode-wrap">
+                    <Barcode
+                      value={getItemCode(item)}
+                      format="CODE128"
+                      width={1.12}
+                      height={44}
+                      displayValue={false}
+                      margin={0}
+                    />
+                  </div>
 
-              <div className="bottom-row">
-                <div className="size">{item.sizeText || ''}</div>
+                  <div className="sku">{getItemCode(item)}</div>
+                  <div className="sku-underline" />
 
-                <div className="price">
-                  {typeof item.price === 'number'
-                    ? `£${item.price.toFixed(2)}`
-                    : ''}
-                </div>
-              </div>
+                  <div className="bottom-row">
+                    <div className="size">{item.sizeText || ''}</div>
+
+                    <div className="price">
+                      {typeof item.price === 'number'
+                        ? `£${item.price.toFixed(2)}`
+                        : ''}
+                    </div>
+                  </div>
+                </>
+              )}
             </section>
           ))}
         </div>
@@ -556,6 +626,35 @@ export default function LabelPreviewPage() {
         @page {
           size: 50mm 30mm;
           margin: 0;
+        }
+
+        .bin-qr-preview {
+          width: 200px;
+          height: 120px;
+          display: grid;
+          grid-template-columns: 82px 1fr;
+          align-items: center;
+          gap: 10px;
+          background: white;
+          border: 1px solid #ddd;
+          overflow: hidden;
+          padding: 10px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .bin-qr-preview-image {
+          width: 76px;
+          height: 76px;
+          object-fit: contain;
+        }
+
+        .bin-qr-preview-code {
+          color: black;
+          font-size: 22px;
+          font-weight: 900;
+          line-height: 1;
+          text-align: center;
+          word-break: break-word;
         }
 
         .zebra-preview {
@@ -631,6 +730,30 @@ export default function LabelPreviewPage() {
           flex-direction: column;
           align-items: center;
           justify-content: flex-start;
+        }
+
+        .bin-label {
+          display: grid;
+          grid-template-columns: 21mm 1fr;
+          align-items: center;
+          gap: 1mm;
+          padding: 2mm;
+        }
+
+        .bin-qr-image {
+          width: 19mm;
+          height: 19mm;
+          object-fit: contain;
+        }
+
+        .bin-code {
+          color: black;
+          font-size: 22px;
+          font-weight: 900;
+          line-height: 1;
+          text-align: center;
+          word-break: break-word;
+          letter-spacing: -0.5px;
         }
 
         .brand {

@@ -203,95 +203,14 @@ export default function CreateBinPage() {
   }
 
   function printBins(binsToPrint: string[]) {
-    const html = `
-      <html>
-        <head>
-          <title>Print Bin QR Labels</title>
-          <style>
-            * {
-              box-sizing: border-box;
-            }
+    const payload = binsToPrint.map((bin) => ({
+      labelType: 'bin-qr',
+      code: bin,
+      qrValue: getAllocateUrl(bin),
+    }))
 
-            body {
-              margin: 0;
-              padding: 8px;
-              font-family: Arial, sans-serif;
-              color: #000;
-              background: #fff;
-              display: flex;
-              flex-wrap: wrap;
-              gap: 4px;
-            }
-
-            .label {
-              width: 50mm;
-              height: 30mm;
-              border: 1px solid #000;
-              display: grid;
-              grid-template-columns: 21mm 1fr;
-              align-items: center;
-              page-break-inside: avoid;
-              overflow: hidden;
-              padding: 2mm;
-            }
-
-            .qr {
-              width: 19mm;
-              height: 19mm;
-              object-fit: contain;
-            }
-
-            .code {
-              font-size: 24px;
-              font-weight: 900;
-              line-height: 1;
-              text-align: center;
-              word-break: break-word;
-              letter-spacing: -0.5px;
-            }
-
-            @media print {
-              body {
-                padding: 0;
-                gap: 0;
-              }
-
-              .label {
-                margin: 0;
-              }
-            }
-          </style>
-        </head>
-
-        <body>
-          ${binsToPrint
-            .map(
-              (bin) => `
-                <div class="label">
-                  <img class="qr" src="${getQrUrl(bin)}" />
-                  <div class="code">${bin}</div>
-                </div>
-              `
-            )
-            .join('')}
-        </body>
-      </html>
-    `
-
-    const win = window.open('', '_blank')
-
-    if (!win) {
-      setMessage('Print window blocked by browser.')
-      return
-    }
-
-    win.document.write(html)
-    win.document.close()
-
-    setTimeout(() => {
-      win.focus()
-      win.print()
-    }, 1000)
+    window.localStorage.setItem('label_preview_items', JSON.stringify(payload))
+    window.open('/labels/preview', '_blank')
   }
 
   return (
