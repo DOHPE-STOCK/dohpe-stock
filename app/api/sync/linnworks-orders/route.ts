@@ -281,6 +281,49 @@ async function sendTelegramMessage(message: string) {
   }
 }
 
+async function sendTelegramPhotoMessage(params: { imageUrl: string; caption: string }) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN
+  const chatId = process.env.TELEGRAM_CHAT_ID
+
+  if (!botToken || !chatId || !params.imageUrl) {
+    return { skipped: true, reason: 'Telegram photo details missing' }
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      photo: params.imageUrl,
+      caption: params.caption,
+    }),
+  })
+
+  const data = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(`Telegram photo send failed: ${JSON.stringify(data)}`)
+  }
+
+  return {
+    ok: true,
+    chat_id: chatId,
+    message_id: data?.result?.message_id || null,
+  }
+}
+
+function getFirstItemImageUrl(item: any) {
+  const images = Array.isArray(item?.item_images) ? item.item_images : []
+
+  if (images.length === 0) return ''
+
+  const sorted = [...images].sort(
+    (a: any, b: any) => Number(a?.image_order || 0) - Number(b?.image_order || 0)
+  )
+
+  return normaliseText(sorted[0]?.processed_url || sorted[0]?.original_url)
+}
+
 async function getAllOpenOrderIds(server: string, token: string) {
   const data = await linnworksPost(server, token, '/api/Orders/GetAllOpenOrders', {
     filters: {},
@@ -664,6 +707,7 @@ async function sendShopTelegramMessages(params: {
   sku: string
   brand: string
   category: string
+  imageUrl: string
   deductions: Deduction[]
   source: string
   subSource: string
@@ -692,7 +736,9 @@ Source: ${params.source || 'Unknown'}
 Sub source: ${params.subSource || 'Unknown'}
 Order ID: ${params.orderId}`
 
-      const telegramResult = await sendTelegramMessage(message)
+      const telegramResult = params.imageUrl
+        ? await sendTelegramPhotoMessage({ imageUrl: params.imageUrl, caption: message })
+        : await sendTelegramMessage(message)
       resultByShop.set(shop, telegramResult)
     } catch (error: any) {
       resultByShop.set(shop, {
@@ -823,7 +869,20 @@ async function processLinnworksOpenOrders(request: Request) {
 
         const itemResult = await supabase
           .from('items')
-          .select('id, sku, brand, reporting_category, stock_level, current_location, current_bin')
+          .select(`
+            id,
+            sku,
+            brand,
+            reporting_category,
+            stock_level,
+            current_location,
+            current_bin,
+            item_images (
+              processed_url,
+              original_url,
+              image_order
+            )
+          `)
           .eq('sku', sku)
           .maybeSingle()
 
@@ -854,6 +913,7 @@ async function processLinnworksOpenOrders(request: Request) {
           sku,
           brand: normaliseText(localItem.brand),
           category: normaliseText(localItem.reporting_category),
+          imageUrl: getFirstItemImageUrl(localItem),
           deductions: operationalDeduction.deductions,
           source,
           subSource,

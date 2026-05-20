@@ -19,6 +19,16 @@ function text(value: any) {
   return String(value).trim()
 }
 
+function itemDescription(item: any, sku: string) {
+  const parts = [
+    sku,
+    text(item?.brand),
+    text(item?.reporting_category),
+  ].filter(Boolean)
+
+  return parts.join(' ')
+}
+
 async function sendTelegramReply(params: {
   chatId: string
   messageId: string | number
@@ -100,6 +110,10 @@ export async function POST(request: Request) {
         source_order_id,
         telegram_chat_id,
         telegram_message_id,
+        items (
+          brand,
+          reporting_category
+        ),
         stock_transfers (
           id,
           transfer_number,
@@ -165,7 +179,7 @@ export async function POST(request: Request) {
       telegramReply = await sendTelegramReply({
         chatId: match.telegram_chat_id,
         messageId: match.telegram_message_id,
-        text: `✅ ${sku} picked by ${pickedBy || 'staff'} from ${fromLocation} / ${sourceBin}`,
+        text: `✅ ${itemDescription(match.items, sku)} picked by ${pickedBy || 'staff'} from ${fromLocation} / ${sourceBin}`,
       })
     }
 

@@ -95,6 +95,16 @@ function normaliseText(value: any) {
   return String(value).trim()
 }
 
+function itemDescription(row: any) {
+  const parts = [
+    normaliseText(row?.sku),
+    normaliseText(row?.items?.brand),
+    normaliseText(row?.items?.reporting_category),
+  ].filter(Boolean)
+
+  return parts.join(' ')
+}
+
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }
@@ -508,6 +518,10 @@ async function releaseCancelledShopTransferItems(params: {
       source_order_id,
       telegram_chat_id,
       telegram_message_id,
+      items (
+        brand,
+        reporting_category
+      ),
       stock_transfers (
         id,
         transfer_number,
@@ -562,6 +576,7 @@ async function releaseCancelledShopTransferItems(params: {
       const message = `🚫 Previous shop pick cancelled
 
 SKU: ${row.sku}
+${itemDescription(row)}
 Transfer: #${String(transfer.transfer_number).padStart(7, '0')}
 Action: remove item from transfer batch and allocate back to ${fromLocation} / ${sourceBin}`
 
