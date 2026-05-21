@@ -27,6 +27,7 @@ type Transfer = {
 }
 
 type TimePeriod = '7days' | 'month' | 'year'
+type ReceiveBinChoice = 'Default' | 'FLOOR' | 'STOCK' | string
 
 function formatTransferNumber(value: number) {
   return String(value).padStart(7, '0')
@@ -53,8 +54,27 @@ function isReusableStockItem(item: StockItemRow | undefined) {
 
 function linnworksLocation(location: string) {
   const value = text(location).toUpperCase()
-  if (!value || value === 'WAREHOUSE') return 'Default'
+  if (!value || value === 'DEFAULT') return 'WAREHOUSE'
   return value
+}
+
+function defaultReceiveBin(location: string) {
+  const value = text(location).toUpperCase()
+  if (value.startsWith('SHOP-')) return 'STOCK'
+  return DEFAULT_BIN
+}
+
+function askReceiveBin(location: string) {
+  const suggested = defaultReceiveBin(location)
+  const answer = window.prompt(
+    `Receive into which bin at ${location}?\n\nFor shop transfers use FLOOR or STOCK.\nSuggested: ${suggested}`,
+    suggested
+  )
+
+  if (answer === null) return null
+
+  const clean = text(answer).toUpperCase()
+  return clean || suggested
 }
 
 function groupBySku(items: TransferItem[]) {
@@ -160,6 +180,7 @@ export default function TransfersPage() {
     receivableItems: TransferItem[]
     itemMap: Map<string, StockItemRow>
     movedAt: string
+    destinationBin: string
   }) {
     const reusableRows = params.receivableItems.filter((row) =>
       isReusableStockItem(params.itemMap.get(text(row.sku).toUpperCase()))
@@ -184,7 +205,7 @@ export default function TransfersPage() {
       await adjustLocalStockLocation({
         item,
         location: params.transfer.to_location,
-        bin: DEFAULT_BIN,
+        bin: params.destinationBin,
         delta: quantity,
       })
 
@@ -217,7 +238,7 @@ export default function TransfersPage() {
             delta: quantity,
             quantity,
             location: params.transfer.to_location,
-            bin: DEFAULT_BIN,
+            bin: params.destinationBin,
             reason: 'transfer_reusable_to_destination',
             transfer_id: params.transfer.id,
             transfer_number: params.transfer.transfer_number,
@@ -340,8 +361,12 @@ export default function TransfersPage() {
 
     const transferNo = formatTransferNumber(transfer.transfer_number)
 
+    const destinationBin = askReceiveBin(transfer.to_location)
+
+    if (!destinationBin) return
+
     const confirmed = window.confirm(
-      `Accept transfer #${transferNo} by ${staff.name}?\n\nThis will mark ${receivableItems.length} unit(s) as received into ${transfer.to_location}.`
+      `Accept transfer #${transferNo} by ${staff.name}?\n\nThis will mark ${receivableItems.length} unit(s) as received into ${transfer.to_location} / ${destinationBin}.`
     )
 
     if (!confirmed) return
@@ -371,6 +396,7 @@ export default function TransfersPage() {
         receivableItems,
         itemMap,
         movedAt: receivedAt,
+        destinationBin,
       })
 
       const { error: transferItemsError } = await supabase
@@ -389,7 +415,7 @@ export default function TransfersPage() {
           .update({
             location_status: 'received',
             current_location: transfer.to_location,
-            current_bin: DEFAULT_BIN,
+            current_bin: destinationBin,
             last_saved_by: staff.id,
             linnworks_location_sync_status: 'pending',
             updated_at: receivedAt,
@@ -407,7 +433,7 @@ export default function TransfersPage() {
             payload: {
               sku: item.sku,
               location: transfer.to_location,
-              bin: DEFAULT_BIN,
+              bin: destinationBin,
               movement_type: 'transfer_receive',
               transfer_id: transfer.id,
               transfer_number: transfer.transfer_number,
@@ -437,7 +463,7 @@ export default function TransfersPage() {
 
       if (transferError) throw new Error(transferError.message)
 
-      setMessage(`Transfer #${transferNo} received by ${staff.name}.`)
+      setMessage(`Transfer #${transferNo} received into ${transfer.to_location} / ${destinationBin} by ${staff.name}.`)
       await fetchTransfers()
     } catch (error: any) {
       setMessage(error.message || 'Transfer receive failed.')

@@ -12,6 +12,7 @@ type SkuType = 'single_use' | 'reusable' | string
 type WarehouseBin = {
   id: string
   bin_code: string
+  location_name: string | null
   label: string | null
   is_active: boolean
 }
@@ -46,8 +47,32 @@ function isReusable(item: Pick<PendingItem, 'sku_type'>) {
 
 function stockLocationName(appLocation: string) {
   const value = text(appLocation).toUpperCase()
-  if (!value || value === WAREHOUSE_LOCATION) return WAREHOUSE_LINNWORKS_LOCATION
+  if (!value || value === 'DEFAULT') return WAREHOUSE_LOCATION
+  if (!value) return WAREHOUSE_LOCATION
   return value
+}
+
+function getActiveLocation(bin: WarehouseBin | null) {
+  return stockLocationName(bin?.location_name || WAREHOUSE_LOCATION)
+}
+
+function getActiveBinCode(bin: WarehouseBin | null) {
+  return text(bin?.bin_code) || DEFAULT_BIN
+}
+
+function parseBinScan(value: string) {
+  const raw = text(value)
+  const queryMatch = raw.match(/[?&]bin=([^&#]+)/i)
+  const locationMatch = raw.match(/[?&]location=([^&#]+)/i)
+
+  if (queryMatch?.[1]) {
+    return {
+      location: locationMatch?.[1] ? decodeURIComponent(locationMatch[1]).trim().toUpperCase() : '',
+      bin: decodeURIComponent(queryMatch[1]).trim().toUpperCase(),
+    }
+  }
+
+  return { location: '', bin: cleanScanValue(raw) }
 }
 
 export default function AllocatePage() {
@@ -64,9 +89,10 @@ export default function AllocatePage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const binFromUrl = params.get('bin')
+    const locationFromUrl = params.get('location')
 
     if (binFromUrl) {
-      scanBin(cleanScanValue(binFromUrl))
+      scanBin(cleanScanValue(binFromUrl), locationFromUrl ? cleanScanValue(locationFromUrl) : '')
     }
 
     focusInput()
@@ -94,7 +120,8 @@ export default function AllocatePage() {
     setMessage('')
 
     if (mode === 'bin') {
-      await scanBin(value)
+      const parsedBin = parseBinScan(value)
+      await scanBin(parsedBin.bin, parsedBin.location)
       focusInput()
       return
     }
@@ -103,16 +130,24 @@ export default function AllocatePage() {
     focusInput()
   }
 
-  async function scanBin(binCode: string) {
+  async function scanBin(binCode: string, locationName = '') {
     if (!binCode) return
+
+    const cleanBin = cleanScanValue(binCode)
+    const cleanLocation = locationName ? stockLocationName(locationName) : ''
 
     setBusy(true)
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('warehouse_bins')
-      .select('id, bin_code, label, is_active')
-      .eq('bin_code', binCode)
-      .maybeSingle()
+      .select('id, bin_code, location_name, label, is_active')
+      .eq('bin_code', cleanBin)
+
+    if (cleanLocation) {
+      query = query.eq('location_name', cleanLocation)
+    }
+
+    const { data, error } = await query.limit(2)
 
     setBusy(false)
 
@@ -121,20 +156,27 @@ export default function AllocatePage() {
       return
     }
 
-    if (!data) {
-      setMessage(`Bin not found: ${binCode}`)
+    if (!data || data.length === 0) {
+      setMessage(cleanLocation ? `Bin not found: ${cleanLocation} / ${cleanBin}` : `Bin not found: ${cleanBin}`)
       return
     }
 
-    if (!data.is_active) {
-      setMessage(`Bin inactive: ${binCode}`)
+    if (!cleanLocation && data.length > 1) {
+      setMessage(`Multiple locations use bin ${cleanBin}. Scan the QR label with location, or open Allocate from the bin label.`)
       return
     }
 
-    setActiveBin(data as WarehouseBin)
+    const selectedBin = data[0] as WarehouseBin
+
+    if (!selectedBin.is_active) {
+      setMessage(`Bin inactive: ${getActiveLocation(selectedBin)} / ${selectedBin.bin_code}`)
+      return
+    }
+
+    setActiveBin(selectedBin)
     setMode('items')
     setPendingItems([])
-    setMessage(`Bin selected: ${data.bin_code}. Scan item SKUs now.`)
+    setMessage(`Bin selected: ${getActiveLocation(selectedBin)} / ${selectedBin.bin_code}. Scan item SKUs now.`)
     focusInput()
   }
 
@@ -306,7 +348,7 @@ export default function AllocatePage() {
     const totalQty = pendingItems.reduce((sum, item) => sum + item.quantity, 0)
 
     const confirmed = window.confirm(
-      `Allocate ${totalQty} unit(s) to ${activeBin.bin_code} by ${staff.name}?\n\nReusable SKUs move quantity from WAREHOUSE / Default to WAREHOUSE / ${activeBin.bin_code}. Single-use SKUs move the item row.`
+      `Allocate ${totalQty} unit(s) to ${getActiveLocation(activeBin)} / ${getActiveBinCode(activeBin)} by ${staff.name}?\n\nReusable SKUs move from their current/default stock row into the selected location/bin. Single-use SKUs move the item row.`
     )
 
     if (!confirmed) return
@@ -325,8 +367,8 @@ export default function AllocatePage() {
         const { error: updateError } = await supabase
           .from('items')
           .update({
-            current_location: WAREHOUSE_LOCATION,
-            current_bin: activeBin.bin_code,
+            current_location: getActiveLocation(activeBin),
+            current_bin: getActiveBinCode(activeBin),
             location_status: 'stored',
             allocated_at: now,
             allocated_by: staff.id,
@@ -345,8 +387,8 @@ export default function AllocatePage() {
               sku: item.sku,
               from_location: item.current_location,
               from_bin: item.current_bin,
-              to_location: WAREHOUSE_LOCATION,
-              to_bin: activeBin.bin_code,
+              to_location: getActiveLocation(activeBin),
+              to_bin: getActiveBinCode(activeBin),
               movement_type: 'allocate',
               moved_by: staff.id,
             }))
@@ -363,8 +405,8 @@ export default function AllocatePage() {
               action: 'update_location',
               payload: {
                 sku: item.sku,
-                location: WAREHOUSE_LOCATION,
-                bin: activeBin.bin_code,
+                location: getActiveLocation(activeBin),
+                bin: getActiveBinCode(activeBin),
                 movement_type: 'allocate',
                 allocated_at: now,
                 allocated_by: staff.name,
@@ -379,15 +421,15 @@ export default function AllocatePage() {
       for (const item of reusableItems) {
         await adjustLocalStockLocation({
           item,
-          location: WAREHOUSE_LOCATION,
-          bin: DEFAULT_BIN,
+          location: stockLocationName(item.current_location || WAREHOUSE_LOCATION),
+          bin: text(item.current_bin) || DEFAULT_BIN,
           delta: -item.quantity,
         })
 
         await adjustLocalStockLocation({
           item,
-          location: WAREHOUSE_LOCATION,
-          bin: activeBin.bin_code,
+          location: getActiveLocation(activeBin),
+          bin: getActiveBinCode(activeBin),
           delta: item.quantity,
         })
       }
@@ -402,10 +444,10 @@ export default function AllocatePage() {
               sku: item.sku,
               delta: -item.quantity,
               quantity: item.quantity,
-              location: WAREHOUSE_LINNWORKS_LOCATION,
-              bin: DEFAULT_BIN,
+              location: stockLocationName(item.current_location || WAREHOUSE_LOCATION),
+              bin: text(item.current_bin) || DEFAULT_BIN,
               strict_location: true,
-              reason: 'allocate_reusable_from_warehouse_default',
+              reason: 'allocate_reusable_from_source_bin',
               allocated_at: now,
               allocated_by: staff.name,
             },
@@ -419,8 +461,8 @@ export default function AllocatePage() {
               sku: item.sku,
               delta: item.quantity,
               quantity: item.quantity,
-              location: WAREHOUSE_LINNWORKS_LOCATION,
-              bin: activeBin.bin_code,
+              location: getActiveLocation(activeBin),
+              bin: getActiveBinCode(activeBin),
               reason: 'allocate_reusable_to_bin',
               allocated_at: now,
               allocated_by: staff.name,
@@ -436,7 +478,7 @@ export default function AllocatePage() {
         if (reusableQueueError) throw new Error(reusableQueueError.message)
       }
 
-      setMessage(`Allocated ${totalQty} unit(s) to ${activeBin.bin_code} by ${staff.name}`)
+      setMessage(`Allocated ${totalQty} unit(s) to ${getActiveLocation(activeBin)} / ${getActiveBinCode(activeBin)} by ${staff.name}`)
       setPendingItems([])
     } catch (error: any) {
       setMessage(error.message || 'Allocation failed.')
