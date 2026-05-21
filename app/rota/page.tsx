@@ -60,6 +60,8 @@ type WeeklyReport = {
   createdAt: string
 }
 
+type TelegramSentWeeks = Record<string, boolean>
+
 type RotaData = Record<CompanyKey, Record<string, Record<string, Shift[]>>>
 type DefaultRota = Record<CompanyKey, Record<string, Shift[]>>
 type EditedWeeks = Record<CompanyKey, Record<string, boolean>>
@@ -201,21 +203,54 @@ function eventTimeLabel(value: string) {
   })
 }
 
+function parseLocalDate(value: string) {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
 function groupGoogleEvents(events: GoogleCalendarApiEvent[]): CalendarData {
   const grouped: CalendarData = {}
 
   for (const event of events) {
-    const dayId = eventDateKey(event.start)
-    if (!dayId) continue
+    const startKey = eventDateKey(event.start)
+    const endKey = eventDateKey(event.end)
 
-    if (!grouped[dayId]) grouped[dayId] = []
+    if (!startKey) continue
 
-    grouped[dayId].push({
-      id: event.id,
-      title: event.title || event.summary || 'Busy',
-      start: eventTimeLabel(event.start),
-      end: eventTimeLabel(event.end),
-    })
+    const isAllDay = /^\d{4}-\d{2}-\d{2}$/.test(event.start)
+
+    if (isAllDay && endKey && endKey !== startKey) {
+      let current = parseLocalDate(startKey)
+      const exclusiveEnd = parseLocalDate(endKey)
+
+      while (current < exclusiveEnd) {
+        const key = dateKey(current)
+
+        if (!grouped[key]) grouped[key] = []
+
+        grouped[key].push({
+          id: event.id,
+          title: event.title || event.summary || 'Busy',
+          start: 'All day',
+          end: 'All day',
+        })
+
+        current = addDays(current, 1)
+      }
+    } else {
+      if (!grouped[startKey]) grouped[startKey] = []
+
+      grouped[startKey].push({
+        id: event.id,
+        title: event.title || event.summary || 'Busy',
+        start: eventTimeLabel(event.start),
+        end: eventTimeLabel(event.end),
+      })
+    }
+  }
+
+  for (const key of Object.keys(grouped)) {
+    grouped[key].sort((a, b) => String(a.start).localeCompare(String(b.start)))
   }
 
   return grouped
@@ -440,6 +475,7 @@ function applyRotaPayload(
     setEditedWeeks: (value: EditedWeeks) => void
     setClosedDays: (value: ClosedDays) => void
     setWeeklyReports: (value: WeeklyReport[]) => void
+    setTelegramSentWeeks: (value: TelegramSentWeeks) => void
   }
 ) {
   if (!saved) return
@@ -452,6 +488,7 @@ function applyRotaPayload(
   if (saved.editedWeeks) setters.setEditedWeeks(saved.editedWeeks)
   if (saved.closedDays) setters.setClosedDays(saved.closedDays)
   if (Array.isArray(saved.weeklyReports)) setters.setWeeklyReports(saved.weeklyReports)
+  if (saved.telegramSentWeeks) setters.setTelegramSentWeeks(saved.telegramSentWeeks)
 }
 
 function GoogleCalendarLogo() {
@@ -497,6 +534,7 @@ export default function RotaPage() {
   const [defaultRota, setDefaultRota] = useState<DefaultRota>(emptyDefault())
   const [editedWeeks, setEditedWeeks] = useState<EditedWeeks>({ dohpe: {}, dlretail: {} })
   const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([])
+  const [telegramSentWeeks, setTelegramSentWeeks] = useState<TelegramSentWeeks>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
   const [googleCalendarSynced, setGoogleCalendarSynced] = useState(false)
@@ -569,6 +607,7 @@ export default function RotaPage() {
             setEditedWeeks,
             setClosedDays,
             setWeeklyReports,
+            setTelegramSentWeeks,
           })
         }
 
@@ -615,6 +654,7 @@ export default function RotaPage() {
             setEditedWeeks,
             setClosedDays,
             setWeeklyReports,
+            setTelegramSentWeeks,
           })
         }
       } catch (error) {
@@ -706,6 +746,7 @@ export default function RotaPage() {
       editedWeeks,
       closedDays,
       weeklyReports,
+      telegramSentWeeks,
     }
 
     localStorage.setItem(`${LOCAL_ROTA_KEY}:${rotaUserKey}`, JSON.stringify(payload))
@@ -733,7 +774,7 @@ export default function RotaPage() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
     }
-  }, [cloudLoaded, rotaUserKey, companies, staff, openingTimes, rota, defaultRota, editedWeeks, closedDays, weeklyReports])
+  }, [cloudLoaded, rotaUserKey, companies, staff, openingTimes, rota, defaultRota, editedWeeks, closedDays, weeklyReports, telegramSentWeeks])
 
   useEffect(() => {
     if (!calendarLoaded) return
@@ -1236,6 +1277,12 @@ export default function RotaPage() {
   async function sendTelegram(company: CompanyKey, week: Date) {
     const companyName = getCompanyName(company)
     const weekLabel = formatWeekLabel(week)
+    const telegramKey = `${company}-${getWeekId(week)}`
+
+    if (telegramSentWeeks[telegramKey]) {
+      showStatus(`${companyName} ${weekLabel} already sent ok.`)
+      return
+    }
 
     const days = dayNames.map((dayName, dayIndex) => {
       const actualDate = addDays(week, dayIndex)
@@ -1280,6 +1327,10 @@ export default function RotaPage() {
         throw new Error(data?.message || 'Telegram send failed.')
       }
 
+      setTelegramSentWeeks((current) => ({
+        ...current,
+        [telegramKey]: true,
+      }))
       showStatus(`${companyName} rota sent to Telegram.`)
     } catch (error: any) {
       console.error('ROTA_TELEGRAM_SEND_ERROR', error)
@@ -1760,11 +1811,15 @@ export default function RotaPage() {
     const total = companyWeekTotal(company.key, week)
     const staffTotals = totalsForCompanyWeek(company.key, week)
     const current = isCurrentWeek(week)
+    const telegramKey = `${company.key}-${getWeekId(week)}`
+    const telegramAlreadySent = Boolean(telegramSentWeeks[telegramKey])
 
     return (
       <section
-        className={`rounded-3xl border bg-white p-4 shadow-xl ${
-          current ? 'border-emerald-600 ring-4 ring-emerald-300' : 'border-neutral-200'
+        className={`rounded-3xl border p-4 shadow-xl ${
+          current
+            ? 'border-emerald-600 bg-emerald-50 ring-4 ring-emerald-300'
+            : 'border-neutral-200 bg-white'
         }`}
       >
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1803,9 +1858,13 @@ export default function RotaPage() {
             <button
               type="button"
               onClick={() => sendTelegram(company.key, week)}
-              className="rounded-xl bg-sky-500 px-3 py-2 text-xs font-black text-white"
+              className={
+                telegramAlreadySent
+                  ? 'rounded-xl bg-emerald-100 px-3 py-2 text-xs font-black text-emerald-700'
+                  : 'rounded-xl bg-sky-500 px-3 py-2 text-xs font-black text-white'
+              }
             >
-              Telegram
+              {telegramAlreadySent ? 'Telegram sent OK' : 'Telegram'}
             </button>
           </div>
         </div>
