@@ -340,12 +340,11 @@ export default function CreateBinPage() {
       throw new Error('Choose or enter a location first.')
     }
 
-    const fullCodes = bins.map((bin) => `${locationName}/${bin}`)
-
     const { data, error } = await supabase
       .from('warehouse_bins')
-      .select('bin_code')
-      .in('bin_code', fullCodes)
+      .select('bin_code, location_name')
+      .eq('location_name', locationName)
+      .in('bin_code', bins)
 
     if (error) {
       throw new Error(error.message)
@@ -353,24 +352,20 @@ export default function CreateBinPage() {
 
     const existing = (data || []).map((row) => row.bin_code)
     const existingSet = new Set(existing)
-    const missingFullCodes = fullCodes.filter((code) => !existingSet.has(code))
+    const missingBins = bins.filter((bin) => !existingSet.has(bin))
 
-    if (missingFullCodes.length > 0) {
-      const rows = missingFullCodes.map((fullCode) => {
-        const bin = fullCode.split('/').slice(1).join('/')
-
-        return {
-          bin_code: fullCode,
-          label: bin,
-          location_name: locationName,
-          is_active: true,
-        }
-      })
+    if (missingBins.length > 0) {
+      const rows = missingBins.map((bin) => ({
+        bin_code: bin,
+        label: bin,
+        location_name: locationName,
+        is_active: true,
+      }))
 
       const { error: upsertError } = await supabase
         .from('warehouse_bins')
         .upsert(rows, {
-          onConflict: 'bin_code',
+          onConflict: 'bin_code,location_name',
           ignoreDuplicates: true,
         })
 
@@ -381,7 +376,7 @@ export default function CreateBinPage() {
 
     return {
       existingCount: existing.length,
-      missingCount: missingFullCodes.length,
+      missingCount: missingBins.length,
     }
   }
 
