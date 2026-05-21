@@ -26,6 +26,22 @@ function getChatId(company: string) {
   return process.env.TELEGRAM_CHAT_ID
 }
 
+function getTelegramErrorMessage(data: any) {
+  if (!data) return 'Telegram send failed.'
+
+  const description = typeof data.description === 'string' ? data.description : ''
+  const errorCode = data.error_code ? `Telegram ${data.error_code}` : 'Telegram error'
+  const retryAfter = data.parameters?.retry_after
+
+  if (retryAfter) {
+    return `${errorCode}: ${description || 'Too many requests.'} Try again in ${retryAfter} seconds.`
+  }
+
+  if (description) return `${errorCode}: ${description}`
+
+  return 'Telegram send failed.'
+}
+
 function getCompanyLogo(company: string) {
   if (company === 'dlretail') {
     return 'https://hmeaanftisuhcdrzmpil.supabase.co/storage/v1/object/public/item-images/DLR%20logo%20Round.png'
@@ -407,6 +423,8 @@ export async function POST(request: Request) {
       ? body.staffNames.map((name: any) => String(name || '')).filter(Boolean)
       : []
 
+    const resend = Boolean(body.resend)
+    const sentAt = new Date().toISOString().replace(/[:.]/g, '-')
     const companyName = getCompanyDisplayName(company)
 
     const botToken = process.env.TELEGRAM_BOT_TOKEN
@@ -429,7 +447,11 @@ export async function POST(request: Request) {
 
     formData.append('chat_id', chatId)
     formData.append('caption', `${companyName} rota · ${weekLabel}`)
-    formData.append('photo', imageBlob, `${company}-${weekLabel.replaceAll(' ', '-')}.png`)
+    formData.append(
+      'photo',
+      imageBlob,
+      `${company}-${weekLabel.replaceAll(' ', '-')}${resend ? `-resend-${sentAt}` : ''}.png`
+    )
 
     const telegramResponse = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
       method: 'POST',
@@ -442,7 +464,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           ok: false,
-          message: 'Telegram send failed.',
+          message: getTelegramErrorMessage(telegramData),
           telegramData,
         },
         { status: 500 }

@@ -605,6 +605,9 @@ export default function RotaPage() {
   const [telegramSentWeeks, setTelegramSentWeeks] = useState<
     Record<string, boolean>
   >({});
+  const [telegramSendingWeeks, setTelegramSendingWeeks] = useState<
+    Record<string, boolean>
+  >({});
 
   const futureWeekStarts = useMemo(
     () => [1, 2, 3, 4].map((offset) => addWeeks(currentWeekStart, offset)),
@@ -1443,8 +1446,14 @@ export default function RotaPage() {
     const companyName = getCompanyName(company);
     const weekLabel = formatWeekLabel(week);
     const sentKey = `${company}-${getWeekId(week)}`;
+    const alreadySent = Boolean(telegramSentWeeks[sentKey]);
 
-    if (telegramSentWeeks[sentKey]) {
+    if (telegramSendingWeeks[sentKey]) {
+      showStatus(`${companyName} rota is already sending.`);
+      return;
+    }
+
+    if (alreadySent) {
       const confirmed = window.confirm(
         `${companyName} rota for ${weekLabel} has already been sent to Telegram.\n\nSend it again?`,
       );
@@ -1481,6 +1490,11 @@ export default function RotaPage() {
     });
 
     try {
+      setTelegramSendingWeeks((current) => ({
+        ...current,
+        [sentKey]: true,
+      }));
+
       showStatus(`Sending ${companyName} rota to Telegram...`);
 
       const response = await fetch("/api/rota/send-telegram", {
@@ -1492,13 +1506,23 @@ export default function RotaPage() {
           weekLabel,
           days,
           staffNames: staff.map((person) => person.name),
+          resend: alreadySent,
         }),
       });
 
       const data = await response.json().catch(() => null);
 
       if (!response.ok || !data?.ok) {
-        throw new Error(data?.message || "Telegram send failed.");
+        const telegramDescription = data?.telegramData?.description;
+        const telegramErrorCode = data?.telegramData?.error_code;
+        const retryAfter = data?.telegramData?.parameters?.retry_after;
+        const detailedMessage = telegramDescription
+          ? `${telegramErrorCode ? `Telegram ${telegramErrorCode}: ` : ""}${telegramDescription}${
+              retryAfter ? ` Try again in ${retryAfter} seconds.` : ""
+            }`
+          : data?.message || "Telegram send failed.";
+
+        throw new Error(detailedMessage);
       }
 
       setTelegramSentWeeks((current) => ({
@@ -1510,6 +1534,12 @@ export default function RotaPage() {
     } catch (error: any) {
       console.error("ROTA_TELEGRAM_SEND_ERROR", error);
       showStatus(error.message || "Telegram send failed.");
+    } finally {
+      setTelegramSendingWeeks((current) => {
+        const next = { ...current };
+        delete next[sentKey];
+        return next;
+      });
     }
   }
 
@@ -2114,6 +2144,7 @@ export default function RotaPage() {
     const current = isCurrentWeek(week);
     const telegramSentKey = `${company.key}-${getWeekId(week)}`;
     const telegramAlreadySent = Boolean(telegramSentWeeks[telegramSentKey]);
+    const telegramSending = Boolean(telegramSendingWeeks[telegramSentKey]);
 
     return (
       <section
@@ -2159,11 +2190,16 @@ export default function RotaPage() {
             <button
               type="button"
               onClick={() => sendTelegram(company.key, week)}
-              className={`rounded-xl px-3 py-2 text-xs font-black text-white ${
+              disabled={telegramSending}
+              className={`rounded-xl px-3 py-2 text-xs font-black text-white disabled:opacity-50 ${
                 telegramAlreadySent ? "bg-emerald-600" : "bg-sky-500"
               }`}
             >
-              {telegramAlreadySent ? "Telegram sent OK" : "Telegram"}
+              {telegramSending
+                ? "Sending..."
+                : telegramAlreadySent
+                  ? "Telegram sent OK"
+                  : "Telegram"}
             </button>
           </div>
         </div>
