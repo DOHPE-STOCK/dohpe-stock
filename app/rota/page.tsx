@@ -1446,9 +1446,7 @@ export default function RotaPage() {
 
     if (telegramSentWeeks[sentKey]) {
       const confirmed = window.confirm(
-        `${companyName} rota for ${weekLabel} has already been sent to Telegram.
-
-Send it again?`,
+        `${companyName} rota for ${weekLabel} has already been sent to Telegram.\n\nSend it again?`,
       );
 
       if (!confirmed) {
@@ -2121,7 +2119,7 @@ Send it again?`,
       <section
         className={`rounded-3xl border p-4 shadow-xl ${
           current
-            ? "border-emerald-500 bg-emerald-50 ring-4 ring-emerald-200"
+            ? "border-emerald-700 bg-emerald-200 ring-4 ring-emerald-300"
             : "border-neutral-200 bg-white"
         }`}
       >
@@ -2135,8 +2133,8 @@ Send it again?`,
               <h2 className="text-xl font-black">
                 {formatWeekLabel(week)}
                 {current && (
-                  <span className="ml-2 rounded-full bg-emerald-600 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-white">
-                    Current
+                  <span className="ml-2 rounded-full bg-emerald-800 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-white">
+                    CURRENT WEEK
                   </span>
                 )}
               </h2>
