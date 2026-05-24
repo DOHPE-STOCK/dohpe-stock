@@ -171,9 +171,11 @@ function openBinLabelPreview(location: string, bins: string[]) {
   const clean = cleanLocation(location)
 
   const labels = bins.map((bin) => ({
+    labelType: 'bin-qr',
     type: 'bin-qr',
     location: clean,
     code: bin,
+    binCode: bin,
     qrValue: getAllocateUrl(clean, bin),
   }))
 
@@ -680,11 +682,11 @@ export default function CreateBinPage() {
             <p className="text-sm text-neutral-400">Preview</p>
 
             <p className="mt-1 break-words font-mono text-2xl font-black">
-              {activeLocation || 'NO LOCATION'} / {previewBins[0] || 'NO BIN'}
+              Printed label: {previewBins[0] || 'NO BIN'}
             </p>
 
             <p className="mt-2 text-sm text-neutral-500">
-              Estimated labels: {previewBins.length || '—'} · Maximum allowed: {MAX_LABELS}
+              QR location: {activeLocation || 'NO LOCATION'} · Estimated labels: {previewBins.length || '—'} · Maximum allowed: {MAX_LABELS}
             </p>
           </div>
 
