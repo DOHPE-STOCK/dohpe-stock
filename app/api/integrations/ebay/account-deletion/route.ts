@@ -69,6 +69,25 @@ function obfuscate(value: string) {
   return `${clean.slice(0, 2)}***${clean.slice(-2)}`
 }
 
+function sameIdentifier(a: string, b: string) {
+  const first = text(a).toLowerCase()
+  const second = text(b).toLowerCase()
+  return Boolean(first && second && first === second)
+}
+
+function deletionPayloadMatchesConnectedAccount(settings: any, payload: any) {
+  const ebayUserId = findFirst(payload, ['userId', 'user_id', 'ebayUserId'])
+  const ebayUsername = findFirst(payload, ['username', 'userName', 'ebayUsername'])
+
+  return (
+    sameIdentifier(ebayUserId, settings?.ebay_user_id) ||
+    sameIdentifier(ebayUserId, settings?.ebay_account_id) ||
+    sameIdentifier(ebayUserId, settings?.seller_account_id) ||
+    sameIdentifier(ebayUsername, settings?.ebay_username) ||
+    sameIdentifier(ebayUsername, settings?.seller_username)
+  )
+}
+
 async function logDeletionEvent(params: {
   payload: any
   actionTaken: string
@@ -167,6 +186,25 @@ export async function POST(request: NextRequest) {
 
   try {
     payload = await request.json().catch(() => ({}))
+    const supabase = getSupabaseAdmin()
+    const { data, error } = await supabase
+      .from('integration_settings')
+      .select('settings')
+      .eq('channel', 'ebay')
+      .maybeSingle()
+
+    if (error) throw new Error(error.message)
+
+    if (!deletionPayloadMatchesConnectedAccount(data?.settings || {}, payload)) {
+      await logDeletionEvent({
+        payload,
+        actionTaken: 'ignored_notification_did_not_match_connected_ebay_account',
+        processed: true,
+      })
+
+      return new NextResponse(null, { status: 204 })
+    }
+
     await disconnectEbayIntegration()
     await logDeletionEvent({
       payload,
