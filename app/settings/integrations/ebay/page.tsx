@@ -498,14 +498,7 @@ export default function EbayIntegrationPage() {
               Create Sandbox Policies
             </button>
 
-            {ebayActive ? (
-              <span
-                className="max-w-[220px] truncate text-sm font-black text-white"
-                title={`eBay connected: ${ebayAccountLabel}`}
-              >
-                {ebayAccountLabel} ✓
-              </span>
-            ) : (
+            {!ebayActive && (
               <a
                 href="/api/integrations/ebay/connect"
                 className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-black text-white hover:bg-blue-500"
@@ -529,6 +522,15 @@ export default function EbayIntegrationPage() {
             >
               Back
             </Link>
+
+            {ebayActive && (
+              <span
+                className="max-w-[220px] truncate text-sm font-medium text-white"
+                title={`eBay connected: ${ebayAccountLabel}`}
+              >
+                {ebayAccountLabel} ✓
+              </span>
+            )}
           </div>
         </div>
 
