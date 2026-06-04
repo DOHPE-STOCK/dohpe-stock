@@ -648,7 +648,7 @@ export default function EbayIntegrationPage() {
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">Business Policies</h2>
+              <h2 className="text-lg font-semibold">Business Policies + Location</h2>
               <button
                 type="button"
                 onClick={pullPolicies}
@@ -688,6 +688,20 @@ export default function EbayIntegrationPage() {
                 </label>
               )
             })}
+
+            <label className="mt-4 block">
+              <span className="mb-1 block text-sm font-bold text-neutral-300">Merchant location key</span>
+              <input
+                value={settings.merchant_location_key}
+                onChange={(event) => updateSetting('merchant_location_key', event.target.value as any)}
+                placeholder="default"
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+              <span className="mt-2 block text-xs font-bold leading-5 text-neutral-500">
+                This must match an eBay Inventory API merchant location key, for example default. It is not the same
+                as your app warehouse/shop location display name.
+              </span>
+            </label>
           </section>
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
