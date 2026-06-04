@@ -24,3 +24,188 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+[data-theme="light"] {
+  --background: #f5f5f4;
+  --foreground: #111827;
+}
+
+[data-theme="light"] body {
+  background: #f5f5f4;
+  color: #111827;
+}
+
+[data-theme="light"] .bg-neutral-950,
+[data-theme="light"] .bg-zinc-950 {
+  background-color: #f5f5f4 !important;
+}
+
+[data-theme="light"] .bg-neutral-900,
+[data-theme="light"] .bg-zinc-900 {
+  background-color: #ffffff !important;
+}
+
+[data-theme="light"] .bg-black\/40 {
+  background-color: #111827 !important;
+}
+
+[data-theme="light"] .border-neutral-800,
+[data-theme="light"] .border-zinc-800,
+[data-theme="light"] .border-neutral-700,
+[data-theme="light"] .border-zinc-700 {
+  border-color: #d4d4d4 !important;
+}
+
+[data-theme="light"] .text-white,
+[data-theme="light"] .text-neutral-100,
+[data-theme="light"] .text-zinc-100 {
+  color: #111827 !important;
+}
+
+[data-theme="light"] .text-neutral-500,
+[data-theme="light"] .text-zinc-500,
+[data-theme="light"] .text-neutral-400,
+[data-theme="light"] .text-zinc-400,
+[data-theme="light"] .text-neutral-300,
+[data-theme="light"] .text-zinc-300 {
+  color: #525252 !important;
+}
+
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  color: #111827;
+}
+
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #737373;
+}
+
+[data-theme="light"] .app-header,
+[data-theme="light"] .app-header.bg-black {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .app-header h1,
+[data-theme="light"] .app-header h2,
+[data-theme="light"] .app-header h3,
+[data-theme="light"] .app-header p,
+[data-theme="light"] .app-header span:not(.keep-dark-text) {
+  color: #ffffff !important;
+}
+
+.app-header {
+  position: relative;
+}
+
+.app-header .app-nav {
+  order: -1;
+}
+
+.app-header > div:first-child {
+  align-content: flex-start;
+}
+
+.app-header h1 {
+  line-height: 1.05;
+}
+
+[data-theme="light"] .app-header .text-white,
+[data-theme="light"] .app-header .text-neutral-300,
+[data-theme="light"] .app-header .text-zinc-300,
+[data-theme="light"] .app-header .text-white\/80,
+[data-theme="light"] .app-header .text-white\/60,
+[data-theme="light"] .app-header .text-white\/50,
+[data-theme="light"] .app-nav .text-white,
+[data-theme="light"] .app-nav .text-white\/80 {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .app-nav .text-black,
+[data-theme="light"] .app-header .text-black {
+  color: #000000 !important;
+}
+
+[data-theme="light"] [class*="bg-black"].text-white,
+[data-theme="light"] [class*="bg-neutral-8"].text-white,
+[data-theme="light"] [class*="bg-zinc-8"].text-white,
+[data-theme="light"] .inventory-table-header,
+[data-theme="light"] .inventory-table-header * {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .bg-neutral-950:not(.app-header),
+[data-theme="light"] .bg-zinc-950:not(.app-header),
+[data-theme="light"] .bg-neutral-900:not(.app-header),
+[data-theme="light"] .bg-zinc-900:not(.app-header) {
+  color: #111827 !important;
+}
+
+[data-theme="light"] button[class*="bg-black"],
+[data-theme="light"] a[class*="bg-black"],
+[data-theme="light"] button[class*="bg-zinc-8"],
+[data-theme="light"] a[class*="bg-zinc-8"],
+[data-theme="light"] button[class*="bg-zinc-9"],
+[data-theme="light"] a[class*="bg-zinc-9"],
+[data-theme="light"] button[class*="bg-neutral-8"],
+[data-theme="light"] a[class*="bg-neutral-8"],
+[data-theme="light"] button[class*="bg-neutral-9"],
+[data-theme="light"] a[class*="bg-neutral-9"],
+[data-theme="light"] button[class*="bg-green-6"],
+[data-theme="light"] a[class*="bg-green-6"],
+[data-theme="light"] button[class*="bg-green-7"],
+[data-theme="light"] a[class*="bg-green-7"],
+[data-theme="light"] button[class*="bg-emerald-5"],
+[data-theme="light"] a[class*="bg-emerald-5"],
+[data-theme="light"] button[class*="bg-emerald-6"],
+[data-theme="light"] a[class*="bg-emerald-6"],
+[data-theme="light"] button[class*="bg-emerald-7"],
+[data-theme="light"] a[class*="bg-emerald-7"],
+[data-theme="light"] button[class*="bg-emerald-9"],
+[data-theme="light"] a[class*="bg-emerald-9"],
+[data-theme="light"] button[class*="bg-blue-5"],
+[data-theme="light"] a[class*="bg-blue-5"],
+[data-theme="light"] button[class*="bg-blue-6"],
+[data-theme="light"] a[class*="bg-blue-6"],
+[data-theme="light"] button[class*="bg-blue-9"],
+[data-theme="light"] a[class*="bg-blue-9"],
+[data-theme="light"] button[class*="bg-sky-5"],
+[data-theme="light"] a[class*="bg-sky-5"],
+[data-theme="light"] button[class*="bg-sky-6"],
+[data-theme="light"] a[class*="bg-sky-6"],
+[data-theme="light"] button[class*="bg-red-5"],
+[data-theme="light"] a[class*="bg-red-5"],
+[data-theme="light"] button[class*="bg-red-6"],
+[data-theme="light"] a[class*="bg-red-6"],
+[data-theme="light"] button[class*="bg-red-7"],
+[data-theme="light"] a[class*="bg-red-7"],
+[data-theme="light"] button[class*="bg-red-8"],
+[data-theme="light"] a[class*="bg-red-8"],
+[data-theme="light"] button[class*="bg-red-9"],
+[data-theme="light"] a[class*="bg-red-9"],
+[data-theme="light"] button[class*="bg-yellow-7"],
+[data-theme="light"] a[class*="bg-yellow-7"],
+[data-theme="light"] button[class*="bg-purple-9"],
+[data-theme="light"] a[class*="bg-purple-9"] {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] button[class*="bg-white"],
+[data-theme="light"] a[class*="bg-white"],
+[data-theme="light"] button.keep-dark-text,
+[data-theme="light"] a.keep-dark-text {
+  color: #000000 !important;
+}
+
+[data-theme="light"] .app-nav-pages button,
+[data-theme="light"] .app-nav-pages a,
+[data-theme="light"] .app-session-controls button:not(.keep-dark-text),
+[data-theme="light"] .app-session-controls a:not(.keep-dark-text) {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .rota-page .keep-dark-text {
+  color: #000000 !important;
+}

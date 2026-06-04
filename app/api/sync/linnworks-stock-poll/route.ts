@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -118,6 +119,78 @@ function numberValue(value: any) {
   if (value === null || value === undefined || value === '') return 0
   const num = Number(value)
   return Number.isFinite(num) ? num : 0
+}
+
+const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
+let activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
+
+async function loadLocationMappings(supabase: any) {
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
+
+  if (error) return DEFAULT_LOCATION_MAPPINGS
+
+  const saved = data?.settings?.location_mapping || data?.settings?.location_mappings || {}
+  const mappings: Record<string, string> = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const key = text(appLocation).toUpperCase()
+    const value = text(linnworksLocation)
+    if (key && value) mappings[key] = value
+  }
+
+  return mappings
+}
+
+function mapAppLocationToLinnworksLocation(locationName: string) {
+  const value = text(locationName)
+  const key = value.toUpperCase()
+
+  if (!value) return 'Default'
+  if (activeLocationMappings[key]) return activeLocationMappings[key]
+  if (key === 'WAREHOUSE') return 'Default'
+  return value
+}
+
+function mapLinnworksLocationToAppLocation(locationName: string) {
+  const value = text(locationName)
+  const key = value.toUpperCase()
+
+  if (!value || key === 'DEFAULT' || key === 'WAREHOUSE') {
+    const warehouseEntry = Object.entries(activeLocationMappings).find(
+      ([appLocation, mapped]) =>
+        /^LOCATION-\d+$/i.test(appLocation) &&
+        ['default', 'warehouse'].includes(text(mapped).toLowerCase())
+    )
+
+    return warehouseEntry?.[0] || 'LOCATION-1'
+  }
+
+  if (/^LOCATION-\d+$/i.test(value)) return key
+
+  const locationEntry = Object.entries(activeLocationMappings).find(
+    ([appLocation, mapped]) =>
+      /^LOCATION-\d+$/i.test(appLocation) && text(mapped).toUpperCase() === key
+  )
+
+  if (locationEntry?.[0]) return locationEntry[0]
+
+  const shopMatch = key.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+  return key
 }
 
 function getArrayFromCandidates(data: any, keys: string[]) {
@@ -393,11 +466,11 @@ function chooseDisplayLocation(rows: MappedStockRow[], currentLocation: string |
 }
 
 function isShopLocation(locationName: string) {
-  return text(locationName).toLowerCase().startsWith('shop')
+  return mapAppLocationToLinnworksLocation(locationName).toLowerCase().startsWith('shop')
 }
 
 function isWarehouseLocation(locationName: string) {
-  const value = text(locationName).toLowerCase()
+  const value = mapAppLocationToLinnworksLocation(locationName).toLowerCase()
   return value === 'default' || value === 'warehouse' || value.includes('warehouse')
 }
 
@@ -457,20 +530,50 @@ async function hasBlockingQueueRows(supabase: any, sku: string) {
 }
 
 function mapPollLocationToStoredLocation(locationName: string) {
-  return canonicalLocationName(locationName)
+  return storedLocationName(locationName)
+}
+
+function storedLocationName(locationName: string) {
+  const value = text(locationName)
+  const key = value.toUpperCase()
+
+  if (!value) return 'LOCATION-1'
+  if (/^LOCATION-\d+$/i.test(value)) return key
+  if (key === 'DEFAULT' || key === 'WAREHOUSE') return 'LOCATION-1'
+
+  const mapped = mapLinnworksLocationToAppLocation(value)
+  const mappedKey = text(mapped).toUpperCase()
+
+  if (/^LOCATION-\d+$/i.test(mappedKey)) return mappedKey
+  if (mappedKey === 'DEFAULT' || mappedKey === 'WAREHOUSE') return 'LOCATION-1'
+
+  const shopMatch = mappedKey.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+  return mappedKey || key
 }
 
 function canonicalLocationName(locationName: string) {
-  const value = text(locationName)
-  const lower = value.toLowerCase()
+  return storedLocationName(locationName)
+}
 
-  if (!value) return 'WAREHOUSE'
-  if (lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
-  return value.toUpperCase().startsWith('SHOP-') ? value.toUpperCase() : value
+function displayLocationName(locationName: string) {
+  const stored = storedLocationName(locationName)
+  const mapped = mapAppLocationToLinnworksLocation(stored)
+  const clean = text(mapped)
+  const lower = clean.toLowerCase()
+
+  if (!clean || lower === 'default' || lower === 'warehouse') return 'WAREHOUSE'
+  return clean.toUpperCase().startsWith('SHOP-') ? clean.toUpperCase() : clean
 }
 
 function isShopPollLocation(locationName: string) {
-  return text(locationName).toLowerCase().startsWith('shop-')
+  return displayLocationName(locationName).toUpperCase().startsWith('SHOP-')
+}
+
+function isWarehousePollLocation(locationName: string) {
+  const display = displayLocationName(locationName).toLowerCase()
+  return display === 'warehouse' || display === 'default'
 }
 
 function getOnlinePollDeductionPriority(locationName: string) {
@@ -537,55 +640,57 @@ async function upsertPollLocationRow(params: {
 async function mergeLegacyWarehouseRows(supabase: any, item: LocalItem) {
   const { data, error } = await supabase
     .from('item_stock_locations')
-    .select('id, location_name, bin_code, stock_level')
+    .select('id, location_name, bin_code, stock_level, source, synced_at')
     .eq('item_id', item.id)
 
   if (error) throw new Error(error.message)
 
   const rows = data || []
-  const legacyRows = rows.filter(
-    (row: any) =>
-      text(row.bin_code).toLowerCase() === 'default' &&
-      ['default', 'warehouse'].includes(text(row.location_name).toLowerCase())
-  )
+  const grouped = new Map<string, any[]>()
 
-  if (legacyRows.length <= 1) return
-
-  const total = legacyRows.reduce(
-    (sum: number, row: any) => sum + Number(row.stock_level || 0),
-    0
-  )
-
-  const preferred =
-    legacyRows.find((row: any) => text(row.location_name).toLowerCase() === 'warehouse') ||
-    legacyRows[0]
+  for (const row of rows) {
+    const storedLocation = storedLocationName(row.location_name)
+    const key = `${storedLocation}||${text(row.bin_code) || 'Default'}`
+    const existing = grouped.get(key) || []
+    existing.push(row)
+    grouped.set(key, existing)
+  }
 
   const now = new Date().toISOString()
 
-  const { error: updateError } = await supabase
-    .from('item_stock_locations')
-    .update({
-      location_name: 'WAREHOUSE',
-      bin_code: 'Default',
-      stock_level: total,
-      source: 'linnworks_poll_warehouse_merge',
-      updated_at: now,
-    })
-    .eq('id', preferred.id)
+  for (const [key, groupRows] of grouped.entries()) {
+    const [storedLocation, binCode] = key.split('||')
+    const total = Math.max(...groupRows.map((row: any) => Number(row.stock_level || 0)), 0)
 
-  if (updateError) throw new Error(updateError.message)
+    const preferred =
+      groupRows.find((row: any) => /^LOCATION-\d+$/i.test(text(row.location_name))) ||
+      groupRows[0]
 
-  const duplicateIds = legacyRows
-    .filter((row: any) => row.id !== preferred.id)
-    .map((row: any) => row.id)
-
-  if (duplicateIds.length > 0) {
-    const { error: deleteError } = await supabase
+    const { error: updateError } = await supabase
       .from('item_stock_locations')
-      .delete()
-      .in('id', duplicateIds)
+      .update({
+        location_name: storedLocation,
+        bin_code: binCode || 'Default',
+        stock_level: total,
+        source: 'linnworks_poll_location_normalise',
+        updated_at: now,
+      })
+      .eq('id', preferred.id)
 
-    if (deleteError) throw new Error(deleteError.message)
+    if (updateError) throw new Error(updateError.message)
+
+    const duplicateIds = groupRows
+      .filter((row: any) => row.id !== preferred.id)
+      .map((row: any) => row.id)
+
+    if (duplicateIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from('item_stock_locations')
+        .delete()
+        .in('id', duplicateIds)
+
+      if (deleteError) throw new Error(deleteError.message)
+    }
   }
 }
 
@@ -753,14 +858,13 @@ async function readOperationalRows(supabase: any, itemId: string) {
 
 function sumOperationalRows(rows: any[], type: 'shop_floor' | 'warehouse') {
   return rows.reduce((sum, row) => {
-    const locationName = text(row.location_name).toLowerCase()
     const binCode = text(row.bin_code).toUpperCase()
 
-    if (type === 'shop_floor' && locationName.startsWith('shop-') && binCode === 'FLOOR') {
+    if (type === 'shop_floor' && isShopPollLocation(row.location_name) && binCode === 'FLOOR') {
       return sum + Number(row.stock_level || 0)
     }
 
-    if (type === 'warehouse' && canonicalLocationName(locationName) === 'WAREHOUSE') {
+    if (type === 'warehouse' && isWarehousePollLocation(row.location_name)) {
       return sum + Number(row.stock_level || 0)
     }
 
@@ -777,6 +881,23 @@ async function processStockPoll(request: Request) {
 
   try {
     const supabase = getSupabaseAdmin()
+    const integrationConfig = await getLinnworksIntegrationConfig(supabase)
+    const integrationGate = shouldRunLinnworksRoute({
+      config: integrationConfig,
+      route: 'stock_poll',
+      manual: new URL(request.url).searchParams.get('manual') === 'true',
+    })
+
+    if (!integrationGate.ok) {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        message: integrationGate.reason,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+      })
+    }
+    activeLocationMappings = await loadLocationMappings(supabase)
     const { server, token } = await authoriseLinnworks()
     const locations = await linnworksGet(server, token, '/api/Inventory/GetStockLocations')
 
@@ -837,6 +958,8 @@ async function processStockPoll(request: Request) {
           (sum, row) => sum + Number(row.stockLevel || 0),
           0
         )
+
+        await mergeLegacyWarehouseRows(supabase, item)
 
         const displayLocation = chooseDisplayLocation(rows, item.current_location)
 

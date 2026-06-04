@@ -6,6 +6,22 @@ import { createServerClient } from '@supabase/ssr'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
+type AccessResult =
+  | { ok: true; user?: any; staff?: any }
+  | { ok: false; status: number; message: string }
+
+type LocationMappings = Record<string, string>
+
+const DEFAULT_LOCATION_MAPPINGS: LocationMappings = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -16,10 +32,6 @@ function getSupabaseAdmin() {
 
   return createClient(url, serviceKey)
 }
-
-type AccessResult =
-  | { ok: true; user?: any; staff?: any }
-  | { ok: false; status: number; message: string }
 
 async function requireAppLogin(): Promise<AccessResult> {
   const cookieStore = await cookies()
@@ -32,9 +44,7 @@ async function requireAppLogin(): Promise<AccessResult> {
         getAll() {
           return cookieStore.getAll()
         },
-        setAll() {
-          // no-op: API auth check only
-        },
+        setAll() {},
       },
     }
   )
@@ -64,7 +74,10 @@ function getActiveStaffFromRequest(request: Request) {
   }
 }
 
-async function requireCheckoutPermission(request: Request, supabase: any): Promise<AccessResult> {
+async function requireCheckoutPermission(
+  request: Request,
+  supabase: any
+): Promise<AccessResult> {
   const staffCookie = getActiveStaffFromRequest(request)
 
   if (!staffCookie?.id) {
@@ -77,9 +90,7 @@ async function requireCheckoutPermission(request: Request, supabase: any): Promi
     .eq('id', staffCookie.id)
     .maybeSingle()
 
-  if (error) {
-    throw new Error(error.message)
-  }
+  if (error) throw new Error(error.message)
 
   if (!staff || staff.is_active === false) {
     return { ok: false, status: 403, message: 'Staff access denied.' }
@@ -95,13 +106,14 @@ async function requireCheckoutPermission(request: Request, supabase: any): Promi
   return { ok: true, staff }
 }
 
-async function requirePosAccess(request: Request, supabase: any): Promise<AccessResult> {
+async function requirePosAccess(
+  request: Request,
+  supabase: any
+): Promise<AccessResult> {
   const login = await requireAppLogin()
-
   if (!login.ok) return login
 
   const staffAccess = await requireCheckoutPermission(request, supabase)
-
   if (!staffAccess.ok) return staffAccess
 
   return { ok: true, user: login.user, staff: staffAccess.staff }
@@ -128,16 +140,71 @@ function numberValue(value: any) {
   return Number.isFinite(n) ? n : 0
 }
 
+function canonical(value: any) {
+  return text(value).toUpperCase()
+}
+
+async function loadLocationMappings(supabase: any): Promise<LocationMappings> {
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
+
+  if (error) return DEFAULT_LOCATION_MAPPINGS
+
+  const saved =
+    data?.settings?.location_mapping ||
+    data?.settings?.location_mappings ||
+    {}
+
+  const mappings: LocationMappings = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const appKey = canonical(appLocation)
+    const mappedValue = text(linnworksLocation)
+
+    if (appKey && mappedValue) {
+      mappings[appKey] = mappedValue
+    }
+  }
+
+  return mappings
+}
+
+function mapIncomingLocationToAppLocation(
+  value: any,
+  mappings: LocationMappings
+) {
+  const clean = text(value)
+  const key = canonical(clean)
+
+  if (!clean) return 'LOCATION-1'
+  if (/^LOCATION-\d+$/i.test(clean)) return key
+
+  if (key === 'DEFAULT' || key === 'WAREHOUSE') {
+    const warehouseEntry = Object.entries(mappings).find(([, mapped]) => {
+      const mappedKey = canonical(mapped)
+      return mappedKey === 'DEFAULT' || mappedKey === 'WAREHOUSE'
+    })
+
+    return warehouseEntry?.[0] || 'LOCATION-1'
+  }
+
+  const displayMatch = Object.entries(mappings).find(([, mapped]) => {
+    return canonical(mapped) === key
+  })
+
+  return displayMatch?.[0] || key
+}
+
 async function existingSaleCheck(supabase: any, sale: any) {
   const saleId = text(sale?.id)
   const saleNumber = text(sale?.sale_number)
 
   if (!saleId && !saleNumber) return null
 
-  let query = supabase
-    .from('pos_sales')
-    .select('id, sale_number')
-    .limit(1)
+  let query = supabase.from('pos_sales').select('id, sale_number').limit(1)
 
   if (saleId && saleNumber) {
     query = query.or(`id.eq.${saleId},sale_number.eq.${saleNumber}`)
@@ -154,6 +221,211 @@ async function existingSaleCheck(supabase: any, sale: any) {
   return data
 }
 
+async function recalcItemTotalStock(supabase: any, sku: string) {
+  const cleanSku = text(sku).toUpperCase()
+  if (!cleanSku) return
+
+  const { data: stockRows, error: stockError } = await supabase
+    .from('item_stock_locations')
+    .select('stock_level')
+    .eq('sku', cleanSku)
+
+  if (stockError) {
+    throw new Error(`stock total read failed for ${cleanSku}: ${stockError.message}`)
+  }
+
+  const totalStock = (stockRows || []).reduce(
+    (sum: number, row: any) => sum + numberValue(row.stock_level),
+    0
+  )
+
+  const { error: itemError } = await supabase
+    .from('items')
+    .update({
+      stock_level: totalStock,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('sku', cleanSku)
+
+  if (itemError) {
+    throw new Error(`item stock total update failed for ${cleanSku}: ${itemError.message}`)
+  }
+}
+
+async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) {
+  const warnings: string[] = []
+
+  const localRows = queueRows.filter((queueRow) => {
+    const payload = queueRow?.payload || {}
+    const action = text(queueRow?.action)
+    const reason = text(payload?.reason)
+
+    return (
+      action === 'adjust_stock' &&
+      payload?.local_first === true &&
+      !reason.startsWith('transfer_')
+    )
+  })
+
+  if (localRows.length === 0) {
+    return { adjusted: 0, warnings }
+  }
+
+  const mappings = await loadLocationMappings(supabase)
+  const touchedSkus = new Set<string>()
+  let adjusted = 0
+
+  for (const queueRow of localRows) {
+    const payload = queueRow?.payload || {}
+    const sku = text(queueRow?.sku || payload?.sku).toUpperCase()
+    const delta = numberValue(payload?.delta)
+    const reason = text(payload?.reason) || 'pos_local_first'
+    const requestedLocation = mapIncomingLocationToAppLocation(
+      payload?.location,
+      mappings
+    )
+
+    if (!sku || delta === 0) continue
+
+    if (delta > 0) {
+      const targetLocation = requestedLocation || 'LOCATION-1'
+      const targetBin = targetLocation === 'LOCATION-1' ? 'Default' : 'FLOOR'
+
+      const { data: existingRow, error: readError } = await supabase
+        .from('item_stock_locations')
+        .select('id, stock_level')
+        .eq('sku', sku)
+        .eq('location_name', targetLocation)
+        .eq('bin_code', targetBin)
+        .maybeSingle()
+
+      if (readError) {
+        warnings.push(`${sku}: local positive stock read failed: ${readError.message}`)
+        continue
+      }
+
+      if (existingRow) {
+        const { error: updateError } = await supabase
+          .from('item_stock_locations')
+          .update({
+            stock_level: numberValue(existingRow.stock_level) + delta,
+            source: reason,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingRow.id)
+
+        if (updateError) {
+          warnings.push(`${sku}: local positive stock update failed: ${updateError.message}`)
+          continue
+        }
+      } else {
+        const { data: item, error: itemError } = await supabase
+          .from('items')
+          .select('id')
+          .eq('sku', sku)
+          .maybeSingle()
+
+        if (itemError || !item?.id) {
+          warnings.push(`${sku}: item lookup failed for local positive stock.`)
+          continue
+        }
+
+        const { error: insertError } = await supabase
+          .from('item_stock_locations')
+          .insert({
+            item_id: item.id,
+            sku,
+            location_name: targetLocation,
+            bin_code: targetBin,
+            stock_level: delta,
+            source: reason,
+            updated_at: new Date().toISOString(),
+          })
+
+        if (insertError) {
+          warnings.push(`${sku}: local positive stock insert failed: ${insertError.message}`)
+          continue
+        }
+      }
+
+      touchedSkus.add(sku)
+      adjusted += delta
+      continue
+    }
+
+    const deductionAmount = Math.abs(delta)
+
+    const candidateLocations =
+      requestedLocation === 'LOCATION-1'
+        ? [{ location_name: 'LOCATION-1', bin_code: 'Default' }]
+        : [
+            { location_name: requestedLocation, bin_code: 'FLOOR' },
+            { location_name: requestedLocation, bin_code: 'STOCK' },
+            { location_name: 'LOCATION-1', bin_code: 'Default' },
+          ]
+
+    let remainingToDeduct = deductionAmount
+
+    for (const candidate of candidateLocations) {
+      if (remainingToDeduct <= 0) break
+
+      const { data: stockRow, error: readError } = await supabase
+        .from('item_stock_locations')
+        .select('id, stock_level')
+        .eq('sku', sku)
+        .eq('location_name', candidate.location_name)
+        .eq('bin_code', candidate.bin_code)
+        .maybeSingle()
+
+      if (readError) {
+        warnings.push(`${sku}: stock read failed at ${candidate.location_name}/${candidate.bin_code}: ${readError.message}`)
+        continue
+      }
+
+      if (!stockRow) continue
+
+      const currentStock = numberValue(stockRow.stock_level)
+      if (currentStock <= 0) continue
+
+      const deductNow = Math.min(currentStock, remainingToDeduct)
+
+      const { error: updateError } = await supabase
+        .from('item_stock_locations')
+        .update({
+          stock_level: currentStock - deductNow,
+          source: reason,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', stockRow.id)
+
+      if (updateError) {
+        warnings.push(`${sku}: stock update failed at ${candidate.location_name}/${candidate.bin_code}: ${updateError.message}`)
+        continue
+      }
+
+      remainingToDeduct -= deductNow
+      adjusted += deductNow
+      touchedSkus.add(sku)
+    }
+
+    if (remainingToDeduct > 0) {
+      warnings.push(
+        `${sku}: sale completed but no local stock was available for ${remainingToDeduct} unit(s).`
+      )
+    }
+  }
+
+  for (const sku of touchedSkus) {
+    try {
+      await recalcItemTotalStock(supabase, sku)
+    } catch (error: any) {
+      warnings.push(`${sku}: total stock recalc failed: ${error.message}`)
+    }
+  }
+
+  return { adjusted, warnings }
+}
+
 async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
   let inserted = 0
   let skipped = 0
@@ -166,12 +438,8 @@ async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
     const action = text(queueRow?.action)
 
     if (!saleId || !sku || !reason || !action) {
-      const { error } = await supabase
-        .from('linnworks_sync_queue')
-        .insert(queueRow)
-
+      const { error } = await supabase.from('linnworks_sync_queue').insert(queueRow)
       if (error) throw new Error(`queue insert failed: ${error.message}`)
-
       inserted += 1
       continue
     }
@@ -211,7 +479,6 @@ async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
 
 async function validateRefundLines(supabase: any, lines: any[]) {
   const refundLines = lines.filter((line: any) => text(line.original_line_id))
-
   if (refundLines.length === 0) return
 
   const refundByOriginalLineId = new Map<string, number>()
@@ -233,7 +500,6 @@ async function validateRefundLines(supabase: any, lines: any[]) {
   }
 
   const originalLineIds = Array.from(refundByOriginalLineId.keys())
-
   if (originalLineIds.length === 0) return
 
   const { data: originalLines, error } = await supabase
@@ -278,7 +544,6 @@ async function validateRefundLines(supabase: any, lines: any[]) {
 
 async function updateRefundQuantitiesSafely(supabase: any, lines: any[]) {
   const refundLines = lines.filter((line: any) => text(line.original_line_id))
-
   if (refundLines.length === 0) return
 
   const refundByOriginalLineId = new Map<string, number>()
@@ -327,9 +592,7 @@ async function updateRefundQuantitiesSafely(supabase: any, lines: any[]) {
 
     const { error: updateError } = await supabase
       .from('pos_sale_lines')
-      .update({
-        refunded_quantity: nextRefundedQty,
-      })
+      .update({ refunded_quantity: nextRefundedQty })
       .eq('id', originalLineId)
       .lte('refunded_quantity', allowedTotalRefunded - qty)
 
@@ -344,13 +607,9 @@ export async function POST(request: Request) {
     const supabase = getSupabaseAdmin()
 
     const access = await requirePosAccess(request, supabase)
-
-    if (!access.ok) {
-      return accessDeniedResponse(access)
-    }
+    if (!access.ok) return accessDeniedResponse(access)
 
     const tx = await request.json()
-
     const { lines, queueRows, ...sale } = tx
 
     if (!sale?.id || !sale?.sale_number) {
@@ -363,6 +622,17 @@ export async function POST(request: Request) {
     const safeLines = Array.isArray(lines) ? lines : []
     const safeQueueRows = Array.isArray(queueRows) ? queueRows : []
 
+    if (numberValue(sale.total) > 0 && safeLines.length === 0) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message:
+            'Blocked POS save: sale has a total but no sale lines. This prevents completed sales with missing basket lines.',
+        },
+        { status: 400 }
+      )
+    }
+
     const existingSale = await existingSaleCheck(supabase, sale)
 
     if (existingSale) {
@@ -374,16 +644,15 @@ export async function POST(request: Request) {
         sale_number: existingSale.sale_number,
         queue_rows_inserted: 0,
         queue_rows_skipped: 0,
+        local_stock_adjusted: 0,
+        local_stock_warnings: [],
         lines: 0,
       })
     }
 
     await validateRefundLines(supabase, safeLines)
 
-    const { error: saleError } = await supabase
-      .from('pos_sales')
-      .insert(sale)
-
+    const { error: saleError } = await supabase.from('pos_sales').insert(sale)
     if (saleError) throw new Error(`pos_sales insert failed: ${saleError.message}`)
 
     if (safeLines.length > 0) {
@@ -391,10 +660,18 @@ export async function POST(request: Request) {
         .from('pos_sale_lines')
         .insert(safeLines)
 
-      if (linesError) throw new Error(`pos_sale_lines insert failed: ${linesError.message}`)
+      if (linesError) {
+        await supabase.from('pos_sales').delete().eq('id', sale.id)
+        throw new Error(`pos_sale_lines insert failed: ${linesError.message}`)
+      }
     }
 
     await updateRefundQuantitiesSafely(supabase, safeLines)
+
+    const localStockResult = await applyLocalFirstStockAdjustments(
+      supabase,
+      safeQueueRows
+    )
 
     const queueResult =
       safeQueueRows.length > 0
@@ -407,6 +684,8 @@ export async function POST(request: Request) {
       sale_id: sale.id,
       queue_rows_inserted: queueResult.inserted,
       queue_rows_skipped: queueResult.skipped,
+      local_stock_adjusted: localStockResult.adjusted,
+      local_stock_warnings: localStockResult.warnings,
       lines: safeLines.length,
     })
   } catch (error: any) {

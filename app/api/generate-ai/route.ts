@@ -49,7 +49,7 @@ export async function POST(request: Request) {
         {
           role: 'system',
           content:
-            'You write concise, natural, professional marketplace copy for second-hand vintage clothing. Do not sound like AI. Do not invent brand, material, era, size, condition, measurements, or flaws. Use provided fields if present. Ignore blank fields. Use the first image as the front and the second image as the back if provided. Use image evidence only for visible details. Use the word vintage only where appropriate. Correct capitalisation, spelling and grammar in all generated output including condition notes. Output valid JSON only.',
+            'You write concise, natural, professional marketplace copy for second-hand vintage clothing. Do not sound like AI. Do not invent brand, material, era, size, condition, measurements, or flaws. Use provided fields if present. Ignore blank fields. Use the first image as the front and the second image as the back if provided. Use image evidence only for visible details. Use the word vintage only where appropriate. Output valid JSON only.',
         },
         {
           role: 'user',
@@ -68,21 +68,10 @@ ${nonEmptyMeasurements.length ? nonEmptyMeasurements.join('\n') : 'NONE'}
 Important rules:
 - Generate a marketplace SEO title suitable for eBay, Vinted and Depop.
 - Generate a concise professional description suitable for eBay, Vinted, Depop and website use.
-- Do not mention flaws or condition notes inside the main description paragraph.
-- If condition notes/flaws are provided, add them at the end under this exact header:
-Condition Notes:
-- Fix obvious spelling mistakes in condition notes.
-- Correct sentence capitalisation and punctuation in condition notes.
-- Keep the meaning of condition notes exactly the same.
-- Do not soften, exaggerate or remove issues.
-- If measurements are provided, add them at the end under this exact header:
-Measurements (Inches):
-- Each measurement must be on a new line.
-- Format measurements exactly like:
-Pit to Pit: 22"
-Collar to Hem: 28"
-- Do not add Condition Notes header if no flaws are provided.
-- Do not add Measurements (Inches) header if no measurements are provided.
+- The description must be description copy only.
+- Do not include condition notes, flaws, measurements, measurement headings, bullet lists, or repeated item specifics in the AI description.
+- Do not add any section headers such as Condition Notes or Measurements.
+- Do not mention flaws unless they are essential to accurately describe the item, and never as a separate section.
 - Capitalise output professionally even if input fields are lowercase.
 - Keep wording natural, concise and descriptive.
 - Do not use hype phrases.
@@ -91,7 +80,7 @@ Collar to Hem: 28"
 Return JSON with exactly these keys:
 {
   "ai_title": "SEO marketplace title under 80 characters",
-  "ai_description": "Main generated description followed by Condition Notes and Measurements sections only when relevant",
+  "ai_description": "Main generated description only, with no condition notes or measurements sections",
   "website_title": "Cleaner professional website product title, not keyword stuffed"
 }`,
             },

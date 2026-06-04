@@ -6,6 +6,10 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import {
+  findBestEbayCategoryMapping,
+  mergeEbaySettings,
+} from '@/lib/ebayIntegrationSettings'
 
 const reportingCategories = [
   'Accessories',
@@ -60,17 +64,29 @@ const reportingCategories = [
   'Workwear Jacket',
 ]
 
-const conditionOptions = [
+const itemTypeOptions = ['Clothing', 'Accessories', 'Footwear', 'Other']
+
+const clothingConditionOptions = [
   'New with tags',
   'New without tags',
   'Excellent',
-  'Very Good',
   'Good',
   'Fair',
+]
+
+const conditionOptions = [
+  ...clothingConditionOptions,
+  'Very Good',
+  'Used',
+  'Like New',
+  'New with imperfections',
   'Poor / For Repair',
 ]
 
 const genderOptions = ['Male', 'Female', 'Unisex', 'Kids']
+
+const WAREHOUSE_LOCATION = 'LOCATION-1'
+const DEFAULT_BIN = 'Default'
 
 const materialOptions = [
   'Cotton',
@@ -247,24 +263,54 @@ function DatalistField({
   listId,
   placeholder,
 }: any) {
+  const [open, setOpen] = useState(false)
+  const inputId = `${listId}-input`
+
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-zinc-400">{label}</span>
+    <div className="relative block">
+      <label htmlFor={inputId} className="mb-1 block text-xs font-medium text-zinc-400">
+        {label}
+      </label>
 
       <input
-        list={listId}
+        id={inputId}
         value={value || ''}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          onChange(e.target.value)
+          setOpen(true)
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
         placeholder={placeholder || 'Type or select'}
+        autoComplete="off"
         className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-white"
       />
 
-      <datalist id={listId}>
-        {options.map((option: string) => (
-          <option key={option} value={option} />
-        ))}
-      </datalist>
-    </label>
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-auto rounded-lg border border-zinc-700 bg-zinc-950 p-1 shadow-xl">
+          {options.map((option: string) => {
+            const selected = option === value
+
+            return (
+              <button
+                key={option}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(option)
+                  setOpen(false)
+                }}
+                className={`block w-full rounded-md px-3 py-2 text-left text-sm font-bold ${
+                  selected ? 'bg-emerald-600 text-white' : 'text-zinc-100 hover:bg-zinc-800'
+                }`}
+              >
+                {option}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -413,6 +459,7 @@ function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
     description: getExportDescription(item),
 
     brand: item.brand,
+    item_type: item.item_type,
     reporting_category: item.reporting_category,
     tagged_size: item.tagged_size,
     size_label: item.size_label,
@@ -422,7 +469,8 @@ function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
     colour_primary: item.colour_primary,
     colour_secondary: item.colour_secondary,
     style: item.style,
-    sub_type: item.sub_type,
+    sub_category: item.sub_category,
+    sub_type: item.sub_category,
     era: item.era,
     gender: item.gender,
     flaws: item.flaws,
@@ -463,6 +511,13 @@ export default function ItemPage() {
   const [exportingLinnworks, setExportingLinnworks] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0)
+  const [ebayReadiness, setEbayReadiness] = useState<any>(null)
+  const [checkingEbayReadiness, setCheckingEbayReadiness] = useState(false)
+  const [showEbayReadinessDetails, setShowEbayReadinessDetails] = useState(false)
+  const [showEbayHtmlPreview, setShowEbayHtmlPreview] = useState(false)
+  const [ebayCategorySearch, setEbayCategorySearch] = useState('')
+  const [ebayCategorySuggestions, setEbayCategorySuggestions] = useState<any[]>([])
+  const [searchingEbayCategories, setSearchingEbayCategories] = useState(false)
 
   const originalItemRef = useRef<any>(null)
 
@@ -480,6 +535,11 @@ export default function ItemPage() {
     return () => window.clearTimeout(timer)
   }, [message])
 
+  useEffect(() => {
+    if (!item?.sku) return
+    checkEbayReadiness(item.sku)
+  }, [item?.sku])
+
   async function fetchItem() {
     const { data, error } = await supabase
       .from('items')
@@ -495,6 +555,38 @@ export default function ItemPage() {
     setItem(data)
     originalItemRef.current = data
     setHasUnsavedChanges(false)
+  }
+
+  async function checkEbayReadiness(skuOverride?: string) {
+    const sku = text(skuOverride || item?.sku)
+    if (!sku) return
+
+    setCheckingEbayReadiness(true)
+
+    try {
+      const response = await fetch(`/api/integrations/ebay/listing-readiness?sku=${encodeURIComponent(sku)}`)
+      const data = await response.json()
+
+      setEbayReadiness(data)
+    } catch (error: any) {
+      setEbayReadiness({
+        ok: false,
+        ready: false,
+        message: error.message || 'Could not check eBay readiness.',
+      })
+    } finally {
+      setCheckingEbayReadiness(false)
+    }
+  }
+
+  function ebayReadinessMessages() {
+    if (!ebayReadiness) return ['eBay readiness has not been checked yet.']
+    if (!ebayReadiness.ok) return [ebayReadiness.message || 'Could not check eBay readiness.']
+
+    const missing = Array.isArray(ebayReadiness.missing) ? ebayReadiness.missing : []
+    if (missing.length === 0) return ['eBay listing requirements passed.']
+
+    return missing.map((check: any) => `${check.label}: ${check.message}`)
   }
 
   async function getImageCount() {
@@ -562,6 +654,226 @@ export default function ItemPage() {
 
     const numberValue = Number(cleaned)
     return Number.isFinite(numberValue) ? numberValue : cleaned
+  }
+
+  function text(value: any) {
+    if (value === null || value === undefined) return ''
+    return String(value).trim()
+  }
+
+  function ebayCategoryQuery(source: any = item) {
+    return [
+      text(source?.gender),
+      text(source?.sub_category),
+      text(source?.reporting_category),
+      text(source?.item_type),
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  function ebayCategoryFromSuggestion(suggestion: any) {
+    return {
+      id: text(suggestion?.category?.categoryId),
+      name: text(suggestion?.category?.categoryName),
+      ancestors: Array.isArray(suggestion?.categoryTreeNodeAncestors)
+        ? suggestion.categoryTreeNodeAncestors
+        : [],
+    }
+  }
+
+  function ebayCategoryPath(suggestion: any) {
+    const category = ebayCategoryFromSuggestion(suggestion)
+    const ancestors = category.ancestors
+      .slice()
+      .sort((a: any, b: any) => Number(a.categoryTreeNodeLevel || 0) - Number(b.categoryTreeNodeLevel || 0))
+      .map((ancestor: any) => text(ancestor.categoryName))
+      .filter(Boolean)
+
+    return [...ancestors, category.name].filter(Boolean).join(' > ')
+  }
+
+  async function fetchEbayCategorySuggestions(query: string) {
+    const q = text(query)
+    if (!q) return []
+
+    const response = await fetch(
+      `/api/integrations/ebay/category-suggestions?q=${encodeURIComponent(q)}`
+    )
+    const data = await response.json()
+
+    if (!response.ok || data?.ok === false) {
+      throw new Error(data?.message || 'Could not search eBay categories.')
+    }
+
+    return Array.isArray(data?.suggestions) ? data.suggestions : []
+  }
+
+  async function fetchMappedEbayCategory(source: any = item) {
+    if (text(source?.ebay_category_id)) return null
+
+    const { data, error } = await supabase
+      .from('integration_settings')
+      .select('settings')
+      .eq('channel', 'ebay')
+      .maybeSingle()
+
+    if (error) throw new Error(error.message)
+
+    const settings = mergeEbaySettings(data?.settings || {})
+    const mapping = findBestEbayCategoryMapping(source, settings.category_mappings)
+    if (!mapping?.ebay_category_id) return null
+
+    return {
+      id: text(mapping.ebay_category_id),
+      name: text(mapping.ebay_category_name),
+      mapped: true,
+    }
+  }
+
+  function applyEbayCategorySuggestion(suggestion: any) {
+    const category = ebayCategoryFromSuggestion(suggestion)
+    if (!category.id) return
+
+    const updatedItem = {
+      ...item,
+      ebay_category_id: category.id,
+      ebay_category_name: category.name,
+    }
+
+    setItem(updatedItem)
+    setHasUnsavedChanges(
+      JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+    )
+    setMessage(`Selected eBay category ${category.name || category.id}. Save item to keep it.`)
+  }
+
+  function clearEbayCategory() {
+    const updatedItem = {
+      ...item,
+      ebay_category_id: '',
+      ebay_category_name: '',
+    }
+
+    setItem(updatedItem)
+    setHasUnsavedChanges(
+      JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+    )
+  }
+
+  async function searchEbayCategories(queryOverride?: string) {
+    const query = text(queryOverride || ebayCategorySearch || ebayCategoryQuery())
+    if (!query) {
+      setMessage('Enter an eBay category search term first.')
+      return
+    }
+
+    setSearchingEbayCategories(true)
+    setMessage('Searching eBay categories...')
+
+    try {
+      setEbayCategorySearch(query)
+      const suggestions = await fetchEbayCategorySuggestions(query)
+      setEbayCategorySuggestions(suggestions)
+      setMessage(`Loaded ${suggestions.length} eBay category suggestion(s).`)
+    } catch (error: any) {
+      setMessage(error.message || 'Could not search eBay categories.')
+    } finally {
+      setSearchingEbayCategories(false)
+    }
+  }
+
+  async function suggestEbayCategory() {
+    const query = ebayCategoryQuery()
+    if (!query) {
+      setMessage('Add category fields before suggesting an eBay category.')
+      return
+    }
+
+    setSearchingEbayCategories(true)
+    setMessage('Finding best eBay category...')
+
+    try {
+      const mappedCategory = await fetchMappedEbayCategory(item)
+      if (mappedCategory) {
+        const updatedItem = {
+          ...item,
+          ebay_category_id: mappedCategory.id,
+          ebay_category_name: mappedCategory.name,
+        }
+
+        setItem(updatedItem)
+        setHasUnsavedChanges(
+          JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+        )
+        setMessage(`Selected mapped eBay category ${mappedCategory.name || mappedCategory.id}. Save item to keep it.`)
+        return
+      }
+
+      const suggestions = await fetchEbayCategorySuggestions(query)
+      setEbayCategorySearch(query)
+      setEbayCategorySuggestions(suggestions)
+
+      if (suggestions[0]) {
+        applyEbayCategorySuggestion(suggestions[0])
+      } else {
+        setMessage('No eBay category suggestions found.')
+      }
+    } catch (error: any) {
+      setMessage(error.message || 'Could not suggest eBay category.')
+    } finally {
+      setSearchingEbayCategories(false)
+    }
+  }
+
+  async function bestEbayCategoryForReview(source: any) {
+    if (text(source?.ebay_category_id)) return null
+
+    const mappedCategory = await fetchMappedEbayCategory(source)
+    if (mappedCategory) return mappedCategory
+
+    const query = ebayCategoryQuery(source)
+    if (!query) return null
+
+    const suggestions = await fetchEbayCategorySuggestions(query)
+    const suggestion = suggestions[0]
+    if (!suggestion) return null
+
+    return ebayCategoryFromSuggestion(suggestion)
+  }
+
+  function canonicalLocationKey(value: string | null | undefined) {
+    const key = text(value).toUpperCase().replace(/[\s_]+/g, '-')
+    if (key === 'WAREHOUSE') return 'LOCATION-1'
+    if (key === 'SHOP-1') return 'LOCATION-2'
+    if (key === 'SHOP-2') return 'LOCATION-3'
+    if (key === 'SHOP-3') return 'LOCATION-4'
+    if (key === 'SHOP-4') return 'LOCATION-5'
+    return key
+  }
+
+  async function upsertPrimaryStockLocation(savedItem: any) {
+    const locationName = canonicalLocationKey(savedItem.current_location) || WAREHOUSE_LOCATION
+    const binCode = text(savedItem.current_bin) || DEFAULT_BIN
+    const stockLevel = Number(savedItem.stock_level || 0)
+    const response = await fetch('/api/items/stock-location', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        item_id: id,
+        sku: savedItem.sku,
+        location_name: locationName,
+        bin_code: binCode,
+        stock_level: stockLevel,
+        source: 'item_edit_stock_level',
+      }),
+    })
+
+    const result = await response.json()
+
+    if (!response.ok || result?.ok === false) {
+      throw new Error(result?.error || 'Stock location update failed.')
+    }
   }
 
   function updateReportingCategory(newCategory: string) {
@@ -701,7 +1013,7 @@ export default function ItemPage() {
       ? [
           ['brand', 'Brand'],
           ['reporting_category', 'Reporting Category'],
-          ['sub_type', 'Sub Type'],
+          ['sub_category', 'Sub Category'],
           ['selling_price', 'Sale Price'],
         ]
       : [
@@ -715,7 +1027,10 @@ export default function ItemPage() {
         ]
 
     const missing = required
-      .filter(([key]) => !itemToCheck[key])
+      .filter(([key]) => {
+        if (key === 'sub_category') return !itemToCheck.sub_category
+        return !itemToCheck[key]
+      })
       .map(([_, label]) => label)
 
     if (!isReusableSku && imageCount < 1) {
@@ -725,31 +1040,41 @@ export default function ItemPage() {
     return missing
   }
 
+  async function requestAiCopy(itemForCopy: any) {
+    const imageUrls = await getFirstTwoImageUrls()
+    const response = await fetch('/api/generate-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item: itemForCopy, imageUrls }),
+    })
+
+    const result = await response.json()
+
+    if (!response.ok) {
+      throw new Error(result.error || 'AI generation failed')
+    }
+
+    return {
+      ai_title: result.ai_title || '',
+      ai_description: result.ai_description || '',
+      website_title: result.website_title || '',
+    }
+  }
+
+  function needsAiCopy(itemToCheck: any) {
+    return !text(itemToCheck?.ai_title) || !text(itemToCheck?.ai_description) || !text(itemToCheck?.website_title)
+  }
+
   async function generateAiCopy() {
     if (!item) return
 
     setGeneratingAi(true)
 
     try {
-      const imageUrls = await getFirstTwoImageUrls()
-
-      const response = await fetch('/api/generate-ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item, imageUrls }),
-      })
-
-      const result = await response.json()
-
-      if (!response.ok) {
-        throw new Error(result.error || 'AI generation failed')
-      }
-
+      const generated = await requestAiCopy(item)
       const updatedItem = {
         ...item,
-        ai_title: result.ai_title || '',
-        ai_description: result.ai_description || '',
-        website_title: result.website_title || '',
+        ...generated,
       }
 
       setItem(updatedItem)
@@ -862,10 +1187,14 @@ export default function ItemPage() {
 
     const cleanedItem = {
       ...item,
+      status: item.status === 'processed' ? 'finalised' : item.status,
 
       cost_price: blankToNull(item.cost_price),
       selling_price: blankToNull(item.selling_price),
       stock_level: newStockLevel,
+      item_type: blankToNull(item.item_type),
+      sub_category: blankToNull(item.sub_category),
+      sub_type: blankToNull(item.sub_category),
 
       waist_in: blankToNull(item.waist_in),
       inside_leg_in: blankToNull(item.inside_leg_in),
@@ -878,6 +1207,9 @@ export default function ItemPage() {
       sleeve_in: blankToNull(item.sleeve_in),
 
       weight_grams: blankToNull(item.weight_grams),
+      location_status: item.location_status || 'stored',
+      current_location: canonicalLocationKey(item.current_location) || WAREHOUSE_LOCATION,
+      current_bin: text(item.current_bin) || DEFAULT_BIN,
 
       last_saved_by: staff.id,
       ...(priceChanged ? { priced_by: staff.id } : {}),
@@ -900,6 +1232,16 @@ export default function ItemPage() {
     }
 
     let savedItem = cleanedItem
+
+    try {
+      await upsertPrimaryStockLocation(cleanedItem)
+    } catch (stockError: any) {
+      setMessage(`Saved item, but stock-location row failed: ${stockError.message}`)
+      originalItemRef.current = cleanedItem
+      setItem(cleanedItem)
+      setHasUnsavedChanges(false)
+      return cleanedItem
+    }
 
     if (shouldQueueStockSync) {
       const { error: queueError } = await supabase
@@ -962,13 +1304,43 @@ export default function ItemPage() {
 
     const now = new Date().toISOString()
 
-    const updatedItem = {
+    let updatedItem = {
       ...item,
       status: 'review',
+      location_status: item.location_status || 'stored',
+      current_location: item.current_location || 'WAREHOUSE',
+      current_bin: item.current_bin || 'Default',
       last_saved_by: staff.id,
       sent_to_review_by: staff.id,
       sent_to_review_at: now,
       updated_at: now,
+    }
+
+    try {
+      if (needsAiCopy(updatedItem)) {
+        const generated = await requestAiCopy(updatedItem)
+        updatedItem = {
+          ...updatedItem,
+          ai_title: updatedItem.ai_title || generated.ai_title,
+          ai_description: updatedItem.ai_description || generated.ai_description,
+          website_title: updatedItem.website_title || generated.website_title,
+        }
+      }
+    } catch {
+      // AI copy is useful, but review should not be blocked if generation fails.
+    }
+
+    try {
+      const suggestedCategory = await bestEbayCategoryForReview(updatedItem)
+      if (suggestedCategory?.id) {
+        updatedItem = {
+          ...updatedItem,
+          ebay_category_id: suggestedCategory.id,
+          ebay_category_name: suggestedCategory.name,
+        }
+      }
+    } catch {
+      // Category suggestion is helpful metadata, not a blocker for review.
     }
 
     const { error } = await supabase
@@ -1127,6 +1499,20 @@ export default function ItemPage() {
     )
   }
 
+  function updateSubCategory(value: string) {
+    const updatedItem = {
+      ...item,
+      sub_category: value,
+      sub_type: value,
+    }
+
+    setItem(updatedItem)
+
+    setHasUnsavedChanges(
+      JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+    )
+  }
+
   function confirmNavigation(url: string) {
     if (hasUnsavedChanges) {
       const confirmed = window.confirm(
@@ -1150,21 +1536,27 @@ export default function ItemPage() {
   }
 
   const visibleMeasurements = measurementMap[item.reporting_category] || []
+  const visibleConditionOptions =
+    item.item_type === 'Clothing' ? clothingConditionOptions : conditionOptions
+  const ebayMessages = ebayReadinessMessages()
+  const ebayReady = Boolean(ebayReadiness?.ok && ebayReadiness?.ready)
+  const ebayPreviewHtml = ebayReadiness?.listing_draft?.description_html || ''
 
   return (
     <StaffPermissionGate permission="working">
       <main className="min-h-screen bg-zinc-950 p-5 text-white">
-        <div className="mb-5 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-          <div className="flex flex-wrap items-center gap-4">
+        <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
             <div>
-              <h1 className="text-2xl font-bold">SKU: {item.sku}</h1>
+              <h1 className="text-2xl font-black tracking-normal">SKU: {item.sku}</h1>
 
-              <p className="text-sm text-zinc-400">
+              <p className="text-sm text-zinc-300">
                 Status: {item.status}
                 {item.sku_type === 'reusable' ? ' · Reusable SKU' : ''}
                 {item.linnworks_managed ? ' · Linnworks synced' : ''}
                 {hasUnsavedChanges ? ' · Unsaved changes' : ''}
               </p>
+
 
               {staff ? (
                 <p className="mt-1 text-sm font-bold text-green-300">
@@ -1187,12 +1579,53 @@ export default function ItemPage() {
               </span>
             )}
 
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowEbayReadinessDetails((current) => !current)}
+                title={ebayMessages.join('\n')}
+                className={`rounded-xl px-4 py-2 text-sm font-black ${
+                  ebayReady ? 'bg-green-600 text-white' : 'bg-red-700 text-white'
+                }`}
+              >
+                eBay {checkingEbayReadiness ? '...' : ebayReady ? 'OK' : 'X'}
+              </button>
+
+              {showEbayReadinessDetails && (
+                <div className="absolute right-0 top-full z-30 mt-2 w-80 rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-xs font-bold text-zinc-200 shadow-xl">
+                  <div className="space-y-1">
+                    {ebayMessages.map((line: string, index: number) => (
+                      <p key={`${line}-${index}`}>{line}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowEbayHtmlPreview(true)}
+              disabled={!ebayPreviewHtml}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              HTML Preview
+            </button>
+
             <button
               onClick={saveItem}
               disabled={!staff || processingImages || exportingLinnworks}
-              className="rounded-lg bg-green-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
+              className="rounded-xl bg-green-600 px-5 py-2 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
             >
               Save Item
+            </button>
+
+            <button
+              type="button"
+              onClick={() => checkEbayReadiness()}
+              disabled={checkingEbayReadiness}
+              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-bold text-white hover:bg-zinc-800 disabled:opacity-40"
+            >
+              {checkingEbayReadiness ? 'Checking eBay' : 'Refresh eBay'}
             </button>
 
             {item.sku_type !== 'reusable' && (
@@ -1238,10 +1671,20 @@ export default function ItemPage() {
                   placeholder="Type or select category"
                 />
 
-                <Field
-                  label="Sub Type"
-                  value={item.sub_type}
-                  onChange={(v: string) => updateField('sub_type', v)}
+                <DatalistField
+                  label="Sub Category"
+                  value={item.sub_category || ''}
+                  onChange={(v: string) => updateSubCategory(v)}
+                  options={reportingCategories}
+                  listId="sub-categories"
+                  placeholder="Type or select sub category"
+                />
+
+                <SelectField
+                  label="Item Type"
+                  value={item.item_type}
+                  onChange={(v: string) => updateField('item_type', v)}
+                  options={itemTypeOptions}
                 />
 
                 <SelectField
@@ -1273,7 +1716,7 @@ export default function ItemPage() {
                   label="Condition"
                   value={item.condition}
                   onChange={(v: string) => updateField('condition', v)}
-                  options={conditionOptions}
+                  options={visibleConditionOptions}
                 />
 
                 <DatalistField
@@ -1304,6 +1747,95 @@ export default function ItemPage() {
                 />
               </div>
             </section>
+
+            {item.status === 'review' && (
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+                    eBay Category
+                  </h2>
+                  <p className="mt-1 text-xs font-bold text-zinc-500">
+                    Suggested from item type, gender, category, and sub category. Override before listing if needed.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={suggestEbayCategory}
+                  disabled={searchingEbayCategories}
+                  className="rounded-lg border border-zinc-700 px-4 py-2 text-xs font-black text-white hover:bg-zinc-800 disabled:opacity-40"
+                >
+                  {searchingEbayCategories ? 'Searching' : 'Suggest'}
+                </button>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-[1fr_160px]">
+                <Field
+                  label="Current eBay Category"
+                  value={
+                    item.ebay_category_id
+                      ? `${item.ebay_category_name || 'eBay category'} (${item.ebay_category_id})`
+                      : ''
+                  }
+                  onChange={() => {}}
+                />
+
+                <button
+                  type="button"
+                  onClick={clearEbayCategory}
+                  className="mt-5 rounded-lg border border-zinc-700 px-4 py-2 text-xs font-black text-white hover:bg-zinc-800"
+                >
+                  Clear Category
+                </button>
+              </div>
+
+              <div className="mt-3 grid gap-2 md:grid-cols-[1fr_140px]">
+                <input
+                  value={ebayCategorySearch || ebayCategoryQuery()}
+                  onChange={(event) => setEbayCategorySearch(event.target.value)}
+                  placeholder="Search eBay categories"
+                  className="h-10 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm font-bold text-white outline-none focus:border-white"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => searchEbayCategories()}
+                  disabled={searchingEbayCategories}
+                  className="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-black text-white hover:bg-zinc-700 disabled:opacity-40"
+                >
+                  Search
+                </button>
+              </div>
+
+              {ebayCategorySuggestions.length > 0 && (
+                <div className="mt-3 max-h-64 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2">
+                  {ebayCategorySuggestions.map((suggestion, index) => {
+                    const category = ebayCategoryFromSuggestion(suggestion)
+                    const path = ebayCategoryPath(suggestion)
+
+                    return (
+                      <button
+                        key={`${category.id}-${index}`}
+                        type="button"
+                        onClick={() => applyEbayCategorySuggestion(suggestion)}
+                        className="block w-full rounded-lg px-3 py-2 text-left hover:bg-zinc-800"
+                      >
+                        <span className="block text-sm font-black text-white">
+                          {category.name || 'Unnamed category'} ({category.id})
+                        </span>
+                        {path && (
+                          <span className="mt-1 block text-xs font-bold text-zinc-500">
+                            {path}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
+            )}
 
             {visibleMeasurements.length > 0 && (
               <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
@@ -1346,39 +1878,43 @@ export default function ItemPage() {
                 </button>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-3">
-                  <Field
-                    label="Basic Title"
-                    value={item.basic_title}
-                    onChange={(v: string) => updateField('basic_title', v)}
-                  />
+              <div className="space-y-4">
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="space-y-3">
+                    <Field
+                      label="Basic Title"
+                      value={item.basic_title}
+                      onChange={(v: string) => updateField('basic_title', v)}
+                    />
+
+                    <Field
+                      label="Flaws"
+                      value={item.flaws}
+                      onChange={(v: string) => updateField('flaws', v)}
+                    />
+                  </div>
 
                   <TextArea
                     label="Basic Description"
                     value={item.basic_description}
                     onChange={(v: string) => updateField('basic_description', v)}
                   />
-
-                  <TextArea
-                    label="Flaws"
-                    value={item.flaws}
-                    onChange={(v: string) => updateField('flaws', v)}
-                  />
                 </div>
 
-                <div className="space-y-3">
-                  <Field
-                    label="AI Marketplace Title"
-                    value={item.ai_title}
-                    onChange={(v: string) => updateField('ai_title', v)}
-                  />
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="space-y-3">
+                    <Field
+                      label="AI Marketplace Title"
+                      value={item.ai_title}
+                      onChange={(v: string) => updateField('ai_title', v)}
+                    />
 
-                  <Field
-                    label="Website Title"
-                    value={item.website_title}
-                    onChange={(v: string) => updateField('website_title', v)}
-                  />
+                    <Field
+                      label="Website Title"
+                      value={item.website_title}
+                      onChange={(v: string) => updateField('website_title', v)}
+                    />
+                  </div>
 
                   <TextArea
                     label="AI Description"
@@ -1438,9 +1974,36 @@ export default function ItemPage() {
                 />
               </div>
             </section>
+
           </aside>
         </div>
+
+        {showEbayHtmlPreview && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+            <div className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-950 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-zinc-800 p-4">
+                <div>
+                  <h2 className="text-lg font-black text-white">eBay HTML Preview</h2>
+                  <p className="text-sm font-bold text-zinc-400">{item.sku}</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowEbayHtmlPreview(false)}
+                  className="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-black text-white hover:bg-zinc-700"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="max-h-[calc(90vh-80px)] overflow-auto bg-white p-5">
+                <div dangerouslySetInnerHTML={{ __html: ebayPreviewHtml }} />
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </StaffPermissionGate>
   )
 }
+

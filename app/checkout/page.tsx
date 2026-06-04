@@ -217,6 +217,10 @@ function escapePostgrestOrValue(value: string) {
     .replaceAll(',', '\\,')
 }
 
+function normaliseIdentifier(value: string) {
+  return text(value).replace(/\s+/g, '').toUpperCase()
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return ''
   const date = new Date(value)
@@ -650,6 +654,38 @@ export default function CheckoutPage() {
     return text(data?.processed_url || data?.original_url)
   }
 
+  async function lookupItemByScanValue(scanValue: string) {
+    const safeSkuLookup = escapePostgrestOrValue(scanValue)
+
+    const directResult = await supabase
+      .from('items')
+      .select('*')
+      .or(`sku.eq.${safeSkuLookup},barcode_number.eq.${safeSkuLookup}`)
+      .maybeSingle()
+
+    if (directResult.error) throw new Error(directResult.error.message)
+    if (directResult.data) return directResult.data as ItemRow
+
+    const identifierResult = await supabase
+      .from('item_identifiers')
+      .select('item_id')
+      .eq('identifier_value_normalized', normaliseIdentifier(scanValue))
+      .eq('is_active', true)
+      .maybeSingle()
+
+    if (identifierResult.error) throw new Error(identifierResult.error.message)
+    if (!identifierResult.data?.item_id) return null
+
+    const itemResult = await supabase
+      .from('items')
+      .select('*')
+      .eq('id', identifierResult.data.item_id)
+      .maybeSingle()
+
+    if (itemResult.error) throw new Error(itemResult.error.message)
+    return (itemResult.data || null) as ItemRow | null
+  }
+
   function addBagToBasket() {
     const bagSku = 'BAG-20P'
 
@@ -888,18 +924,10 @@ export default function CheckoutPage() {
     setMessage('')
 
     try {
-      const safeSkuLookup = escapePostgrestOrValue(sku)
-
-      const { data, error } = await supabase
-        .from('items')
-        .select('*')
-        .or(`sku.eq.${safeSkuLookup},barcode_number.eq.${safeSkuLookup}`)
-        .maybeSingle()
-
-      if (error) throw new Error(error.message)
+      const data = await lookupItemByScanValue(sku)
 
       if (!data) {
-        setMessage(`SKU not found: ${sku}`)
+        setMessage(`Item not found: ${sku}`)
         return
       }
 
@@ -1575,6 +1603,8 @@ export default function CheckoutPage() {
       await saveTransaction(tx)
 
       clearSale()
+      setCashPanelOpen(false)
+      setCardPanelOpen(false)
 
       if (method === 'card' && (mode === 'refund' || refundDue > 0)) {
         setMessage(`Card refund recorded. Receipt: ${tx.sale_number}`)
@@ -2177,7 +2207,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={() => fetchHistory({ query: scanValue.trim() || historyQuery.trim() })}
                     disabled={historyBusy}
-                    className="rounded-lg bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:opacity-40"
+                    className="rounded-lg bg-emerald-600 px-5 py-3 text-sm font-black text-white disabled:opacity-40"
                   >
                     {historyBusy ? 'Searching…' : 'Search'}
                   </button>
@@ -2415,7 +2445,7 @@ export default function CheckoutPage() {
                                     href={rootSale.square_receipt_url}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="rounded-lg bg-sky-100 px-4 py-4 text-center text-sm font-black text-black"
+                                    className="rounded-lg bg-sky-600 px-4 py-4 text-center text-sm font-black text-white"
                                   >
                                     Open Square Receipt
                                   </a>
@@ -2537,7 +2567,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={searchLibrary}
                     disabled={libraryBusy}
-                    className="rounded-lg bg-emerald-400 px-4 py-3 text-sm font-black text-black disabled:opacity-40"
+                    className="rounded-lg bg-emerald-600 px-4 py-3 text-sm font-black text-white disabled:opacity-40"
                   >
                     {libraryBusy ? 'Searching…' : 'Search'}
                   </button>
@@ -2848,7 +2878,7 @@ export default function CheckoutPage() {
                   type="button"
                   onClick={() => completeSale('cash')}
                   disabled={saleBusy}
-                  className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  className="rounded-xl bg-green-600 py-4 text-sm font-black text-white disabled:opacity-40"
                 >
                   CASH REFUND
                 </button>
@@ -2856,7 +2886,7 @@ export default function CheckoutPage() {
                   type="button"
                   onClick={completeCardRefund}
                   disabled={saleBusy}
-                  className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                  className="rounded-xl bg-sky-600 py-4 text-sm font-black text-white disabled:opacity-40"
                 >
                   CARD REFUND
                 </button>
@@ -2872,7 +2902,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={() => completeSale('cash')}
                     disabled={saleBusy}
-                    className="rounded-xl bg-green-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                    className="rounded-xl bg-green-600 py-4 text-sm font-black text-white disabled:opacity-40"
                   >
                     CASH REFUND DIFFERENCE
                   </button>
@@ -2881,7 +2911,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={completeCardRefund}
                     disabled={saleBusy}
-                    className="rounded-xl bg-sky-100 py-4 text-sm font-black text-black disabled:opacity-40"
+                    className="rounded-xl bg-sky-600 py-4 text-sm font-black text-white disabled:opacity-40"
                   >
                     CARD REFUND DIFFERENCE
                   </button>
@@ -2903,8 +2933,8 @@ export default function CheckoutPage() {
                     }}
                     className={`rounded-xl py-4 text-xl font-black ${
                       paymentMethod === 'cash'
-                        ? 'bg-green-300 text-black ring-4 ring-green-500/40'
-                        : 'bg-green-100 text-black'
+                        ? 'bg-green-700 text-white ring-4 ring-green-500/40'
+                        : 'bg-green-600 text-white'
                     }`}
                   >
                     CASH <span className="text-2xl">💷</span>
@@ -2915,8 +2945,8 @@ export default function CheckoutPage() {
                     onClick={openCardPanel}
                     className={`rounded-xl py-4 text-xl font-black ${
                       paymentMethod === 'card'
-                        ? 'bg-sky-300 text-black ring-4 ring-sky-500/40'
-                        : 'bg-sky-100 text-black'
+                        ? 'bg-sky-700 text-white ring-4 ring-sky-500/40'
+                        : 'bg-sky-600 text-white'
                     }`}
                   >
                     <span className="inline-flex items-center justify-center gap-2">
@@ -2976,7 +3006,7 @@ export default function CheckoutPage() {
                 type="button"
                 disabled={saleBusy || basket.length === 0 || Number(cashTendered || 0) < displayedTotal}
                 onClick={() => completeSale('cash')}
-                className="mt-4 w-full rounded-xl bg-emerald-400 py-5 text-xl font-black text-black disabled:opacity-40"
+                className="mt-4 w-full rounded-xl bg-emerald-600 py-5 text-xl font-black text-white disabled:opacity-40"
               >
                 {saleBusy ? 'Saving…' : 'Complete Cash Sale'}
               </button>
@@ -3102,7 +3132,7 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   onClick={addManualEntryToBasket}
-                  className="rounded-lg bg-emerald-400 py-4 text-sm font-black text-black"
+                  className="rounded-lg bg-emerald-600 py-4 text-sm font-black text-white"
                 >
                   Add to basket
                 </button>
@@ -3203,7 +3233,7 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={completeManualCardSale}
                     disabled={saleBusy}
-                    className="w-full rounded-lg bg-emerald-500 px-4 py-4 text-lg font-black text-black disabled:opacity-40"
+                    className="w-full rounded-lg bg-emerald-600 px-4 py-4 text-lg font-black text-white disabled:opacity-40"
                   >
                     Record Manual Sale
                   </button>
@@ -3227,7 +3257,7 @@ export default function CheckoutPage() {
             <div
               className={`w-full max-w-md rounded-xl p-8 text-center shadow-2xl ${
                 paymentResultType === 'success'
-                  ? 'bg-emerald-500 text-black'
+                  ? 'bg-emerald-600 text-white'
                   : 'bg-red-500 text-white'
               }`}
             >
@@ -3266,3 +3296,4 @@ export default function CheckoutPage() {
     </StaffPermissionGate>
   )
 }
+

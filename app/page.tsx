@@ -32,6 +32,7 @@ type ScannedItem = {
   location_status?: string | null
   current_location?: string | null
   current_bin?: string | null
+  stock_locations?: StockLocationChoice[]
   loan_status?: string | null
   loaned_by?: string | null
   loaned_by_name?: string | null
@@ -67,6 +68,45 @@ type ReusableSkuResult = {
   current_bin?: string | null
 }
 
+type StockLocationChoice = {
+  id: string
+  item_id: string
+  sku: string | null
+  location_name: string
+  bin_code: string
+  stock_level: number
+}
+
+type LocationConfig = {
+  name: string
+  label: string | null
+  is_active: boolean
+  bin_mode: 'basic' | 'range' | null
+  basic_bins: string[] | null
+}
+
+function configuredLocationRows(rows: LocationConfig[]) {
+  const configured = rows.filter((row) => text(row.label) || /^LOCATION-\d+$/i.test(text(row.name)))
+  return configured.length > 0 ? configured : rows
+}
+
+type TransferLineDraft = {
+  item: ScannedItem
+  quantity: number | ''
+  sourceLocation: string
+  sourceBin: string
+  sourceChoices?: StockLocationChoice[]
+  selectedSourceId?: string
+}
+
+type TransferModalState = {
+  lines: TransferLineDraft[]
+  sourceLocation: string
+  destinationLocation: string
+  destinationBin: string
+  step: 'details' | 'confirm'
+}
+
 const CHANNEL_ICONS = [
   { key: 'ebay_status', name: 'eBay', src: 'https://www.ebay.co.uk/favicon.ico' },
   { key: 'linnworks_status', name: 'Linnworks', src: 'https://www.linnworks.com/favicon.ico' },
@@ -77,6 +117,40 @@ const CHANNEL_ICONS = [
   { key: 'depop_status', name: 'Depop', src: 'https://www.depop.com/favicon.ico' },
   { key: 'tiktok_shop_status', name: 'TikTok Shop', src: 'https://shop.tiktok.com/favicon.ico' },
 ] as const
+
+const WAREHOUSE_LOCATION = 'LOCATION-1'
+const IN_TRANSIT_LOCATION = 'IN_TRANSIT'
+const DEFAULT_BIN = 'Default'
+
+async function upsertStockLocationViaApi(params: {
+  itemId: string
+  sku: string
+  locationName: string
+  binCode: string
+  stockLevel: number
+  source: string
+}) {
+  const response = await fetch('/api/items/stock-location', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      item_id: params.itemId,
+      sku: params.sku,
+      location_name: params.locationName,
+      bin_code: params.binCode,
+      stock_level: params.stockLevel,
+      source: params.source,
+    }),
+  })
+
+  const result = await response.json()
+
+  if (!response.ok || result?.ok === false) {
+    throw new Error(result?.error || 'Stock location update failed.')
+  }
+
+  return result.row as StockLocationChoice
+}
 
 function getYearPrefix() {
   return new Date().getFullYear().toString().slice(-2)
@@ -146,6 +220,11 @@ function cleanReusableSku(value: string) {
   return value.trim().toUpperCase()
 }
 
+function text(value: any) {
+  if (value === null || value === undefined) return ''
+  return String(value).trim()
+}
+
 function escapePostgrestOrValue(value: string) {
   return value
     .replaceAll('\\', '\\\\')
@@ -154,8 +233,22 @@ function escapePostgrestOrValue(value: string) {
     .replaceAll(',', '\\,')
 }
 
+function canonicalLocationKey(value: string | null | undefined) {
+  return String(value || '').trim().toUpperCase().replace(/[\s_]+/g, '-')
+}
+
 function getReusableTitle(item: ReusableSkuResult) {
   return item.final_title || item.ai_title || item.basic_title || item.sku
+}
+
+function defaultDestinationBin(location: string) {
+  const value = canonicalLocationKey(location)
+  if (value === WAREHOUSE_LOCATION) return DEFAULT_BIN
+  return 'FLOOR'
+}
+
+function normaliseLocationForSave(location: string | null | undefined) {
+  return canonicalLocationKey(location) || WAREHOUSE_LOCATION
 }
 
 export default function SkuSearchPage() {
@@ -176,6 +269,166 @@ export default function SkuSearchPage() {
   const [reusablePrintOpen, setReusablePrintOpen] = useState(false)
   const [reusablePrintQty, setReusablePrintQty] = useState(1)
   const [reusablePrintItem, setReusablePrintItem] = useState<ReusableSkuResult | null>(null)
+  const [locationConfigs, setLocationConfigs] = useState<LocationConfig[]>([])
+  const [transferModal, setTransferModal] = useState<TransferModalState | null>(null)
+
+  useEffect(() => {
+    fetchLocationConfigs()
+  }, [])
+
+  async function fetchLocationConfigs() {
+    const { data, error } = await supabase
+      .from('locations')
+      .select('name, label, is_active, bin_mode, basic_bins')
+      .eq('is_active', true)
+      .order('name', { ascending: true })
+
+    if (!error) {
+      setLocationConfigs(configuredLocationRows((data || []) as LocationConfig[]))
+    }
+  }
+
+  function getLocationConfig(location: string | null | undefined) {
+    const key = canonicalLocationKey(location)
+    return locationConfigs.find((config) => {
+      return (
+        canonicalLocationKey(config.name) === key ||
+        canonicalLocationKey(config.label) === key
+      )
+    })
+  }
+
+  function isInTransitLocation(location: string | null | undefined) {
+    const key = canonicalLocationKey(location)
+    return (
+      key === 'IN-TRANSIT' ||
+      key === 'IN-TRANSIT-TO-SHOP' ||
+      key === 'IN-TRANSIT-TO-WAREHOUSE'
+    )
+  }
+
+  function resolveLocationName(location: string | null | undefined) {
+    if (isInTransitLocation(location)) return IN_TRANSIT_LOCATION
+    const key = canonicalLocationKey(location)
+    const config = getLocationConfig(location)
+    return text(config?.name) || key || WAREHOUSE_LOCATION
+  }
+
+  function displayLocation(location: string | null | undefined) {
+    if (isInTransitLocation(location)) return 'IN TRANSIT'
+    const name = resolveLocationName(location)
+    const config = getLocationConfig(name)
+    return text(config?.label) || name || '-'
+  }
+
+  function activeLocationOptions() {
+    if (locationConfigs.length > 0) return locationConfigs
+
+    return [
+      {
+        name: WAREHOUSE_LOCATION,
+        label: 'WAREHOUSE',
+        is_active: true,
+        bin_mode: 'range',
+        basic_bins: [DEFAULT_BIN],
+      } as LocationConfig,
+    ]
+  }
+
+  function getBasicBins(location: string) {
+    const config = getLocationConfig(location)
+    if (config?.bin_mode !== 'basic') return []
+
+    return (config.basic_bins || [])
+      .map((bin) => text(bin).toUpperCase())
+      .filter(Boolean)
+      .slice(0, 3)
+  }
+
+  function aggregateStockRowsForDisplay(rows: StockLocationChoice[]) {
+    const grouped = new Map<string, StockLocationChoice>()
+
+    rows.forEach((row) => {
+      const location = resolveLocationName(row.location_name)
+      const bin = text(row.bin_code) || DEFAULT_BIN
+      const key = `${canonicalLocationKey(location)}::${bin.toUpperCase()}`
+      const existing = grouped.get(key)
+
+      if (existing) {
+        grouped.set(key, {
+          ...existing,
+          stock_level: Number(existing.stock_level || 0) + Number(row.stock_level || 0),
+        })
+        return
+      }
+
+      grouped.set(key, {
+        ...row,
+        location_name: location,
+        bin_code: bin,
+        stock_level: Number(row.stock_level || 0),
+      })
+    })
+
+    return Array.from(grouped.values())
+  }
+
+  async function getInTransitStockRowsForSku(sku: string, itemId?: string | null) {
+    const cleanSku = text(sku).toUpperCase()
+    if (!cleanSku) return []
+
+    let query = supabase
+      .from('stock_transfer_items')
+      .select('id, item_id, sku, source_bin, status, stock_transfers!inner(from_location, status)')
+      .eq('sku', cleanSku)
+      .eq('status', 'in_transfer')
+      .eq('stock_transfers.status', 'sent')
+
+    if (itemId) {
+      query = query.eq('item_id', itemId)
+    }
+
+    const { data, error } = await query
+    if (error) return []
+
+    const sourceCounts = new Map<string, StockLocationChoice>()
+    let total = 0
+
+    ;((data || []) as any[]).forEach((row) => {
+      const transfer = Array.isArray(row.stock_transfers)
+        ? row.stock_transfers[0]
+        : row.stock_transfers
+      const sourceLocation = resolveLocationName(transfer?.from_location || WAREHOUSE_LOCATION)
+      const sourceBin = text(row.source_bin) || DEFAULT_BIN
+      const key = `${sourceLocation}::${sourceBin.toUpperCase()}`
+      const existing = sourceCounts.get(key)
+      total += 1
+
+      sourceCounts.set(key, {
+        id: `in-transit-source-${key}`,
+        item_id: text(row.item_id),
+        sku: cleanSku,
+        location_name: sourceLocation,
+        bin_code: sourceBin,
+        stock_level: Number(existing?.stock_level || 0) - 1,
+      })
+    })
+
+    const rows = Array.from(sourceCounts.values())
+
+    if (total > 0) {
+      rows.push({
+        id: `in-transit-${cleanSku}`,
+        item_id: itemId || '',
+        sku: cleanSku,
+        location_name: IN_TRANSIT_LOCATION,
+        bin_code: 'Pending Transfer',
+        stock_level: total,
+      })
+    }
+
+    return rows
+  }
 
   const selectedItems = useMemo(
     () => scannedItems.filter((item) => item.selected),
@@ -232,15 +485,7 @@ export default function SkuSearchPage() {
   const allSelected =
     scannedItems.length > 0 && scannedItems.every((item) => item.selected)
 
-  const showTransferToShop =
-    selectedCount > 0 &&
-    !hasSelectedLoanItems &&
-    selectedItems.some((item) => item.current_location !== 'SHOP-1')
-
-  const showTransferToWarehouse =
-    selectedCount > 0 &&
-    !hasSelectedLoanItems &&
-    selectedItems.some((item) => item.current_location !== 'WAREHOUSE')
+  const canTransferStock = selectedCount > 0 && !hasSelectedLoanItems
 
   async function getStaffName(staffId?: string | null) {
     if (!staffId) return null
@@ -269,9 +514,9 @@ export default function SkuSearchPage() {
         status: 'working',
         stock_level: 1,
         sku_type: 'single_use',
-        location_status: 'unknown',
-        current_location: null,
-        current_bin: null,
+        location_status: 'stored',
+        current_location: WAREHOUSE_LOCATION,
+        current_bin: 'Default',
         loan_status: 'not_on_loan',
         ebay_status: 'not_listed',
         linnworks_status: 'not_synced',
@@ -292,7 +537,63 @@ export default function SkuSearchPage() {
       return null
     }
 
+    try {
+      await upsertStockLocationViaApi({
+        itemId: data.id,
+        sku: data.sku,
+        locationName: WAREHOUSE_LOCATION,
+        binCode: DEFAULT_BIN,
+        stockLevel: 1,
+        source: 'sku_search_create',
+      })
+    } catch (error: any) {
+      setMessage(`Created item, but stock-location row failed: ${error.message}`)
+    }
+
     return data
+  }
+
+  async function getStockRowsForItem(itemData: any, sku: string) {
+    const rows = new Map<string, StockLocationChoice>()
+
+    if (itemData?.id) {
+      const { data, error } = await supabase
+        .from('item_stock_locations')
+        .select('id, item_id, sku, location_name, bin_code, stock_level')
+        .eq('item_id', itemData.id)
+
+      if (error) throw new Error(error.message)
+
+      ;((data || []) as StockLocationChoice[]).forEach((row) => rows.set(row.id, row))
+    }
+
+    const cleanSku = text(sku).toUpperCase()
+
+    if (cleanSku) {
+      const { data, error } = await supabase
+        .from('item_stock_locations')
+        .select('id, item_id, sku, location_name, bin_code, stock_level')
+        .eq('sku', cleanSku)
+
+      if (error) throw new Error(error.message)
+
+      ;((data || []) as StockLocationChoice[]).forEach((row) => rows.set(row.id, row))
+    }
+
+    const inTransitRows = await getInTransitStockRowsForSku(sku, itemData?.id)
+
+    return aggregateStockRowsForDisplay([...Array.from(rows.values()), ...inTransitRows]).sort((a, b) => {
+      const locationCompare = displayLocation(a.location_name).localeCompare(displayLocation(b.location_name))
+      if (locationCompare !== 0) return locationCompare
+      return text(a.bin_code).localeCompare(text(b.bin_code))
+    })
+  }
+
+  async function ensurePrimaryStockLocationRow(itemData: any, sku: string) {
+    if (!itemData?.id) return []
+
+    const existingRows = await getStockRowsForItem(itemData, sku)
+    return existingRows
   }
 
   async function handleScan() {
@@ -409,6 +710,8 @@ export default function SkuSearchPage() {
     const firstImage =
       firstImageRecord?.processed_url || firstImageRecord?.original_url || null
 
+    const stockLocations = itemData ? await ensurePrimaryStockLocationRow(itemData, itemData.sku || rawSku) : []
+
     const newItem: ScannedItem = {
       id: itemData?.id || null,
       sku: itemData?.sku || rawSku,
@@ -427,8 +730,9 @@ export default function SkuSearchPage() {
       stock_level: itemData?.stock_level ?? 1,
       sku_type: itemData?.sku_type || 'single_use',
       location_status: itemData?.location_status || 'unknown',
-      current_location: itemData?.current_location || null,
+      current_location: resolveLocationName(itemData?.current_location || null),
       current_bin: itemData?.current_bin || null,
+      stock_locations: stockLocations,
       loan_status: itemData?.loan_status || 'not_on_loan',
       loaned_by: itemData?.loaned_by || null,
       loaned_by_name: loanedByName,
@@ -497,7 +801,64 @@ export default function SkuSearchPage() {
     router.push('/scanner/loan')
   }
 
-  async function moveSelected(to: 'warehouse' | 'shop') {
+  async function getReusableStockChoices(item: ScannedItem) {
+    const rows = new Map<string, StockLocationChoice>()
+
+    if (item.id) {
+      const { data, error } = await supabase
+        .from('item_stock_locations')
+        .select('id, item_id, sku, location_name, bin_code, stock_level')
+        .eq('item_id', item.id)
+        .gt('stock_level', 0)
+        .order('location_name', { ascending: true })
+
+      if (error) throw new Error(error.message)
+
+      ;((data || []) as StockLocationChoice[]).forEach((row) => {
+        rows.set(row.id, row)
+      })
+    }
+
+    const sku = text(item.sku).toUpperCase()
+
+    if (sku) {
+      const { data, error } = await supabase
+        .from('item_stock_locations')
+        .select('id, item_id, sku, location_name, bin_code, stock_level')
+        .eq('sku', sku)
+        .gt('stock_level', 0)
+        .order('location_name', { ascending: true })
+
+      if (error) throw new Error(error.message)
+
+      ;((data || []) as StockLocationChoice[]).forEach((row) => {
+        rows.set(row.id, row)
+      })
+    }
+
+    const inTransitRows = await getInTransitStockRowsForSku(sku, item.id)
+    const foundRows = aggregateStockRowsForDisplay([...Array.from(rows.values()), ...inTransitRows])
+      .filter((row) => !isInTransitLocation(row.location_name))
+      .filter((row) => Number(row.stock_level || 0) > 0)
+      .sort((a, b) => {
+      const locationCompare = displayLocation(a.location_name).localeCompare(displayLocation(b.location_name))
+      if (locationCompare !== 0) return locationCompare
+      return text(a.bin_code).localeCompare(text(b.bin_code))
+      })
+
+    if (foundRows.length > 0) return foundRows
+
+    const fallbackStock = Number(item.stock_level || 0)
+    if (fallbackStock > 0 && item.id) {
+      return []
+    }
+
+    return []
+  }
+
+  async function openTransferModal() {
+    setMessage('')
+
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
@@ -520,16 +881,181 @@ export default function SkuSearchPage() {
       return
     }
 
-    const fromLocation = to === 'warehouse' ? 'SHOP-1' : 'WAREHOUSE'
-    const toLocation = to === 'warehouse' ? 'WAREHOUSE' : 'SHOP-1'
-    const inTransitLocation =
-      to === 'warehouse' ? 'IN-TRANSIT-TO-WAREHOUSE' : 'IN-TRANSIT-TO-SHOP'
+    const transferLines: {
+      item: ScannedItem
+      quantity: number | ''
+      sourceLocation: string
+      sourceBin: string
+      sourceChoices?: StockLocationChoice[]
+      selectedSourceId?: string
+    }[] = []
 
-    const confirmedTransfer = window.confirm(
-      `Transfer stock OK?\n\n${existingItems.length} item(s) will be transferred to ${toLocation}.`
+    setBusy(true)
+    setMessage('Preparing transfer...')
+
+    try {
+      for (const item of existingItems) {
+        const choices = await getReusableStockChoices(item)
+        const choice = choices[0]
+
+        if (choice) {
+          transferLines.push({
+            item,
+            quantity: 1,
+            sourceLocation: choice.location_name,
+            sourceBin: choice.bin_code || DEFAULT_BIN,
+            sourceChoices: choices,
+            selectedSourceId: choice.id,
+          })
+        } else {
+          transferLines.push({
+            item,
+            quantity: 1,
+            sourceLocation: resolveLocationName(item.current_location),
+            sourceBin: item.current_bin || DEFAULT_BIN,
+          })
+        }
+      }
+    } catch (error: any) {
+      setBusy(false)
+      setMessage(error.message || 'Could not prepare transfer.')
+      return
+    }
+
+    setBusy(false)
+    setMessage('')
+
+    const sourceKeys = new Set(
+      transferLines.map((line) => canonicalLocationKey(resolveLocationName(line.sourceLocation)))
+    )
+    const availableDestinations = activeLocationOptions().filter(
+      (location) => !sourceKeys.has(canonicalLocationKey(resolveLocationName(location.name)))
+    )
+    const defaultDestination =
+      availableDestinations.find((location) => location.bin_mode === 'basic') ||
+      availableDestinations[0] ||
+      activeLocationOptions()[0]
+    const destinationLocation = defaultDestination?.name || WAREHOUSE_LOCATION
+    const bins = getBasicBins(destinationLocation)
+
+    setTransferModal({
+      lines: transferLines,
+      sourceLocation: transferLines[0]?.sourceLocation || WAREHOUSE_LOCATION,
+      destinationLocation,
+      destinationBin: bins[0] || defaultDestinationBin(destinationLocation),
+      step: 'details',
+    })
+  }
+
+  function updateTransferLine(index: number, updates: Partial<TransferLineDraft>) {
+    setTransferModal((current) => {
+      if (!current) return current
+
+      const lines = current.lines.map((line, lineIndex) =>
+        lineIndex === index ? { ...line, ...updates } : line
+      )
+
+      return { ...current, lines }
+    })
+  }
+
+  function selectTransferSource(index: number, choice: StockLocationChoice) {
+    setTransferModal((current) => {
+      if (!current) return current
+
+      const lines = current.lines.map((line, lineIndex) =>
+        lineIndex === index
+          ? {
+              ...line,
+              selectedSourceId: choice.id,
+              sourceLocation: choice.location_name,
+              sourceBin: choice.bin_code || DEFAULT_BIN,
+              quantity: 1,
+            }
+          : line
+      )
+      const sourceKeys = new Set(
+        lines.map((line) => canonicalLocationKey(resolveLocationName(line.sourceLocation)))
+      )
+      const destinationStillAllowed = !sourceKeys.has(
+        canonicalLocationKey(resolveLocationName(current.destinationLocation))
+      )
+
+      if (destinationStillAllowed) return { ...current, lines }
+
+      const nextDestination =
+        activeLocationOptions().find(
+          (location) => !sourceKeys.has(canonicalLocationKey(resolveLocationName(location.name)))
+        ) || activeLocationOptions()[0]
+      const destinationLocation = nextDestination?.name || WAREHOUSE_LOCATION
+      const bins = getBasicBins(destinationLocation)
+
+      return {
+        ...current,
+        lines,
+        destinationLocation,
+        destinationBin: bins[0] || defaultDestinationBin(destinationLocation),
+      }
+    })
+  }
+
+  function selectTransferDestination(location: string) {
+    const bins = getBasicBins(location)
+
+    setTransferModal((current) =>
+      current
+        ? {
+            ...current,
+            destinationLocation: location,
+            destinationBin: bins[0] || defaultDestinationBin(location),
+          }
+        : current
+    )
+  }
+
+  function transferDestinationOptions(modal: TransferModalState) {
+    const sourceKeys = new Set(
+      modal.lines.map((line) => canonicalLocationKey(resolveLocationName(line.sourceLocation)))
     )
 
-    if (!confirmedTransfer) return
+    return activeLocationOptions().filter(
+      (location) => !sourceKeys.has(canonicalLocationKey(resolveLocationName(location.name)))
+    )
+  }
+
+  async function submitTransferModal() {
+    if (!transferModal || !staff) return
+
+    const transferLines = transferModal.lines
+
+    const sourceLocations = Array.from(
+      new Set(transferLines.map((line) => canonicalLocationKey(line.sourceLocation)))
+    )
+
+    if (sourceLocations.length !== 1) {
+      setMessage('Selected stock comes from more than one location. Create one transfer per source location.')
+      return
+    }
+
+    for (const line of transferLines) {
+      const sourceChoice = line.sourceChoices?.find((choice) => choice.id === line.selectedSourceId)
+
+      const quantity = Number(line.quantity || 0)
+
+      if (sourceChoice && (quantity < 1 || quantity > Number(sourceChoice.stock_level || 0))) {
+        setMessage(`${line.item.sku} quantity must be between 1 and ${sourceChoice.stock_level}.`)
+        return
+      }
+    }
+
+    const fromLocation = transferLines[0].sourceLocation
+    const toLocation = transferModal.destinationLocation
+    const inTransitLocation =
+      canonicalLocationKey(toLocation) === WAREHOUSE_LOCATION ? 'IN-TRANSIT-TO-WAREHOUSE' : 'IN-TRANSIT-TO-SHOP'
+    const totalQuantity = transferLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0)
+    const singleUseTransferLines = transferLines.filter(
+      (line) => !line.sourceChoices || line.sourceChoices.length === 0
+    )
 
     const now = new Date().toISOString()
 
@@ -557,12 +1083,15 @@ export default function SkuSearchPage() {
     const { error: transferItemsError } = await supabase
       .from('stock_transfer_items')
       .insert(
-        existingItems.map((item) => ({
-          transfer_id: transfer.id,
-          item_id: item.id,
-          sku: item.sku,
-          status: 'in_transfer',
-        }))
+        transferLines.flatMap((line) =>
+          Array.from({ length: Number(line.quantity || 0) }, () => ({
+            transfer_id: transfer.id,
+            item_id: line.item.id,
+            sku: line.item.sku,
+            source_bin: line.sourceBin,
+            status: 'in_transfer',
+          }))
+        )
       )
 
     if (transferItemsError) {
@@ -571,24 +1100,27 @@ export default function SkuSearchPage() {
       return
     }
 
-    const { error: itemUpdateError } = await supabase
-      .from('items')
-      .update({
-        location_status: 'in_transfer',
-        current_location: inTransitLocation,
-        current_bin: inTransitLocation,
-        last_saved_by: staff.id,
-        updated_at: now,
-      })
-      .in(
-        'id',
-        existingItems.map((item) => item.id)
-      )
+    const singleUseTransferIds = singleUseTransferLines
+      .map((line) => line.item.id)
+      .filter(Boolean)
 
-    if (itemUpdateError) {
-      setBusy(false)
-      setMessage(itemUpdateError.message)
-      return
+    if (singleUseTransferIds.length > 0) {
+      const { error: itemUpdateError } = await supabase
+        .from('items')
+        .update({
+          location_status: 'in_transfer',
+          current_location: inTransitLocation,
+          current_bin: inTransitLocation,
+          last_saved_by: staff.id,
+          updated_at: now,
+        })
+        .in('id', singleUseTransferIds)
+
+      if (itemUpdateError) {
+        setBusy(false)
+        setMessage(itemUpdateError.message)
+        return
+      }
     }
 
     setScannedItems((prev) =>
@@ -596,9 +1128,18 @@ export default function SkuSearchPage() {
         item.selected && item.id
           ? {
               ...item,
-              location_status: 'in_transfer',
-              current_location: inTransitLocation,
-              current_bin: inTransitLocation,
+              location_status:
+                transferLines.some((line) => line.item.id === item.id && line.sourceChoices?.length)
+                  ? item.location_status
+                  : 'in_transfer',
+              current_location:
+                transferLines.some((line) => line.item.id === item.id && line.sourceChoices?.length)
+                  ? item.current_location
+                  : inTransitLocation,
+              current_bin:
+                transferLines.some((line) => line.item.id === item.id && line.sourceChoices?.length)
+                  ? item.current_bin
+                  : inTransitLocation,
               selected: false,
             }
           : item
@@ -606,20 +1147,13 @@ export default function SkuSearchPage() {
     )
 
     setBusy(false)
+    setTransferModal(null)
 
     const paddedTransferNumber = String(transfer.transfer_number).padStart(7, '0')
 
     setMessage(
-      `Created transfer #${paddedTransferNumber} for ${existingItems.length} item(s) by ${staff.name}.`
+      `Created transfer #${paddedTransferNumber} for ${totalQuantity} unit(s) by ${staff.name}.`
     )
-
-    const printManifest = window.confirm(
-      `Transfer #${paddedTransferNumber} created.\n\nPrint manifest now?`
-    )
-
-    if (printManifest) {
-      window.open(`/transfers/${transfer.id}/manifest`, '_blank')
-    }
   }
 
   function reprintSelectedLabels() {
@@ -976,9 +1510,9 @@ export default function SkuSearchPage() {
           stock_level: 0,
           shop_floor_stock: 0,
           warehouse_stock: 0,
-          location_status: 'unknown',
-          current_location: null,
-          current_bin: null,
+          location_status: 'stored',
+          current_location: WAREHOUSE_LOCATION,
+          current_bin: 'Default',
           loan_status: 'not_on_loan',
           ebay_status: 'not_listed',
           linnworks_status: 'not_synced',
@@ -1064,12 +1598,12 @@ export default function SkuSearchPage() {
 
   return (
     <main className="min-h-screen bg-neutral-950 p-5 text-white">
-      <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-        <div className="flex flex-wrap items-center gap-4">
+      <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold">SKU Search</h1>
+            <h1 className="text-2xl font-black tracking-normal">SKU Search</h1>
 
-            <p className="text-sm text-neutral-400">
+            <p className="text-sm text-neutral-300">
               Scan SKUs, preview labels, move location, and open items for editing.
             </p>
 
@@ -1158,23 +1692,13 @@ export default function SkuSearchPage() {
               </button>
             )}
 
-            {showTransferToWarehouse && (
+            {canTransferStock && (
               <button
-                onClick={() => moveSelected('warehouse')}
+                onClick={openTransferModal}
                 disabled={busy || !staff || selectedCount === 0}
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-black text-white disabled:opacity-40"
               >
-                Transfer to Warehouse
-              </button>
-            )}
-
-            {showTransferToShop && (
-              <button
-                onClick={() => moveSelected('shop')}
-                disabled={busy || !staff || selectedCount === 0}
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
-              >
-                Transfer to Shop
+                Transfer Stock
               </button>
             )}
 
@@ -1213,6 +1737,9 @@ export default function SkuSearchPage() {
 
           {scannedItems.map((item) => {
             const isOnLoan = item.loan_status === 'on_loan'
+            const visibleStockRows = (item.stock_locations || []).filter(
+              (row) => Number(row.stock_level || 0) > 0
+            )
 
             return (
               <div
@@ -1277,16 +1804,18 @@ export default function SkuSearchPage() {
                                 Loaned by: {item.loaned_by_name || 'Unknown'}
                               </span>
                             </>
-                          ) : (
+                          ) : visibleStockRows.length === 0 ? (
                             <>
                               <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
-                                {item.current_location || 'No location'}
+                                {displayLocation(item.current_location)}
                               </span>
 
                               <span className="rounded-full bg-neutral-900 px-2 py-1 text-neutral-300">
                                 {item.current_bin || 'No bin/rack'}
                               </span>
                             </>
+                          ) : (
+                            null
                           )}
 
                           {typeof item.selling_price === 'number' && (
@@ -1301,6 +1830,19 @@ export default function SkuSearchPage() {
                             </span>
                           )}
                         </div>
+
+                        {visibleStockRows.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            {visibleStockRows.map((row) => (
+                                <span
+                                  key={row.id}
+                                  className="rounded-full bg-emerald-950 px-2 py-1 font-bold text-emerald-200"
+                                >
+                                  {displayLocation(row.location_name)} / {row.bin_code || DEFAULT_BIN}: {row.stock_level}
+                                </span>
+                              ))}
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex flex-col gap-1 rounded-lg bg-neutral-900 p-1">
@@ -1420,7 +1962,7 @@ export default function SkuSearchPage() {
                 createReusableSku()
               }}
               disabled={reusableBusy || !staff || !reusableSearch.trim()}
-              className="rounded-xl bg-emerald-400 px-4 py-2 font-semibold text-black disabled:opacity-50"
+              className="rounded-xl bg-emerald-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
             >
               {exactReusableMatch ? 'Edit' : 'Create'}
             </button>
@@ -1485,7 +2027,7 @@ export default function SkuSearchPage() {
                             {getReusableTitle(item)}
                           </h3>
                           <p className="mt-1 text-xs text-neutral-400">
-                            {[item.brand, item.reporting_category, item.current_location || 'No location']
+                            {[item.brand, item.reporting_category, displayLocation(item.current_location)]
                               .filter(Boolean)
                               .join(' · ')}
                           </p>
@@ -1511,6 +2053,227 @@ export default function SkuSearchPage() {
         </div>
       </section>
 
+
+      {transferModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-neutral-700 bg-neutral-900 p-5 text-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-black">Transfer Stock</h2>
+                <p className="mt-1 text-sm text-neutral-400">
+                  Choose the destination and confirm the stock quantities.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setTransferModal(null)}
+                className="rounded-xl border border-neutral-700 px-3 py-2 text-sm font-black text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              <p className="text-xs font-black uppercase text-neutral-500">
+                Stock Lines
+              </p>
+              {transferModal.lines.map((line, index) => {
+                const selectedSource = line.sourceChoices?.find(
+                  (choice) => choice.id === line.selectedSourceId
+                )
+                const maxQuantity = selectedSource?.stock_level || 1
+
+                return (
+                  <div
+                    key={`${line.item.sku}-${index}`}
+                    className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-mono text-sm font-black">{line.item.sku}</p>
+                        <p className="text-xs text-neutral-400">
+                          {line.item.brand || line.item.basic_title || line.item.ai_title || 'Stock item'}
+                        </p>
+                      </div>
+
+                      <label className="flex items-center gap-2 text-sm font-bold">
+                        Qty
+                        <input
+                          type="number"
+                          min={1}
+                          max={maxQuantity}
+                          value={line.quantity}
+                          onChange={(event) => {
+                            const value = event.target.value
+                            updateTransferLine(index, {
+                              quantity: value === '' ? '' : Math.floor(Number(value)),
+                            })
+                          }}
+                          onBlur={() =>
+                            updateTransferLine(index, {
+                              quantity: Math.min(
+                                maxQuantity,
+                                Math.max(1, Math.floor(Number(line.quantity) || 1))
+                              ),
+                            })
+                          }
+                          className="w-20 rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-2 text-white"
+                        />
+                      </label>
+                    </div>
+
+                    {line.sourceChoices && line.sourceChoices.length > 1 ? (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {line.sourceChoices.map((choice) => (
+                          <button
+                            key={choice.id}
+                            type="button"
+                            onClick={() => selectTransferSource(index, choice)}
+                            className={`rounded-lg border px-3 py-2 text-left text-xs font-bold ${
+                              line.selectedSourceId === choice.id
+                                ? 'border-blue-400 bg-blue-700 text-white'
+                                : 'border-neutral-700 bg-neutral-900 text-white hover:border-white'
+                            }`}
+                          >
+                            {displayLocation(choice.location_name)} / {choice.bin_code}
+                            <span className="ml-2 text-neutral-300">
+                              {choice.stock_level} available
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-neutral-400">
+                        From {displayLocation(line.sourceLocation)} / {line.sourceBin}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="mt-5">
+              <p className="mb-2 text-xs font-black uppercase text-neutral-500">
+                Destination Location
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {transferDestinationOptions(transferModal).map((location) => {
+                  const selected =
+                    canonicalLocationKey(location.name) ===
+                    canonicalLocationKey(transferModal.destinationLocation)
+
+                  return (
+                    <button
+                      key={location.name}
+                      type="button"
+                      onClick={() => selectTransferDestination(location.name)}
+                      className={`rounded-xl border px-4 py-3 text-left text-sm font-black ${
+                        selected
+                          ? 'border-emerald-400 bg-emerald-700 text-white'
+                          : 'border-neutral-700 bg-neutral-950 text-white hover:border-white'
+                      }`}
+                    >
+                      {displayLocation(location.name)}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <p className="mb-2 text-xs font-black uppercase text-neutral-500">
+                Destination Bin
+              </p>
+              {getBasicBins(transferModal.destinationLocation).length > 0 ? (
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {getBasicBins(transferModal.destinationLocation).map((bin) => (
+                    <button
+                      key={bin}
+                      type="button"
+                      onClick={() =>
+                        setTransferModal((current) =>
+                          current ? { ...current, destinationBin: bin } : current
+                        )
+                      }
+                      className={`rounded-xl border px-4 py-3 text-sm font-black ${
+                        transferModal.destinationBin === bin
+                          ? 'border-emerald-400 bg-emerald-700 text-white'
+                          : 'border-neutral-700 bg-neutral-950 text-white hover:border-white'
+                      }`}
+                    >
+                      {bin}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    { label: 'Default', value: DEFAULT_BIN },
+                    { label: 'Allocate Individual on receipt', value: 'ALLOCATE_INDIVIDUAL' },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() =>
+                        setTransferModal((current) =>
+                          current ? { ...current, destinationBin: option.value } : current
+                        )
+                      }
+                      className={`rounded-xl border px-4 py-3 text-sm font-black ${
+                        transferModal.destinationBin === option.value
+                          ? 'border-emerald-400 bg-emerald-700 text-white'
+                          : 'border-neutral-700 bg-neutral-950 text-white hover:border-white'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 rounded-xl border border-neutral-800 bg-black/30 p-4 text-sm text-neutral-300">
+              <span className="font-black text-white">
+                {transferModal.lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0)}
+              </span>{' '}
+              unit(s) from{' '}
+              <span className="font-black text-white">
+                {displayLocation(transferModal.lines[0]?.sourceLocation)}
+              </span>{' '}
+              to{' '}
+              <span className="font-black text-white">
+                {displayLocation(transferModal.destinationLocation)}
+              </span>{' '}
+              /{' '}
+              <span className="font-black text-white">
+                {transferModal.destinationBin === 'ALLOCATE_INDIVIDUAL'
+                  ? 'Allocate Individual'
+                  : transferModal.destinationBin}
+              </span>
+            </div>
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setTransferModal(null)}
+                className="rounded-xl border border-neutral-700 px-4 py-3 font-black text-white"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={submitTransferModal}
+                disabled={busy}
+                className="rounded-xl bg-emerald-600 px-4 py-3 font-black text-white disabled:opacity-50"
+              >
+                {busy ? 'Creating...' : 'Create Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {reusablePrintOpen && reusablePrintItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -1564,3 +2327,4 @@ export default function SkuSearchPage() {
     </main>
   )
 }
+

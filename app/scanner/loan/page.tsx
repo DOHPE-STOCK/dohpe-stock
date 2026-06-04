@@ -99,10 +99,35 @@ function parseBinScan(value: string) {
   return cleanScan(cleaned)
 }
 
+function parseLocationScan(value: string) {
+  const cleaned = value.trim()
+  const match = cleaned.match(/[?&]location=([^&#]+)/i)
+
+  if (match?.[1]) {
+    return decodeURIComponent(match[1]).trim().toUpperCase()
+  }
+
+  const locationNameMatch = cleaned.match(/[?&]locationName=([^&#]+)/i)
+
+  if (locationNameMatch?.[1]) {
+    return decodeURIComponent(locationNameMatch[1]).trim().toUpperCase()
+  }
+
+  return ''
+}
+
 function splitLocationBin(binScan: string) {
+  const scannedLocation = parseLocationScan(binScan)
   const clean = parseBinScan(binScan)
 
   if (!clean) return { location: '', bin: '' }
+
+  if (scannedLocation) {
+    return {
+      location: scannedLocation,
+      bin: clean,
+    }
+  }
 
   if (clean.includes('/')) {
     const [location, ...rest] = clean.split('/')
@@ -371,11 +396,33 @@ export default function LoanPage() {
     if (!pendingReturn || !staff) return
 
     if (pendingReturn.step === 'scan_bin') {
-      const parsed = splitLocationBin(scanned)
+      let parsed = splitLocationBin(scanned)
 
       if (!parsed.location || !parsed.bin) {
         setMessage('Could not read bin. Scan a bin QR/label first.')
         return
+      }
+
+      const scannedClean = cleanScan(scanned)
+      const scanIncludedLocation =
+        Boolean(parseLocationScan(scanned)) ||
+        scannedClean.includes('/') ||
+        scannedClean.startsWith('SHOP-') ||
+        scannedClean.startsWith('LOCATION-') ||
+        scannedClean.startsWith('WAREHOUSE-')
+
+      if (!scanIncludedLocation) {
+        const answer = window.prompt(
+          `Which location is bin ${parsed.bin} in?\n\nUse LOCATION-1 to LOCATION-5, WAREHOUSE, SHOP-1, SHOP-2 etc.`,
+          'WAREHOUSE'
+        )
+
+        if (answer === null) return
+
+        parsed = {
+          ...parsed,
+          location: answer.trim().toUpperCase() || 'WAREHOUSE',
+        }
       }
 
       setPendingReturn({
@@ -465,12 +512,12 @@ export default function LoanPage() {
         onClick={focusInput}
       >
         <div className="mx-auto max-w-5xl space-y-4">
-          <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+          <header className="app-header rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <h1 className="text-2xl font-bold sm:text-3xl">Loans</h1>
+                <h1 className="text-2xl font-black tracking-normal sm:text-3xl">Loans</h1>
 
-                <p className="text-sm text-neutral-400">
+                <p className="text-sm text-neutral-300">
                   Loan-out asks which location/bin to deduct from if stock exists in more than one place. Return requires scanning destination bin first, then item barcode/SKU.
                 </p>
 
@@ -724,3 +771,4 @@ export default function LoanPage() {
     </StaffPermissionGate>
   )
 }
+

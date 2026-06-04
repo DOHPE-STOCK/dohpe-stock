@@ -80,7 +80,7 @@ function getChannelMeta(channel: string) {
 }
 
 function statusText(status: string) {
-  return status.replaceAll('_', ' ')
+  return (status || 'not_connected').replaceAll('_', ' ')
 }
 
 function statusClass(status: string) {
@@ -264,12 +264,14 @@ export default function IntegrationsSettingsPage() {
   return (
     <StaffPermissionGate permission="integrations">
       <main className="min-h-screen bg-neutral-950 p-5 text-white">
-        <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="flex flex-wrap items-center gap-4">
+        <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
             <div>
-              <h1 className="text-2xl font-bold">Channel Integrations</h1>
+              <h1 className="text-2xl font-black tracking-normal">
+                Channel Integrations
+              </h1>
 
-              <p className="text-sm text-neutral-400">
+              <p className="text-sm text-neutral-300">
                 Enable channels, control auto-sync, and check connection status.
               </p>
             </div>
@@ -323,7 +325,9 @@ export default function IntegrationsSettingsPage() {
                           <img
                             src={channel.src}
                             alt=""
-                            className={`h-7 w-7 rounded-sm ${iconOpacity(integration)}`}
+                            className={`h-7 w-7 rounded-sm ${iconOpacity(
+                              integration
+                            )}`}
                           />
                         ) : (
                           <span className="text-lg font-black">
@@ -370,14 +374,16 @@ export default function IntegrationsSettingsPage() {
                         {integration.last_synced_at && (
                           <p className="mt-3 text-xs text-neutral-500">
                             Last synced:{' '}
-                            {new Date(integration.last_synced_at).toLocaleString()}
+                            {new Date(
+                              integration.last_synced_at
+                            ).toLocaleString()}
                           </p>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="mt-4 flex flex-wrap gap-2 border-t border-neutral-800 pt-4">
+                  <div className="mt-5 flex flex-wrap gap-2">
                     <label className="flex items-center gap-2 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-2 text-sm font-semibold">
                       <input
                         type="checkbox"

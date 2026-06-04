@@ -1,12 +1,27 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 
 export const dynamic = 'force-dynamic'
 
 const WAREHOUSE_LOCATION = 'WAREHOUSE'
+const WAREHOUSE_STORAGE_LOCATION = 'LOCATION-1'
 const WAREHOUSE_BIN = 'Default'
 const TRANSFER_REASON = 'online_order_pick'
 const ACTIVE_TRANSFER_ITEM_STATUSES = ['pending_pick', 'picked']
+const RELEASE_ALLOWED_TRANSFER_STATUSES = ['pending_pick']
+
+const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
+let activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
 
 type TrackedSale = {
   id: string
@@ -14,6 +29,7 @@ type TrackedSale = {
   sku: string | null
   current_status: string | null
   stock_deducted: boolean | null
+  stock_deductions?: any[] | null
 }
 
 function getSupabaseAdmin() {
@@ -25,6 +41,27 @@ function getSupabaseAdmin() {
   }
 
   return createClient(url, serviceKey)
+}
+
+async function loadLocationMappings(supabase: any) {
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
+
+  if (error) return DEFAULT_LOCATION_MAPPINGS
+
+  const saved = data?.settings?.location_mapping || data?.settings?.location_mappings || {}
+  const mappings: Record<string, string> = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const key = normaliseText(appLocation).toUpperCase()
+    const value = normaliseText(linnworksLocation)
+    if (key && value) mappings[key] = value
+  }
+
+  return mappings
 }
 
 async function authoriseLinnworks() {
@@ -72,13 +109,13 @@ async function linnworksPost(server: string, token: string, path: string, body: 
     body: JSON.stringify(body),
   })
 
-  const text = await response.text()
+  const responseText = await response.text()
   let data: any = null
 
   try {
-    data = text ? JSON.parse(text) : null
+    data = responseText ? JSON.parse(responseText) : null
   } catch {
-    data = text
+    data = responseText
   }
 
   if (!response.ok) {
@@ -95,6 +132,10 @@ function normaliseText(value: any) {
   return String(value).trim()
 }
 
+function upperText(value: any) {
+  return normaliseText(value).toUpperCase()
+}
+
 function itemDescription(row: any) {
   const parts = [
     normaliseText(row?.sku),
@@ -109,14 +150,56 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }
 
-function canonicalLocation(value: any) {
+function appStorageLocation(value: any) {
   const clean = normaliseText(value)
-  const lower = clean.toLowerCase()
+  const upper = clean.toUpperCase()
 
-  if (!clean) return WAREHOUSE_LOCATION
-  if (lower === 'default' || lower === 'warehouse') return WAREHOUSE_LOCATION
+  if (!clean) return WAREHOUSE_STORAGE_LOCATION
+  if (/^LOCATION-\d+$/i.test(clean)) return upper
 
-  return clean.toUpperCase().startsWith('SHOP-') ? clean.toUpperCase() : clean
+  if (upper === 'DEFAULT' || upper === 'WAREHOUSE') {
+    const warehouseEntry = Object.entries(activeLocationMappings).find(([, mapped]) => {
+      const mappedUpper = upperText(mapped)
+      return mappedUpper === 'DEFAULT' || mappedUpper === 'WAREHOUSE'
+    })
+
+    return warehouseEntry?.[0] || WAREHOUSE_STORAGE_LOCATION
+  }
+
+  const mappedMatch = Object.entries(activeLocationMappings).find(([, mapped]) => {
+    return upperText(mapped) === upper
+  })
+
+  if (mappedMatch?.[0]) return mappedMatch[0]
+
+  const shopMatch = upper.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+  return upper
+}
+
+function canonicalLocation(value: any) {
+  const storage = appStorageLocation(value)
+
+  if (storage === WAREHOUSE_STORAGE_LOCATION) return WAREHOUSE_LOCATION
+
+  const mapped = normaliseText(activeLocationMappings[storage])
+
+  if (mapped) {
+    const mappedUpper = mapped.toUpperCase()
+    if (mappedUpper === 'DEFAULT' || mappedUpper === 'WAREHOUSE') return WAREHOUSE_LOCATION
+    return mappedUpper.startsWith('SHOP-') ? mappedUpper : mapped
+  }
+
+  const match = storage.match(/^LOCATION-(\d+)$/i)
+  if (match && Number(match[1]) >= 2) return `SHOP-${Number(match[1]) - 1}`
+
+  return storage
+}
+
+function isShopStorageLocation(value: any) {
+  const storage = appStorageLocation(value)
+  return /^LOCATION-\d+$/i.test(storage) && storage !== WAREHOUSE_STORAGE_LOCATION
 }
 
 function getArrayFromCandidates(data: any, keys: string[]) {
@@ -299,7 +382,7 @@ async function getTrackedOpenSales(
 ): Promise<TrackedSale[]> {
   const { data, error } = await supabase
     .from('linnworks_processed_sales')
-    .select('id, linnworks_order_id, sku, current_status, stock_deducted')
+    .select('id, linnworks_order_id, sku, current_status, stock_deducted, stock_deductions')
     .eq('stock_deducted', true)
     .not('current_status', 'in', '(processed,cancelled)')
     .limit(limit)
@@ -383,7 +466,7 @@ async function restoreAppStockLocation(params: {
   binCode: string
   quantity: number
 }) {
-  const locationName = canonicalLocation(params.locationName)
+  const locationName = appStorageLocation(params.locationName)
   const binCode = normaliseText(params.binCode) || WAREHOUSE_BIN
   const now = new Date().toISOString()
 
@@ -442,12 +525,12 @@ async function updateItemSummary(supabase: any, itemId: string) {
   const rows = data || []
   const stockLevel = rows.reduce((sum: number, row: any) => sum + Number(row.stock_level || 0), 0)
   const warehouseStock = rows
-    .filter((row: any) => canonicalLocation(row.location_name) === WAREHOUSE_LOCATION)
+    .filter((row: any) => appStorageLocation(row.location_name) === WAREHOUSE_STORAGE_LOCATION)
     .reduce((sum: number, row: any) => sum + Number(row.stock_level || 0), 0)
   const shopFloorStock = rows
     .filter(
       (row: any) =>
-        canonicalLocation(row.location_name).startsWith('SHOP-') &&
+        isShopStorageLocation(row.location_name) &&
         normaliseText(row.bin_code).toUpperCase() === 'FLOOR'
     )
     .reduce((sum: number, row: any) => sum + Number(row.stock_level || 0), 0)
@@ -463,7 +546,7 @@ async function updateItemSummary(supabase: any, itemId: string) {
       stock_level: stockLevel,
       warehouse_stock: warehouseStock,
       shop_floor_stock: shopFloorStock,
-      current_location: displayRow ? canonicalLocation(displayRow.location_name) : null,
+      current_location: displayRow ? appStorageLocation(displayRow.location_name) : null,
       current_bin: displayRow?.bin_code || null,
       updated_at: new Date().toISOString(),
     })
@@ -485,21 +568,33 @@ async function updateTransferStatusAfterCancellation(supabase: any, transferId: 
   const rows = data || []
   if (rows.length === 0) return { updated: false }
 
-  const activeRows = rows.filter((row: any) =>
-    !['cancelled', 'canceled', 'received', 'missing'].includes(normaliseText(row.status).toLowerCase())
-  )
+  const rowsStillPartOfTransfer = rows.filter((row: any) => {
+    const status = normaliseText(row.status).toLowerCase()
+    return !['cancelled', 'canceled', 'missing'].includes(status)
+  })
 
-  if (activeRows.length > 0) return { updated: false }
+  if (rowsStillPartOfTransfer.length > 0) return { updated: false }
 
   const { error: updateError } = await supabase
     .from('stock_transfers')
     .update({ status: 'cancelled' })
     .eq('id', transferId)
+    .eq('status', 'pending_pick')
     .eq('reason', TRANSFER_REASON)
 
   if (updateError) throw new Error(updateError.message)
 
   return { updated: true }
+}
+
+function shouldReleaseCancelledTransferItem(rowStatus: string, transferStatus: string) {
+  const itemStatus = normaliseText(rowStatus).toLowerCase()
+  const parentStatus = normaliseText(transferStatus).toLowerCase()
+
+  return (
+    ACTIVE_TRANSFER_ITEM_STATUSES.includes(itemStatus) &&
+    RELEASE_ALLOWED_TRANSFER_STATUSES.includes(parentStatus)
+  )
 }
 
 async function releaseCancelledShopTransferItems(params: {
@@ -550,10 +645,11 @@ async function releaseCancelledShopTransferItems(params: {
     if (!transfer || normaliseText(transfer.reason) !== TRANSFER_REASON) continue
 
     const status = normaliseText(row.status).toLowerCase()
-    const fromLocation = canonicalLocation(transfer.from_location)
+    const transferStatus = normaliseText(transfer.status).toLowerCase()
+    const fromLocation = appStorageLocation(transfer.from_location)
     const sourceBin = normaliseText(row.source_bin) || 'STOCK'
 
-    if (ACTIVE_TRANSFER_ITEM_STATUSES.includes(status)) {
+    if (shouldReleaseCancelledTransferItem(status, transferStatus)) {
       await restoreAppStockLocation({
         supabase: params.supabase,
         itemId: row.item_id,
@@ -573,12 +669,13 @@ async function releaseCancelledShopTransferItems(params: {
       await updateItemSummary(params.supabase, row.item_id)
       affectedTransferIds.add(transfer.id)
 
+      const displayFromLocation = canonicalLocation(fromLocation)
       const message = `🚫 Previous shop pick cancelled
 
 SKU: ${row.sku}
 ${itemDescription(row)}
 Transfer: #${String(transfer.transfer_number).padStart(7, '0')}
-Action: remove item from transfer batch and allocate back to ${fromLocation} / ${sourceBin}`
+Action: remove item from transfer batch and allocate back to ${displayFromLocation} / ${sourceBin}`
 
       let telegram: any = { skipped: true }
 
@@ -602,8 +699,9 @@ Action: remove item from transfer batch and allocate back to ${fromLocation} / $
         transfer_number: transfer.transfer_number,
         transfer_item_id: row.id,
         sku: row.sku,
-        restored_to: `${fromLocation} / ${sourceBin}`,
+        restored_to: `${displayFromLocation} / ${sourceBin}`,
         previous_status: row.status,
+        previous_transfer_status: transfer.status,
       })
 
       continue
@@ -615,7 +713,8 @@ Action: remove item from transfer batch and allocate back to ${fromLocation} / $
       transfer_item_id: row.id,
       sku: row.sku,
       status: row.status,
-      reason: 'Transfer item already in transit/received/cancelled, no app stock release applied.',
+      transfer_status: transfer.status,
+      reason: 'Transfer item was not pending_pick/picked on a pending_pick transfer, so no app stock release or cancellation message was applied.',
     })
   }
 
@@ -627,11 +726,100 @@ Action: remove item from transfer batch and allocate back to ${fromLocation} / $
   return { released, left_alone: leftAlone, telegram: telegramResults, transfer_status_updates: transferStatusUpdates }
 }
 
+async function restoreNonShopStockDeductions(params: {
+  supabase: any
+  sale: TrackedSale
+  sku: string
+}) {
+  const deductions = Array.isArray(params.sale.stock_deductions)
+    ? params.sale.stock_deductions
+    : []
+
+  if (deductions.length === 0) {
+    return {
+      restored: [],
+      skipped: true,
+      reason: 'No saved stock_deductions were available for this sale.',
+    }
+  }
+
+  const { data: item, error: itemError } = await params.supabase
+    .from('items')
+    .select('id, sku')
+    .eq('sku', params.sku)
+    .maybeSingle()
+
+  if (itemError) throw new Error(itemError.message)
+  if (!item?.id) {
+    throw new Error(`Could not restore cancelled stock for ${params.sku}; item was not found.`)
+  }
+
+  const restored: any[] = []
+  const skipped: any[] = []
+
+  for (const deduction of deductions) {
+    const locationName = appStorageLocation(deduction?.location_name)
+    const binCode = normaliseText(deduction?.bin_code) || WAREHOUSE_BIN
+    const quantity = Number(deduction?.quantity || 0)
+
+    if (!quantity || quantity <= 0) {
+      skipped.push({ deduction, reason: 'Invalid or zero quantity.' })
+      continue
+    }
+
+    if (isShopStorageLocation(locationName)) {
+      skipped.push({
+        location_name: locationName,
+        bin_code: binCode,
+        quantity,
+        reason: 'Shop deduction is restored by stock_transfer_items cancellation logic.',
+      })
+      continue
+    }
+
+    await restoreAppStockLocation({
+      supabase: params.supabase,
+      itemId: item.id,
+      sku: params.sku,
+      locationName,
+      binCode,
+      quantity,
+    })
+
+    restored.push({
+      location_name: locationName,
+      bin_code: binCode,
+      quantity,
+    })
+  }
+
+  await updateItemSummary(params.supabase, item.id)
+
+  return { restored, skipped }
+}
+
 async function processProcessedOrders(request: Request) {
   const startedAt = new Date().toISOString()
 
   try {
     const supabase = getSupabaseAdmin()
+    const integrationConfig = await getLinnworksIntegrationConfig(supabase)
+    const integrationGate = shouldRunLinnworksRoute({
+      config: integrationConfig,
+      route: 'processed_orders',
+      manual: new URL(request.url).searchParams.get('manual') === 'true',
+    })
+
+    if (!integrationGate.ok) {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        message: integrationGate.reason,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+      })
+    }
+    activeLocationMappings = await loadLocationMappings(supabase)
     const url = new URL(request.url)
     const debug = url.searchParams.get('debug') === 'true'
 
@@ -682,6 +870,12 @@ async function processProcessedOrders(request: Request) {
           sku,
         })
 
+        const savedDeductionRestoreResult = await restoreNonShopStockDeductions({
+          supabase,
+          sale,
+          sku,
+        })
+
         const { error: saleError } = await supabase
           .from('linnworks_processed_sales')
           .update({
@@ -702,6 +896,7 @@ async function processProcessedOrders(request: Request) {
           raw_status: getRawStatus(order),
           cancellation_reference_found: orderHasCancellationReference(order),
           release_result: releaseResult,
+          saved_deduction_restore_result: savedDeductionRestoreResult,
           debug_order: debug ? order : undefined,
         })
 

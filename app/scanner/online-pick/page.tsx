@@ -74,10 +74,10 @@ export default function OnlinePickScannerPage() {
   return (
     <StaffPermissionGate permission="scanner">
       <main className="min-h-screen bg-neutral-950 p-5 text-white">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
           <div>
             <h1 className="text-2xl font-black">Online Order Pick Scanner</h1>
-            <p className="text-sm text-neutral-400">
+            <p className="text-sm text-neutral-300">
               Select/scan the source bin, then scan item SKU. Transfer stays pending until manifest/dispatch.
             </p>
             <p className="mt-1 text-sm font-bold text-green-300">
@@ -174,3 +174,4 @@ export default function OnlinePickScannerPage() {
     </StaffPermissionGate>
   )
 }
+

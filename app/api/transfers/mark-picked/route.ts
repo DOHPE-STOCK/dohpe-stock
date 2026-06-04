@@ -3,6 +3,18 @@ import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
+const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
+let activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
+
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -17,6 +29,81 @@ function getSupabaseAdmin() {
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
+}
+
+function canonical(value: any) {
+  return text(value).toUpperCase()
+}
+
+async function loadLocationMappings(supabase: any) {
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
+
+  if (error) return DEFAULT_LOCATION_MAPPINGS
+
+  const saved =
+    data?.settings?.location_mapping ||
+    data?.settings?.location_mappings ||
+    {}
+
+  const mappings: Record<string, string> = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const key = canonical(appLocation)
+    const value = text(linnworksLocation)
+
+    if (key && value) {
+      mappings[key] = value
+    }
+  }
+
+  return mappings
+}
+
+function appStorageLocation(value: any) {
+  const clean = text(value)
+  const key = canonical(clean)
+
+  if (!clean) return 'LOCATION-1'
+  if (/^LOCATION-\d+$/i.test(clean)) return key
+
+  if (key === 'DEFAULT' || key === 'WAREHOUSE') {
+    const warehouseEntry = Object.entries(activeLocationMappings).find(([, mapped]) => {
+      const mappedKey = canonical(mapped)
+      return mappedKey === 'DEFAULT' || mappedKey === 'WAREHOUSE'
+    })
+
+    return warehouseEntry?.[0] || 'LOCATION-1'
+  }
+
+  const displayMatch = Object.entries(activeLocationMappings).find(([, mapped]) => {
+    return canonical(mapped) === key
+  })
+
+  if (displayMatch?.[0]) return displayMatch[0]
+
+  const shopMatch = key.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+  return key
+}
+
+function displayLocation(value: any) {
+  const storage = appStorageLocation(value)
+  const mapped = activeLocationMappings[storage]
+
+  if (!mapped) return storage
+
+  if (canonical(mapped) === 'DEFAULT') return 'WAREHOUSE'
+
+  return mapped
+}
+
+function sameLocation(a: any, b: any) {
+  return appStorageLocation(a) === appStorageLocation(b)
 }
 
 function itemDescription(item: any, sku: string) {
@@ -68,6 +155,7 @@ async function getTransferPickProgress(supabase: any, transferId: string) {
   if (error) throw new Error(error.message)
 
   const rows = data || []
+
   const pickedCount = rows.filter((row: any) =>
     ['picked', 'in_transfer', 'in_transit', 'received'].includes(text(row.status))
   ).length
@@ -84,10 +172,12 @@ async function getTransferPickProgress(supabase: any, transferId: string) {
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
+    activeLocationMappings = await loadLocationMappings(supabase)
+
     const body = await request.json().catch(() => ({}))
 
     const sku = text(body.sku).toUpperCase()
-    const fromLocation = text(body.from_location).toUpperCase()
+    const fromLocation = appStorageLocation(body.from_location)
     const sourceBin = text(body.source_bin).toUpperCase()
     const pickedBy = text(body.picked_by)
     const pickedById = text(body.picked_by_id)
@@ -137,8 +227,8 @@ export async function POST(request: Request) {
         : row.stock_transfers
 
       return (
-        text(transfer?.from_location).toUpperCase() === fromLocation &&
-        text(transfer?.to_location).toUpperCase() === 'WAREHOUSE' &&
+        sameLocation(transfer?.from_location, fromLocation) &&
+        sameLocation(transfer?.to_location, 'LOCATION-1') &&
         text(transfer?.status) === 'pending_pick' &&
         text(transfer?.reason) === 'online_order_pick'
       )
@@ -148,7 +238,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           ok: false,
-          message: `No pending ${fromLocation} / ${sourceBin} pick found for ${sku}.`,
+          message: `No pending ${displayLocation(fromLocation)} / ${sourceBin} pick found for ${sku}.`,
         },
         { status: 404 }
       )
@@ -179,7 +269,7 @@ export async function POST(request: Request) {
       telegramReply = await sendTelegramReply({
         chatId: match.telegram_chat_id,
         messageId: match.telegram_message_id,
-        text: `✅ ${itemDescription(match.items, sku)} picked by ${pickedBy || 'staff'} from ${fromLocation} / ${sourceBin}`,
+        text: `✅ ${itemDescription(match.items, sku)} picked by ${pickedBy || 'staff'} from ${displayLocation(fromLocation)} / ${sourceBin}`,
       })
     }
 
@@ -188,6 +278,10 @@ export async function POST(request: Request) {
       message: `${sku} marked as picked.`,
       transfer_id: match.transfer_id,
       transfer_number: transfer?.transfer_number || null,
+      from_location: appStorageLocation(transfer?.from_location),
+      to_location: appStorageLocation(transfer?.to_location),
+      display_from_location: displayLocation(transfer?.from_location),
+      display_to_location: displayLocation(transfer?.to_location),
       transfer_status: transferStatus,
       telegram_reply: telegramReply,
     })

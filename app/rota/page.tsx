@@ -20,6 +20,22 @@ type ShiftType = "work" | "holiday";
 
 type StaffMember = { id: string; name: string; hourlyRate: number };
 
+type PayrollStaffSettings = {
+  holiday_method?: "fixed_weeks" | "accrual_percent";
+  holiday_weeks?: number;
+  accrual_percent?: number;
+  carried_over_hours?: number;
+  break_4h_minutes?: number;
+  break_6h_minutes?: number;
+};
+
+type StaffPayrollRow = {
+  id: string;
+  name: string;
+  is_active?: boolean | null;
+  payroll_settings?: PayrollStaffSettings | null;
+};
+
 type OpeningTime = {
   open: string;
   close: string;
@@ -65,6 +81,7 @@ type WeeklyReport = {
       name: string;
       workHours: number;
       holidayHours: number;
+      breakHours?: number;
       workWage: number;
       holidayWage: number;
     }
@@ -148,6 +165,101 @@ const defaultOpeningTimes: OpeningTimes = {
   ],
 };
 
+const defaultPayrollStaffSettings: Required<PayrollStaffSettings> = {
+  holiday_method: "fixed_weeks",
+  holiday_weeks: 5.6,
+  accrual_percent: 12.07,
+  carried_over_hours: 0,
+  break_4h_minutes: 15,
+  break_6h_minutes: 30,
+};
+
+function normaliseStaffName(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function staffFromStaffUsers(
+  staffRows: StaffPayrollRow[],
+  existingStaff: StaffMember[],
+): StaffMember[] {
+  const existingById = new Map(existingStaff.map((person) => [person.id, person]));
+  const existingByName = new Map(
+    existingStaff.map((person) => [normaliseStaffName(person.name), person]),
+  );
+
+  return staffRows
+    .filter((row) => row.is_active !== false)
+    .map((row) => {
+      const existing =
+        existingById.get(row.id) || existingByName.get(normaliseStaffName(row.name));
+
+      return {
+        id: row.id,
+        name: row.name,
+        hourlyRate: Number(existing?.hourlyRate || 12.21),
+      };
+    });
+}
+
+function staffIdMapFromNames(
+  existingStaff: StaffMember[],
+  staffRows: StaffPayrollRow[],
+) {
+  const activeStaffByName = new Map(
+    staffRows
+      .filter((row) => row.is_active !== false)
+      .map((row) => [normaliseStaffName(row.name), row.id]),
+  );
+  const idMap: Record<string, string> = {};
+
+  for (const person of existingStaff) {
+    const replacementId = activeStaffByName.get(normaliseStaffName(person.name));
+    if (replacementId && replacementId !== person.id) idMap[person.id] = replacementId;
+  }
+
+  return idMap;
+}
+
+function remapShiftStaffIds<T>(source: T, staffIdMap: Record<string, string>): T {
+  if (Object.keys(staffIdMap).length === 0) return source;
+
+  return JSON.parse(
+    JSON.stringify(source),
+    (key, value) => (key === "staffId" && staffIdMap[value] ? staffIdMap[value] : value),
+  );
+}
+
+function normalisePayrollStaffSettings(
+  settings?: PayrollStaffSettings | null,
+): Required<PayrollStaffSettings> {
+  return {
+    ...defaultPayrollStaffSettings,
+    ...(settings || {}),
+    holiday_method:
+      settings?.holiday_method === "accrual_percent"
+        ? "accrual_percent"
+        : "fixed_weeks",
+    holiday_weeks: Number(
+      settings?.holiday_weeks ?? defaultPayrollStaffSettings.holiday_weeks,
+    ),
+    accrual_percent: Number(
+      settings?.accrual_percent ?? defaultPayrollStaffSettings.accrual_percent,
+    ),
+    carried_over_hours: Number(settings?.carried_over_hours ?? 0),
+    break_4h_minutes: Number(
+      settings?.break_4h_minutes ??
+        defaultPayrollStaffSettings.break_4h_minutes,
+    ),
+    break_6h_minutes: Number(
+      settings?.break_6h_minutes ??
+        defaultPayrollStaffSettings.break_6h_minutes,
+    ),
+  };
+}
+
 function pad(n: number) {
   return String(n).padStart(2, "0");
 }
@@ -163,6 +275,37 @@ function startOfWeek(date: Date) {
   d.setDate(d.getDate() + diff);
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+function getOperationalWeekStart(date: Date, openingTimes: OpeningTimes) {
+  const weekStart = startOfWeek(date);
+  let lastOpenDayIndex = -1;
+
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const isOpen = (Object.keys(openingTimes) as CompanyKey[]).some(
+      (company) => !openingTimes[company]?.[dayIndex]?.closed,
+    );
+
+    if (isOpen) lastOpenDayIndex = dayIndex;
+  }
+
+  if (lastOpenDayIndex === -1) return weekStart;
+
+  const latestCloseMinutes = Math.max(
+    ...(Object.keys(openingTimes) as CompanyKey[])
+      .filter((company) => !openingTimes[company]?.[lastOpenDayIndex]?.closed)
+      .map((company) => timeToMinutes(openingTimes[company]?.[lastOpenDayIndex]?.close || "17:00")),
+  );
+  const closeBoundary = addDays(weekStart, lastOpenDayIndex);
+
+  closeBoundary.setHours(
+    Math.floor(latestCloseMinutes / 60),
+    latestCloseMinutes % 60,
+    0,
+    0,
+  );
+
+  return date >= closeBoundary ? addWeeks(weekStart, 1) : weekStart;
 }
 
 function addDays(date: Date, days: number) {
@@ -391,21 +534,22 @@ function rawShiftHours(shift: Shift) {
   return (end - start) / 60;
 }
 
-function shiftHours(shift: Shift, staffMember?: StaffMember) {
+function shiftBreakHours(
+  shift: Shift,
+  payrollSettings: Required<PayrollStaffSettings>,
+) {
   const raw = rawShiftHours(shift);
-  if (shift.type === "holiday") return raw;
+  if (shift.type === "holiday") return 0;
+  if (raw >= 6) return payrollSettings.break_6h_minutes / 60;
+  if (raw > 3) return payrollSettings.break_4h_minutes / 60;
+  return 0;
+}
 
-  const staffName = (staffMember?.name || "").trim().toLowerCase();
-  const specialBreakStaff = staffName === "meghan" || staffName === "ned";
-
-  if (specialBreakStaff) {
-    if (raw >= 6) return Math.max(0, raw - 30 / 60);
-    if (raw > 4) return Math.max(0, raw - 15 / 60);
-    return raw;
-  }
-
-  if (raw >= 6) return Math.max(0, raw - 20 / 60);
-  return raw;
+function shiftPaidHours(
+  shift: Shift,
+  payrollSettings: Required<PayrollStaffSettings>,
+) {
+  return Math.max(0, rawShiftHours(shift) - shiftBreakHours(shift, payrollSettings));
 }
 
 function formatHours(value: number) {
@@ -514,7 +658,7 @@ function applyRotaPayload(
   saved: any,
   setters: {
     setCompanies: (value: Company[]) => void;
-    setStaff: (value: StaffMember[]) => void;
+    setLegacyStaff: (value: StaffMember[]) => void;
     setOpeningTimes: (value: OpeningTimes) => void;
     setRota: (value: RotaData) => void;
     setDefaultRota: (value: DefaultRota) => void;
@@ -526,7 +670,7 @@ function applyRotaPayload(
   if (!saved) return;
 
   if (Array.isArray(saved.companies)) setters.setCompanies(saved.companies);
-  if (Array.isArray(saved.staff)) setters.setStaff(saved.staff);
+  if (Array.isArray(saved.staff)) setters.setLegacyStaff(saved.staff);
   if (saved.openingTimes) setters.setOpeningTimes(saved.openingTimes);
   if (saved.rota) setters.setRota(saved.rota);
   if (saved.defaultRota) setters.setDefaultRota(saved.defaultRota);
@@ -570,6 +714,7 @@ export default function RotaPage() {
   const saveTimerRef = useRef<number | null>(null);
   const calendarSaveTimerRef = useRef<number | null>(null);
   const statusTimerRef = useRef<number | null>(null);
+  const staffRef = useRef<StaffMember[]>(defaultStaff);
 
   const [rotaUserKey, setRotaUserKey] = useState(ROTA_USER_KEY_FALLBACK);
   const [companies, setCompanies] = useState<Company[]>(defaultCompanies);
@@ -577,9 +722,11 @@ export default function RotaPage() {
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff);
   const [openingTimes, setOpeningTimes] =
     useState<OpeningTimes>(defaultOpeningTimes);
-  const [currentWeekStart] = useState(startOfWeek(new Date()));
+  const [today] = useState(() => new Date());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
+  const [historyEditWeekId, setHistoryEditWeekId] = useState<string | null>(null);
+  const [historyEditDirty, setHistoryEditDirty] = useState(false);
   const [rota, setRota] = useState<RotaData>({ dohpe: {}, dlretail: {} });
   const [defaultRota, setDefaultRota] = useState<DefaultRota>(emptyDefault());
   const [editedWeeks, setEditedWeeks] = useState<EditedWeeks>({
@@ -587,6 +734,8 @@ export default function RotaPage() {
     dlretail: {},
   });
   const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([]);
+  const [finalisedWeekIds, setFinalisedWeekIds] = useState<Record<string, boolean>>({});
+  const [staffPayrollRows, setStaffPayrollRows] = useState<StaffPayrollRow[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [googleCalendarSynced, setGoogleCalendarSynced] = useState(false);
@@ -601,6 +750,7 @@ export default function RotaPage() {
     dohpe: {},
     dlretail: {},
   });
+  const [legacyStaff, setLegacyStaff] = useState<StaffMember[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarData>({});
   const [telegramSentWeeks, setTelegramSentWeeks] = useState<
     Record<string, boolean>
@@ -609,14 +759,27 @@ export default function RotaPage() {
     Record<string, boolean>
   >({});
 
+  const currentWeekStart = useMemo(
+    () => getOperationalWeekStart(today, openingTimes),
+    [today, openingTimes],
+  );
+
   const futureWeekStarts = useMemo(
     () => [1, 2, 3, 4].map((offset) => addWeeks(currentWeekStart, offset)),
+    [currentWeekStart],
+  );
+  const previousWeekStart = useMemo(
+    () => addWeeks(currentWeekStart, -1),
     [currentWeekStart],
   );
 
   const mobileCompanyList = companies.filter(
     (company) => company.key === mobileCompany,
   );
+
+  useEffect(() => {
+    staffRef.current = staff;
+  }, [staff]);
 
   const filteredReports = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
@@ -637,6 +800,52 @@ export default function RotaPage() {
       })
       .slice(0, 20);
   }, [historySearch, weeklyReports]);
+
+  const filteredHistoryWeeks = useMemo(() => {
+    const reportById = new Map(weeklyReports.map((report) => [report.id, report]));
+    const q = historySearch.trim().toLowerCase();
+    const finalisedWeekIdsOnly = Array.from(
+      new Set(
+        Object.keys(finalisedWeekIds)
+          .filter((key) => finalisedWeekIds[key])
+          .map((key) => key.replace(/^dohpe-/, "").replace(/^dlretail-/, "")),
+      ),
+    );
+    const visibleWeekIds = q
+      ? finalisedWeekIdsOnly.filter((weekId) => {
+          const reports = companies
+            .map((company) => reportById.get(`${company.key}-${weekId}`))
+            .filter(Boolean) as WeeklyReport[];
+          const staffNames = reports
+            .flatMap((report) => Object.values(report.staffTotals).map((row) => row.name))
+            .join(" ")
+            .toLowerCase();
+          return (
+            weekId.toLowerCase().includes(q) ||
+            formatWeekLabel(getWeekFromId(weekId)).toLowerCase().includes(q) ||
+            staffNames.includes(q)
+          );
+        })
+      : [0, 1, 2, 3].map((offset) => getWeekId(addWeeks(previousWeekStart, -offset)));
+
+    const grouped = new Map<string, Record<CompanyKey, WeeklyReport | undefined>>();
+
+    for (const weekId of visibleWeekIds) {
+      const hasAnyFinalisedCompany = companies.some((company) =>
+        finalisedWeekIds[`${company.key}-${weekId}`],
+      );
+      if (!hasAnyFinalisedCompany) continue;
+
+      grouped.set(weekId, {
+        dohpe: reportById.get(`dohpe-${weekId}`),
+        dlretail: reportById.get(`dlretail-${weekId}`),
+      });
+    }
+
+    return Array.from(grouped.entries())
+      .map(([weekId, reports]) => ({ weekId, reports }))
+      .sort((a, b) => b.weekId.localeCompare(a.weekId));
+  }, [companies, finalisedWeekIds, historySearch, previousWeekStart, weeklyReports]);
 
   function showStatus(message: string) {
     setStatusMessage(message);
@@ -668,7 +877,7 @@ export default function RotaPage() {
         if (local) {
           applyRotaPayload(JSON.parse(local), {
             setCompanies,
-            setStaff,
+            setLegacyStaff,
             setOpeningTimes,
             setRota,
             setDefaultRota,
@@ -714,7 +923,7 @@ export default function RotaPage() {
         if (saved) {
           applyRotaPayload(saved, {
             setCompanies,
-            setStaff,
+            setLegacyStaff,
             setOpeningTimes,
             setRota,
             setDefaultRota,
@@ -733,6 +942,67 @@ export default function RotaPage() {
 
     loadCloudRota();
   }, []);
+
+  useEffect(() => {
+    async function loadFinalisedWeeks() {
+      const { data, error } = await supabase
+        .from("rota_week_finalisations")
+        .select("company_key, week_id, status")
+        .eq("status", "finalised");
+
+      if (error) return;
+
+      setFinalisedWeekIds(
+        Object.fromEntries(
+          (data || []).map((row: any) => [`${row.company_key}-${row.week_id}`, true]),
+        ),
+      );
+    }
+
+    loadFinalisedWeeks();
+  }, []);
+
+  useEffect(() => {
+    async function loadStaffPayrollSettings() {
+      const { data, error } = await supabase
+        .from("staff_users")
+        .select("id, name, is_active, payroll_settings")
+        .eq("is_active", true);
+
+      if (error) {
+        console.error("ROTA_PAYROLL_SETTINGS_LOAD_ERROR", error);
+        return;
+      }
+
+      const staffRows = (data || []) as StaffPayrollRow[];
+
+      setStaffPayrollRows(staffRows);
+    }
+
+    loadStaffPayrollSettings();
+  }, []);
+
+  useEffect(() => {
+    if (!cloudLoaded || staffPayrollRows.length === 0) return;
+
+    const sourceStaff = legacyStaff.length > 0 ? legacyStaff : staffRef.current;
+    const staffIdMap = staffIdMapFromNames(sourceStaff, staffPayrollRows);
+
+    const timer = window.setTimeout(() => {
+      setRota((currentRota) => remapShiftStaffIds(currentRota, staffIdMap));
+      setDefaultRota((currentDefaultRota) =>
+        remapShiftStaffIds(currentDefaultRota, staffIdMap),
+      );
+      setStaff((currentStaff) =>
+        staffFromStaffUsers(
+          staffPayrollRows,
+          sourceStaff.length > 0 ? sourceStaff : currentStaff,
+        ),
+      );
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [cloudLoaded, staffPayrollRows, legacyStaff]);
 
   useEffect(() => {
     async function loadUserCalendarSettings() {
@@ -807,7 +1077,6 @@ export default function RotaPage() {
 
     const payload = {
       companies,
-      staff,
       openingTimes,
       rota,
       defaultRota,
@@ -850,7 +1119,6 @@ export default function RotaPage() {
     cloudLoaded,
     rotaUserKey,
     companies,
-    staff,
     openingTimes,
     rota,
     defaultRota,
@@ -1017,7 +1285,9 @@ export default function RotaPage() {
   function getDayShifts(company: CompanyKey, week: Date, dayIndex: number) {
     const weekId = getWeekId(week);
     const dayId = getDayId(week, dayIndex);
-    return rota[company]?.[weekId]?.[dayId] || [];
+    if (editedWeeks[company]?.[weekId]) return rota[company]?.[weekId]?.[dayId] || [];
+    const defaultDay = defaultRota[company]?.[String(dayIndex)] || [];
+    return defaultDay.length > 0 ? defaultDay : rota[company]?.[weekId]?.[dayId] || [];
   }
 
   function getDayShiftsByWeekId(
@@ -1027,7 +1297,9 @@ export default function RotaPage() {
   ) {
     const week = getWeekFromId(weekId);
     const dayId = getDayId(week, dayIndex);
-    return rota[company]?.[weekId]?.[dayId] || [];
+    if (editedWeeks[company]?.[weekId]) return rota[company]?.[weekId]?.[dayId] || [];
+    const defaultDay = defaultRota[company]?.[String(dayIndex)] || [];
+    return defaultDay.length > 0 ? defaultDay : rota[company]?.[weekId]?.[dayId] || [];
   }
 
   function weekHasDifferentInfo(
@@ -1035,10 +1307,8 @@ export default function RotaPage() {
     week: Date,
     template: Record<string, Shift[]>,
   ) {
-    const weekRows = rota[company]?.[getWeekId(week)] || {};
-
     for (let i = 0; i < 7; i += 1) {
-      const currentDay = (weekRows[getDayId(week, i)] || []).map(
+      const currentDay = getDayShifts(company, week, i).map(
         normaliseShiftForCompare,
       );
       const templateDay = (template[String(i)] || []).map(
@@ -1086,7 +1356,10 @@ export default function RotaPage() {
       },
     }));
 
-    if (markEdited) markWeekEdited(company, week);
+    if (markEdited) {
+      markWeekEdited(company, week);
+      if (historyEditWeekId === weekId) setHistoryEditDirty(true);
+    }
   }
 
   function openNewShift(
@@ -1247,11 +1520,10 @@ export default function RotaPage() {
   }
 
   function setWeekAsDefault(company: CompanyKey, week: Date) {
-    const weekRows = rota[company]?.[getWeekId(week)] || {};
     const template: Record<string, Shift[]> = {};
 
     for (let i = 0; i < 7; i += 1) {
-      template[String(i)] = (weekRows[getDayId(week, i)] || []).map(cloneShift);
+      template[String(i)] = getDayShifts(company, week, i).map(cloneShift);
     }
 
     const futureWeeks = [1, 2, 3, 4].map((offset) => addWeeks(week, offset));
@@ -1329,12 +1601,35 @@ export default function RotaPage() {
     );
   }
 
+  function payrollSettingsForStaff(person?: StaffMember) {
+    if (!person) return defaultPayrollStaffSettings;
+
+    const byId = staffPayrollRows.find((row) => row.id === person.id);
+    const byName = staffPayrollRows.find(
+      (row) =>
+        row.name.trim().toLowerCase() === person.name.trim().toLowerCase(),
+    );
+
+    return normalisePayrollStaffSettings(
+      byId?.payroll_settings || byName?.payroll_settings,
+    );
+  }
+
+  function paidShiftHours(shift: Shift, person?: StaffMember) {
+    return shiftPaidHours(shift, payrollSettingsForStaff(person));
+  }
+
+  function breakHoursForShift(shift: Shift, person?: StaffMember) {
+    return shiftBreakHours(shift, payrollSettingsForStaff(person));
+  }
+
   function totalsForCompanyWeek(company: CompanyKey, week: Date) {
     const totals: Record<
       string,
       {
         workHours: number;
         holidayHours: number;
+        breakHours: number;
         workWage: number;
         holidayWage: number;
       }
@@ -1344,6 +1639,7 @@ export default function RotaPage() {
       totals[person.id] = {
         workHours: 0,
         holidayHours: 0,
+        breakHours: 0,
         workWage: 0,
         holidayWage: 0,
       };
@@ -1354,13 +1650,16 @@ export default function RotaPage() {
         if (!shift.staffId) continue;
 
         const person = staff.find((x) => x.id === shift.staffId);
-        const hours = shiftHours(shift, person);
+        const rawHours = rawShiftHours(shift);
+        const hours = shift.type === "holiday" ? rawHours : paidShiftHours(shift, person);
+        const breakHours = shift.type === "holiday" ? 0 : breakHoursForShift(shift, person);
         const wage = hours * Number(person?.hourlyRate || 0);
 
         if (!totals[shift.staffId]) {
           totals[shift.staffId] = {
             workHours: 0,
             holidayHours: 0,
+            breakHours: 0,
             workWage: 0,
             holidayWage: 0,
           };
@@ -1371,12 +1670,66 @@ export default function RotaPage() {
           totals[shift.staffId].holidayWage += wage;
         } else {
           totals[shift.staffId].workHours += hours;
+          totals[shift.staffId].breakHours += breakHours;
           totals[shift.staffId].workWage += wage;
         }
       }
     }
 
     return totals;
+  }
+
+  function finalisedPayrollPayload(company: CompanyKey, week: Date) {
+    const staffTotals = totalsForCompanyWeek(company, week);
+      const shifts: {
+      staffId: string;
+      staffName: string;
+      type: ShiftType;
+      hours: number;
+      rawHours: number;
+      paidHours: number;
+      breakHours: number;
+      weekId: string;
+      dayId: string;
+      date: string;
+      start: string;
+      end: string;
+    }[] = [];
+
+    for (let i = 0; i < 7; i += 1) {
+      const dayDate = addDays(week, i);
+      const dayId = getDayId(week, i);
+
+      for (const shift of getDayShifts(company, week, i)) {
+        if (!shift.staffId) continue;
+
+        const person = staff.find((x) => x.id === shift.staffId);
+        const rawHours = rawShiftHours(shift);
+        const paidHours = shift.type === "holiday" ? rawHours : paidShiftHours(shift, person);
+        const breakHours = shift.type === "holiday" ? 0 : breakHoursForShift(shift, person);
+
+        shifts.push({
+          staffId: shift.staffId,
+          staffName: person?.name || "Unknown staff",
+          type: shift.type,
+          hours: paidHours,
+          rawHours,
+          paidHours,
+          breakHours,
+          weekId: getWeekId(week),
+          dayId,
+          date: dateKey(dayDate),
+          start: shift.start,
+          end: shift.end,
+        });
+      }
+    }
+
+    return {
+      version: 2,
+      staffTotals,
+      shifts,
+    };
   }
 
   function companyWeekTotal(company: CompanyKey, week: Date) {
@@ -1401,6 +1754,7 @@ export default function RotaPage() {
       const row = totals[person.id] || {
         workHours: 0,
         holidayHours: 0,
+        breakHours: 0,
         workWage: 0,
         holidayWage: 0,
       };
@@ -1409,6 +1763,7 @@ export default function RotaPage() {
         name: person.name,
         workHours: row.workHours,
         holidayHours: row.holidayHours,
+        breakHours: row.breakHours,
         workWage: row.workWage,
         holidayWage: row.holidayWage,
       };
@@ -1427,6 +1782,81 @@ export default function RotaPage() {
       const withoutCurrent = current.filter((row) => row.id !== report.id);
       return [report, ...withoutCurrent].slice(0, 250);
     });
+  }
+
+  function isWeekFinalised(company: CompanyKey, week: Date) {
+    return Boolean(finalisedWeekIds[`${company}-${getWeekId(week)}`]);
+  }
+
+  async function syncFinalisedWeekForAccounts(company: CompanyKey, week: Date, ask = true) {
+    const weekId = getWeekId(week);
+    const totals = finalisedPayrollPayload(company, week);
+
+    if (ask && !window.confirm(`Finalise ${getCompanyName(company)} week ${weekId} for accounts?`)) {
+      return;
+    }
+
+    saveWeeklyReportSnapshot(company, week);
+
+    try {
+      const { error } = await supabase.from("rota_week_finalisations").upsert(
+        {
+          company_key: company,
+          week_id: weekId,
+          status: "finalised",
+          totals,
+          finalised_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "company_key,week_id" },
+      );
+
+      if (error) throw error;
+
+      showStatus(`${getCompanyName(company)} week ${weekId} finalised for accounts.`);
+      setFinalisedWeekIds((current) => ({
+        ...current,
+        [`${company}-${weekId}`]: true,
+      }));
+    } catch (error: any) {
+      console.error("ROTA_FINALISE_ERROR", error);
+      showStatus(error.message || "Weekly report saved locally. Accounts finalisation did not sync.");
+    }
+  }
+
+  async function finaliseWeekForAccounts(company: CompanyKey, week: Date) {
+    await syncFinalisedWeekForAccounts(company, week, true);
+  }
+
+  async function updateHistoryFinalisedWeek() {
+    if (!historyEditWeekId) return;
+    const week = getWeekFromId(historyEditWeekId);
+    const finalisedCompanies = companies.filter((company) =>
+      isWeekFinalised(company.key, week),
+    );
+    const companiesToUpdate = finalisedCompanies.length > 0 ? finalisedCompanies : companies;
+
+    for (const company of companiesToUpdate) {
+      await syncFinalisedWeekForAccounts(company.key, week, false);
+    }
+
+    setHistoryEditDirty(false);
+    showStatus(`Finalised rota updated for ${formatWeekLabel(week)}.`);
+  }
+
+  async function closeHistoryEdit() {
+    if (!historyEditWeekId) return;
+
+    if (historyEditDirty) {
+      const updateFirst = window.confirm(
+        "This historical week has changes that are not updated in the finalised accounts record yet. Update finalised before closing?",
+      );
+
+      if (updateFirst) await updateHistoryFinalisedWeek();
+    }
+
+    setHistoryEditWeekId(null);
+    setHistoryEditDirty(false);
   }
 
   function syncGoogleCalendar() {
@@ -1543,29 +1973,6 @@ export default function RotaPage() {
     }
   }
 
-  function addStaffMember() {
-    setStaff((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        name: `Staff ${current.length + 1}`,
-        hourlyRate: 12.21,
-      },
-    ]);
-  }
-
-  function updateStaff(id: string, patch: Partial<StaffMember>) {
-    setStaff((current) =>
-      current.map((person) =>
-        person.id === id ? { ...person, ...patch } : person,
-      ),
-    );
-  }
-
-  function deleteStaff(id: string) {
-    setStaff((current) => current.filter((person) => person.id !== id));
-  }
-
   function ShiftEditor() {
     const endTimePickerRef = useRef<TimePickerFieldHandle | null>(null);
 
@@ -1645,7 +2052,7 @@ export default function RotaPage() {
               }}
               className={`rounded-xl px-4 py-2 text-xs font-black ${
                 draftShift.type === "holiday"
-                  ? "bg-amber-300 text-black"
+                  ? "bg-amber-600 text-white"
                   : "bg-neutral-100 text-neutral-400"
               }`}
             >
@@ -1860,7 +2267,7 @@ export default function RotaPage() {
                       "holiday",
                     )
                   }
-                  className="rounded-xl bg-amber-300 px-4 py-2 text-xs font-black text-black"
+                  className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-black text-white"
                 >
                   Holiday
                 </button>
@@ -2060,9 +2467,9 @@ export default function RotaPage() {
         onClick={() => toggleExpandedDay(company, week, dayIndex)}
       >
         <div className="mb-2">
-          <div className="flex min-w-0 items-baseline justify-between gap-0.5">
+          <div className="grid grid-cols-[34px_1fr] items-baseline gap-1">
             <p className="text-sm font-black">{dayNames[dayIndex]}</p>
-            <span className="shrink pr-1 text-[9px] sm:text-[11px] font-black text-cyan-700 whitespace-nowrap">
+            <span className="min-w-0 text-right text-[10px] font-black leading-tight text-cyan-700 sm:text-[11px]">
               {openingFullLabel}
             </span>
           </div>
@@ -2138,7 +2545,15 @@ export default function RotaPage() {
     );
   }
 
-  function WeekPlanner({ company, week }: { company: Company; week: Date }) {
+  function WeekPlanner({
+    company,
+    week,
+    previousFinalise = false,
+  }: {
+    company: Company;
+    week: Date;
+    previousFinalise?: boolean;
+  }) {
     const total = companyWeekTotal(company.key, week);
     const staffTotals = totalsForCompanyWeek(company.key, week);
     const current = isCurrentWeek(week);
@@ -2149,7 +2564,9 @@ export default function RotaPage() {
     return (
       <section
         className={`rounded-3xl border p-4 shadow-xl ${
-          current
+          previousFinalise
+            ? "border-red-800 bg-red-200 ring-4 ring-red-300"
+            : current
             ? "border-emerald-700 bg-emerald-200 ring-4 ring-emerald-300"
             : "border-neutral-200 bg-white"
         }`}
@@ -2158,11 +2575,18 @@ export default function RotaPage() {
           <div className="flex min-w-0 items-center gap-3">
             <CompanyLogo company={company} />
             <div className="min-w-0">
-              <p className="truncate text-xs font-black uppercase tracking-[0.2em] text-neutral-400">
-                {company.name}
+              <p className={`truncate text-xs font-black uppercase tracking-[0.2em] ${
+                previousFinalise ? "text-red-800" : "text-neutral-400"
+              }`}>
+                {previousFinalise ? "Previous week" : company.name}
               </p>
               <h2 className="text-xl font-black">
                 {formatWeekLabel(week)}
+                {previousFinalise && (
+                  <span className="ml-2 rounded-full bg-red-800 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-white">
+                    FINALISE
+                  </span>
+                )}
                 {current && (
                   <span className="ml-2 rounded-full bg-emerald-800 px-2 py-1 align-middle text-[10px] font-black uppercase tracking-widest text-white">
                     CURRENT WEEK
@@ -2176,7 +2600,7 @@ export default function RotaPage() {
             <button
               type="button"
               onClick={() => setWeekAsDefault(company.key, week)}
-              className="rounded-xl bg-emerald-400 px-3 py-2 text-xs font-black text-black"
+              className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white"
             >
               Set default
             </button>
@@ -2201,6 +2625,15 @@ export default function RotaPage() {
                   ? "Telegram sent OK"
                   : "Telegram"}
             </button>
+            {previousFinalise && (
+              <button
+                type="button"
+                onClick={() => finaliseWeekForAccounts(company.key, week)}
+                className="keep-dark-text rounded-xl bg-white px-3 py-2 text-xs font-black text-black shadow"
+              >
+                Finalise for accounts
+              </button>
+            )}
           </div>
         </div>
 
@@ -2220,7 +2653,7 @@ export default function RotaPage() {
             <p className="text-sm font-black">Weekly totals</p>
             <p className="text-sm font-black text-cyan-100">
               {total.workHours.toFixed(2)} work ·{" "}
-              {total.holidayHours.toFixed(2)} hols · {money(total.wage)}
+              {total.holidayHours.toFixed(2)} holiday · {money(total.wage)}
             </p>
           </div>
 
@@ -2229,6 +2662,7 @@ export default function RotaPage() {
               const row = staffTotals[person.id] || {
                 workHours: 0,
                 holidayHours: 0,
+                breakHours: 0,
                 workWage: 0,
                 holidayWage: 0,
               };
@@ -2248,7 +2682,9 @@ export default function RotaPage() {
                   <div className="mt-1 grid grid-cols-2 gap-1 text-cyan-700">
                     <span>Work {row.workHours.toFixed(2)}h</span>
                     <span className="text-right">{money(row.workWage)}</span>
-                    <span>Hols {row.holidayHours.toFixed(2)}h</span>
+                    <span>Break {row.breakHours.toFixed(2)}h</span>
+                    <span className="text-right">deducted</span>
+                    <span>Holiday {row.holidayHours.toFixed(2)}h</span>
                     <span className="text-right">{money(row.holidayWage)}</span>
                   </div>
                 </div>
@@ -2257,6 +2693,31 @@ export default function RotaPage() {
           </div>
         </div>
       </section>
+    );
+  }
+
+  function PreviousWeekFinaliseCard({ company }: { company: Company }) {
+    const week = previousWeekStart;
+    if (isWeekFinalised(company.key, week)) return null;
+
+    return <WeekPlanner company={company} week={week} previousFinalise />;
+  }
+
+  function PreviousWeekFinaliseGroup() {
+    return (
+      <>
+        <div className="hidden grid-cols-1 gap-5 xl:grid xl:grid-cols-2">
+          {companies.map((company) => (
+            <PreviousWeekFinaliseCard key={`${company.key}-previous-finalise`} company={company} />
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 xl:hidden">
+          {mobileCompanyList.map((company) => (
+            <PreviousWeekFinaliseCard key={`${company.key}-previous-finalise-mobile`} company={company} />
+          ))}
+        </div>
+      </>
     );
   }
 
@@ -2286,8 +2747,119 @@ export default function RotaPage() {
     );
   }
 
+  function reportTotal(report?: WeeklyReport) {
+    if (!report) return { workHours: 0, holidayHours: 0, wage: 0 };
+
+    return Object.values(report.staffTotals).reduce(
+      (sum, row) => ({
+        workHours: sum.workHours + row.workHours,
+        holidayHours: sum.holidayHours + row.holidayHours,
+        wage: sum.wage + row.workWage + row.holidayWage,
+      }),
+      { workHours: 0, holidayHours: 0, wage: 0 },
+    );
+  }
+
+  function HistoryCompanyCard({
+    company,
+    report,
+    weekId,
+  }: {
+    company: Company;
+    report?: WeeklyReport;
+    weekId: string;
+  }) {
+    const week = getWeekFromId(weekId);
+    const finalised = isWeekFinalised(company.key, week);
+    const total = reportTotal(report);
+    const staffRows = report ? Object.values(report.staffTotals) : [];
+
+    return (
+      <div className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <CompanyLogo company={company} />
+            <div className="min-w-0">
+              <p className="truncate text-lg font-black">{getCompanyName(company.key)}</p>
+              <p className="text-xs font-bold text-neutral-500">
+                {report
+                  ? `Saved ${new Date(report.createdAt).toLocaleString("en-GB")}`
+                  : "No saved history snapshot"}
+              </p>
+            </div>
+          </div>
+
+          <span
+            className={`shrink-0 rounded-full px-3 py-1 text-xs font-black ${
+              finalised
+                ? "bg-emerald-100 text-emerald-800"
+                : "bg-amber-100 text-amber-800"
+            }`}
+          >
+            {finalised ? "✓ Finalised" : "Not finalised"}
+          </span>
+        </div>
+
+        <div className="mb-4 grid grid-cols-3 gap-2">
+          <div className="rounded-2xl bg-neutral-100 p-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">Work</p>
+            <p className="mt-1 text-xl font-black">{total.workHours.toFixed(2)}h</p>
+          </div>
+          <div className="rounded-2xl bg-blue-50 p-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-blue-400">Holiday</p>
+            <p className="mt-1 text-xl font-black text-blue-800">{total.holidayHours.toFixed(2)}h</p>
+          </div>
+          <div className="rounded-2xl bg-emerald-50 p-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Wage</p>
+            <p className="mt-1 text-xl font-black text-emerald-800">{money(total.wage)}</p>
+          </div>
+        </div>
+
+        {staffRows.length === 0 ? (
+          <p className="rounded-2xl bg-neutral-100 p-4 text-sm font-bold text-neutral-400">
+            Edit the week to create a saved history snapshot.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+            {staffRows.map((row) => (
+              <div key={row.name} className="rounded-2xl border border-neutral-100 bg-neutral-50 p-3 text-xs font-bold">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-black">{row.name}</span>
+                  <span className="rounded-full bg-white px-2 py-1 font-black">
+                    {(row.workHours + row.holidayHours).toFixed(2)}h
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-neutral-500">
+                  <span>Work {row.workHours.toFixed(2)}h</span>
+                  <span className="text-right">{money(row.workWage)}</span>
+                  <span>Break {(row.breakHours || 0).toFixed(2)}h</span>
+                  <span className="text-right">deducted</span>
+                  <span>Holiday {row.holidayHours.toFixed(2)}h</span>
+                  <span className="text-right">{money(row.holidayWage)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setHistoryEditWeekId(weekId);
+              setHistoryEditDirty(false);
+            }}
+            className="rounded-2xl bg-black px-4 py-2 text-sm font-black text-white"
+          >
+            Edit week
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <main className="min-h-screen bg-neutral-100 text-neutral-950">
+    <main className="rota-page min-h-screen bg-neutral-100 text-neutral-950">
       {activeEditor && (
         <div
           className="fixed inset-0 z-40 bg-transparent"
@@ -2297,11 +2869,7 @@ export default function RotaPage() {
       <DayDetailPopup />
 
       <div className="mx-auto max-w-[1900px] space-y-5 p-3 sm:p-4">
-        <header className="rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
-          <div className="mb-4">
-            <AppNav current="rota" />
-          </div>
-
+        <header className="app-header rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.25em] text-white/50">
@@ -2328,7 +2896,7 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={openMonthlyCalendar}
-                className="flex items-center justify-center gap-1 rounded-2xl bg-white px-2 py-3 text-xs font-black text-black sm:gap-2 sm:px-4 sm:text-sm"
+                className="flex items-center justify-center gap-1 rounded-2xl bg-black px-2 py-3 text-xs font-black text-white sm:gap-2 sm:px-4 sm:text-sm"
               >
                 <GoogleCalendarLogo />
                 Calendar
@@ -2339,7 +2907,7 @@ export default function RotaPage() {
                 onClick={syncGoogleCalendar}
                 className={`flex items-center justify-center gap-1 rounded-2xl px-2 py-3 text-xs font-black sm:gap-2 sm:px-4 sm:text-sm ${
                   googleCalendarSynced
-                    ? "bg-white text-black"
+                    ? "bg-emerald-600 text-white"
                     : "bg-blue-500 text-white"
                 }`}
               >
@@ -2350,11 +2918,15 @@ export default function RotaPage() {
               <button
                 type="button"
                 onClick={() => setSettingsOpen((value) => !value)}
-                className="flex items-center justify-center rounded-2xl bg-emerald-400 px-2 py-3 text-xs font-black text-black sm:px-4 sm:text-sm"
+                className="flex items-center justify-center rounded-2xl bg-emerald-600 px-2 py-3 text-xs font-black text-white sm:px-4 sm:text-sm"
               >
                 Settings
               </button>
             </div>
+          </div>
+
+          <div className="mt-4">
+            <AppNav current="rota" />
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2 xl:hidden">
@@ -2365,7 +2937,7 @@ export default function RotaPage() {
                 onClick={() => setMobileCompany(company.key)}
                 className={`flex min-w-0 items-center justify-center gap-2 rounded-2xl px-3 py-3 text-sm font-black ${
                   mobileCompany === company.key
-                    ? "bg-white text-black"
+                    ? "bg-emerald-600 text-white"
                     : "bg-white/10 text-white"
                 }`}
               >
@@ -2400,50 +2972,45 @@ export default function RotaPage() {
               />
             </div>
 
-            <div className="space-y-2">
-              {filteredReports.length === 0 ? (
+            <div className="space-y-4">
+              {filteredHistoryWeeks.length === 0 ? (
                 <p className="rounded-2xl bg-neutral-100 p-4 text-sm font-bold text-neutral-400">
                   No saved history yet. Save shifts and weekly totals will
                   appear here.
                 </p>
               ) : (
-                filteredReports.map((report) => (
+                filteredHistoryWeeks.map(({ weekId, reports }) => (
                   <div
-                    key={report.id}
-                    className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3"
+                    key={weekId}
+                    className="rounded-[2rem] border border-neutral-200 bg-neutral-50 p-3"
                   >
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <p className="font-black">
-                        {report.companyName} · week {report.weekId}
-                      </p>
-                      <p className="text-xs font-bold text-neutral-400">
-                        {new Date(report.createdAt).toLocaleString("en-GB")}
-                      </p>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-400">
+                          Week history
+                        </p>
+                        <h3 className="text-xl font-black">{formatWeekLabel(getWeekFromId(weekId))}</h3>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistoryEditWeekId(weekId);
+                          setHistoryEditDirty(false);
+                        }}
+                        className="rounded-2xl border border-neutral-300 bg-white px-4 py-2 text-sm font-black text-black shadow-sm"
+                      >
+                        Edit both companies
+                      </button>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-                      {Object.values(report.staffTotals).map((row) => (
-                        <div
-                          key={row.name}
-                          className="rounded-xl bg-white p-2 text-xs font-bold"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>{row.name}</span>
-                            <span>
-                              {(row.workHours + row.holidayHours).toFixed(2)}h
-                            </span>
-                          </div>
-                          <div className="mt-1 grid grid-cols-2 gap-1 text-neutral-500">
-                            <span>Work {row.workHours.toFixed(2)}h</span>
-                            <span className="text-right">
-                              {money(row.workWage)}
-                            </span>
-                            <span>Hols {row.holidayHours.toFixed(2)}h</span>
-                            <span className="text-right">
-                              {money(row.holidayWage)}
-                            </span>
-                          </div>
-                        </div>
+                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                      {companies.map((company) => (
+                        <HistoryCompanyCard
+                          key={`${weekId}-${company.key}`}
+                          company={company}
+                          report={reports[company.key]}
+                          weekId={weekId}
+                        />
                       ))}
                     </div>
                   </div>
@@ -2453,29 +3020,57 @@ export default function RotaPage() {
           </section>
         )}
 
+        {historyEditWeekId && (
+          <section className="rounded-3xl border-2 border-black bg-white p-4 shadow-2xl">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">
+                  Editing history
+                </p>
+                <h2 className="text-2xl font-black">
+                  {formatWeekLabel(getWeekFromId(historyEditWeekId))}
+                </h2>
+                <p className="text-sm font-semibold text-neutral-500">
+                  Save shifts here, then use Update finalised in history if the week has already gone to accounts.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeHistoryEdit}
+                className="rounded-2xl bg-black px-4 py-3 text-sm font-black text-white"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={updateHistoryFinalisedWeek}
+                className="rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white"
+              >
+                Update finalised
+              </button>
+            </div>
+
+            <WeekGroup key={`history-edit-${historyEditWeekId}`} week={getWeekFromId(historyEditWeekId)} />
+          </section>
+        )}
+
         {settingsOpen && (
           <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-black">Settings</h2>
                 <p className="text-sm font-semibold text-neutral-500">
-                  Edit company names, logo URLs, opening times, staff names, and
-                  hourly rates.
+                  Edit company names, logo URLs, and opening times. Staff are managed
+                  from Settings users.
                 </p>
               </div>
 
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={addStaffMember}
-                  className="rounded-2xl bg-black px-4 py-3 text-sm font-black text-white"
-                >
-                  Add staff
-                </button>
-                <button
-                  type="button"
                   onClick={saveStaffSettings}
-                  className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
+                  className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-black text-white"
                 >
                   Save
                 </button>
@@ -2572,47 +3167,10 @@ export default function RotaPage() {
                 </div>
               ))}
             </div>
-
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-              {staff.map((person) => (
-                <div
-                  key={person.id}
-                  className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3"
-                >
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      value={person.name}
-                      onChange={(event) =>
-                        updateStaff(person.id, { name: event.target.value })
-                      }
-                      className="rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
-                    />
-                    <input
-                      type="number"
-                      value={person.hourlyRate}
-                      onChange={(event) =>
-                        updateStaff(person.id, {
-                          hourlyRate: Number(event.target.value),
-                        })
-                      }
-                      className="rounded-xl border border-neutral-200 px-3 py-2 text-sm font-bold"
-                    />
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-end">
-                    <button
-                      type="button"
-                      onClick={() => deleteStaff(person.id)}
-                      className="rounded-xl bg-red-100 px-3 py-2 text-xs font-black text-red-600"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
           </section>
         )}
+
+        <PreviousWeekFinaliseGroup />
 
         <WeekGroup week={currentWeekStart} />
 
@@ -2626,3 +3184,4 @@ export default function RotaPage() {
     </main>
   );
 }
+

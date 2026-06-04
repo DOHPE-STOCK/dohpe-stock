@@ -341,11 +341,11 @@ export default function PriceResearchPage() {
 
   return (
     <main className="min-h-screen bg-neutral-950 p-5 text-white">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+      <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
         <div>
-          <h1 className="text-2xl font-bold">Price Research</h1>
+          <h1 className="text-2xl font-black tracking-normal">Price Research</h1>
 
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-neutral-300">
             Use internal comps, Google Lens, marketplace searches, and Rockit.
           </p>
 
@@ -616,3 +616,4 @@ function StatCard({ title, stats }: { title: string; stats: CompStats }) {
     </div>
   )
 }
+

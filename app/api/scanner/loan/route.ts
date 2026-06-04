@@ -15,10 +15,22 @@ type StockRow = {
   stock_level: number | null
 }
 
-const WAREHOUSE_LOCATION = 'WAREHOUSE'
-const WAREHOUSE_BIN = 'Default'
+const DEFAULT_STORAGE_LOCATION = 'LOCATION-1'
+const DEFAULT_BIN = 'Default'
 const ON_LOAN_LOCATION = 'ON-LOAN'
 const ON_LOAN_BIN = 'ON-LOAN'
+
+const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
+let activeLocationMappings: Record<string, string> = DEFAULT_LOCATION_MAPPINGS
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -36,6 +48,10 @@ function text(value: any) {
   return String(value).trim()
 }
 
+function upper(value: any) {
+  return text(value).toUpperCase()
+}
+
 function cleanScan(value: any) {
   return text(value).replace(/\s+/g, '').toUpperCase()
 }
@@ -48,25 +64,99 @@ function escapePostgrestOrValue(value: string) {
     .replaceAll(',', '\\,')
 }
 
-function canonicalLocation(value: any) {
-  const clean = text(value)
-  const lower = clean.toLowerCase()
+async function loadLocationMappings(supabase: any) {
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
 
-  if (!clean) return WAREHOUSE_LOCATION
-  if (lower === 'default' || lower === 'warehouse') return WAREHOUSE_LOCATION
-  if (clean.toUpperCase().startsWith('SHOP-')) return clean.toUpperCase()
+  if (error) return DEFAULT_LOCATION_MAPPINGS
 
-  return clean
+  const saved =
+    data?.settings?.location_mapping ||
+    data?.settings?.location_mappings ||
+    {}
+
+  const mappings: Record<string, string> = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const key = upper(appLocation)
+    const value = text(linnworksLocation)
+
+    if (key && value) {
+      mappings[key] = value
+    }
+  }
+
+  return mappings
 }
 
-function canonicalBin(value: any, locationName: string) {
+function appStorageLocation(value: any) {
+  const clean = text(value)
+  const key = upper(clean)
+
+  if (!clean) return DEFAULT_STORAGE_LOCATION
+  if (/^LOCATION-\d+$/i.test(clean)) return key
+
+  if (key === 'DEFAULT' || key === 'WAREHOUSE') {
+    const warehouseEntry = Object.entries(activeLocationMappings).find(([, mapped]) => {
+      const mappedKey = upper(mapped)
+      return mappedKey === 'DEFAULT' || mappedKey === 'WAREHOUSE'
+    })
+
+    return warehouseEntry?.[0] || DEFAULT_STORAGE_LOCATION
+  }
+
+  const displayMatch = Object.entries(activeLocationMappings).find(([, mapped]) => {
+    return upper(mapped) === key
+  })
+
+  if (displayMatch?.[0]) return displayMatch[0]
+
+  const shopMatch = key.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+  return key
+}
+
+function displayLocation(value: any) {
+  const storage = appStorageLocation(value)
+
+  if (storage === ON_LOAN_LOCATION) return ON_LOAN_LOCATION
+
+  const mapped = activeLocationMappings[storage]
+  if (!mapped) return storage
+
+  if (upper(mapped) === 'DEFAULT') return 'WAREHOUSE'
+
+  return mapped
+}
+
+function canonicalBin(value: any, storageLocation: string) {
   const clean = text(value)
 
   if (clean) return clean
-  if (canonicalLocation(locationName) === WAREHOUSE_LOCATION) return WAREHOUSE_BIN
-  if (canonicalLocation(locationName).startsWith('SHOP-')) return 'STOCK'
 
-  return WAREHOUSE_BIN
+  if (appStorageLocation(storageLocation) === DEFAULT_STORAGE_LOCATION) {
+    return DEFAULT_BIN
+  }
+
+  if (displayLocation(storageLocation).toUpperCase().startsWith('SHOP-')) {
+    return 'STOCK'
+  }
+
+  return DEFAULT_BIN
+}
+
+function isShopStorageLocation(value: any) {
+  const storage = appStorageLocation(value)
+
+  if (/^LOCATION-\d+$/.test(storage)) {
+    return storage !== DEFAULT_STORAGE_LOCATION
+  }
+
+  return displayLocation(storage).toUpperCase().startsWith('SHOP-')
 }
 
 async function findItemByScan(supabase: any, scanValue: string) {
@@ -91,6 +181,7 @@ async function findItemByScan(supabase: any, scanValue: string) {
       current_bin,
       loan_status,
       loaned_at,
+      loan_returned_at,
       loan_notes,
       ai_title,
       basic_title
@@ -117,16 +208,22 @@ async function getStockRows(supabase: any, itemId: string) {
 function getAvailableRows(rows: StockRow[]) {
   return rows
     .filter((row) => Number(row.stock_level || 0) > 0)
-    .map((row) => ({
-      id: row.id,
-      location_name: canonicalLocation(row.location_name),
-      bin_code: canonicalBin(row.bin_code, canonicalLocation(row.location_name)),
-      stock_level: Number(row.stock_level || 0),
-    }))
+    .map((row) => {
+      const storageLocation = appStorageLocation(row.location_name)
+      const binCode = canonicalBin(row.bin_code, storageLocation)
+
+      return {
+        id: row.id,
+        location_name: storageLocation,
+        display_location: displayLocation(storageLocation),
+        bin_code: binCode,
+        stock_level: Number(row.stock_level || 0),
+      }
+    })
     .sort((a, b) => {
       const aKey = `${a.location_name}/${a.bin_code}`
       const bKey = `${b.location_name}/${b.bin_code}`
-      return aKey.localeCompare(bKey)
+      return aKey.localeCompare(bKey, undefined, { numeric: true, sensitivity: 'base' })
     })
 }
 
@@ -157,7 +254,7 @@ async function upsertStockRow(params: {
   stockLevelDelta: number
   source: string
 }) {
-  const locationName = canonicalLocation(params.locationName)
+  const locationName = appStorageLocation(params.locationName)
   const binCode = canonicalBin(params.binCode, locationName)
   const now = new Date().toISOString()
 
@@ -190,6 +287,7 @@ async function upsertStockRow(params: {
     return {
       id: existing.id,
       location_name: locationName,
+      display_location: displayLocation(locationName),
       bin_code: binCode,
       stock_level: nextStock,
     }
@@ -215,7 +313,10 @@ async function upsertStockRow(params: {
 
   if (insertError) throw new Error(insertError.message)
 
-  return inserted
+  return {
+    ...inserted,
+    display_location: displayLocation(inserted.location_name),
+  }
 }
 
 async function updateItemSummary(params: {
@@ -226,13 +327,13 @@ async function updateItemSummary(params: {
   const rows = await getStockRows(params.supabase, params.itemId)
   const stockLevel = rows.reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
   const warehouseStock = rows
-    .filter((row) => canonicalLocation(row.location_name) === WAREHOUSE_LOCATION)
+    .filter((row) => appStorageLocation(row.location_name) === DEFAULT_STORAGE_LOCATION)
     .reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
   const shopFloorStock = rows
     .filter(
       (row) =>
-        canonicalLocation(row.location_name).startsWith('SHOP-') &&
-        text(row.bin_code).toUpperCase() === 'FLOOR'
+        isShopStorageLocation(row.location_name) &&
+        upper(row.bin_code) === 'FLOOR'
     )
     .reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
 
@@ -241,11 +342,13 @@ async function updateItemSummary(params: {
       .filter((row) => Number(row.stock_level || 0) > 0)
       .sort((a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0] || null
 
+  const currentLocation = displayRow ? appStorageLocation(displayRow.location_name) : null
+
   const payload = {
     stock_level: stockLevel,
     warehouse_stock: warehouseStock,
     shop_floor_stock: shopFloorStock,
-    current_location: displayRow ? canonicalLocation(displayRow.location_name) : null,
+    current_location: currentLocation,
     current_bin: displayRow?.bin_code || null,
     updated_at: new Date().toISOString(),
     ...(params.extra || {}),
@@ -279,6 +382,9 @@ async function insertQueueRow(params: {
   timestampField: string
   timestamp: string
 }) {
+  const locationName = appStorageLocation(params.locationName)
+  const binCode = canonicalBin(params.binCode, locationName)
+
   const { error } = await params.supabase
     .from('linnworks_sync_queue')
     .insert({
@@ -289,8 +395,8 @@ async function insertQueueRow(params: {
         sku: params.sku,
         delta: params.delta,
         quantity: Math.abs(params.delta),
-        location: canonicalLocation(params.locationName),
-        bin: canonicalBin(params.binCode, params.locationName),
+        location: locationName,
+        bin: binCode,
         reason: params.reason,
         source: 'dohpe_app',
         staff: params.staffName,
@@ -319,6 +425,7 @@ async function fetchLoans(supabase: any) {
       current_bin,
       loan_status,
       loaned_at,
+      loan_returned_at,
       loan_notes,
       ai_title,
       basic_title
@@ -367,18 +474,20 @@ async function loanOut(params: {
     throw new Error(`${item.sku} is already on loan.`)
   }
 
-  const sourceLocation = canonicalLocation(params.sourceLocation)
+  const sourceLocation = appStorageLocation(params.sourceLocation)
   const sourceBin = canonicalBin(params.sourceBin, sourceLocation)
 
   const stockRows = await getStockRows(params.supabase, item.id)
   const sourceRow = stockRows.find(
     (row) =>
-      canonicalLocation(row.location_name) === sourceLocation &&
+      appStorageLocation(row.location_name) === sourceLocation &&
       canonicalBin(row.bin_code, sourceLocation).toUpperCase() === sourceBin.toUpperCase()
   )
 
   if (!sourceRow || Number(sourceRow.stock_level || 0) <= 0) {
-    throw new Error(`${item.sku} has no available stock in ${sourceLocation} / ${sourceBin}.`)
+    throw new Error(
+      `${item.sku} has no available stock in ${displayLocation(sourceLocation)} / ${sourceBin}.`
+    )
   }
 
   const beforeStock = Number(sourceRow.stock_level || 0)
@@ -394,6 +503,7 @@ async function loanOut(params: {
 
   const loanNotes = JSON.stringify({
     source_location: sourceLocation,
+    source_display_location: displayLocation(sourceLocation),
     source_bin: sourceBin,
     loaned_out_at: now,
     loaned_out_by: params.staffName,
@@ -424,6 +534,8 @@ async function loanOut(params: {
       status: 'on_loan',
       loaned_at: now,
       loaned_by: params.staffId,
+      source_location: sourceLocation,
+      source_bin: sourceBin,
     })
 
   if (loanInsertError) throw new Error(loanInsertError.message)
@@ -459,6 +571,7 @@ async function loanOut(params: {
   return {
     item,
     source_location: sourceLocation,
+    source_display_location: displayLocation(sourceLocation),
     source_bin: sourceBin,
     before_stock: beforeStock,
     after_stock: afterStock,
@@ -484,7 +597,7 @@ async function returnLoan(params: {
     throw new Error(`${item.sku} is not currently on loan.`)
   }
 
-  const returnLocation = canonicalLocation(params.returnLocation)
+  const returnLocation = appStorageLocation(params.returnLocation)
   const returnBin = canonicalBin(params.returnBin, returnLocation)
   const now = new Date().toISOString()
 
@@ -504,6 +617,8 @@ async function returnLoan(params: {
       status: 'returned',
       returned_at: now,
       returned_by: params.staffId,
+      return_location: returnLocation,
+      return_bin: returnBin,
       updated_at: now,
     })
     .eq('item_id', item.id)
@@ -555,6 +670,7 @@ async function returnLoan(params: {
   return {
     item,
     destination_location: returnLocation,
+    destination_display_location: displayLocation(returnLocation),
     destination_bin: returnBin,
     returned_row: returnedRow,
     summary,
@@ -564,6 +680,7 @@ async function returnLoan(params: {
 export async function GET() {
   try {
     const supabase = getSupabaseAdmin()
+    activeLocationMappings = await loadLocationMappings(supabase)
     const loans = await fetchLoans(supabase)
 
     return NextResponse.json({
@@ -584,6 +701,8 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
+    activeLocationMappings = await loadLocationMappings(supabase)
+
     const body = await request.json().catch(() => ({}))
 
     const action = text(body.action) as LoanAction
@@ -631,7 +750,7 @@ export async function POST(request: Request) {
 
       return NextResponse.json({
         ok: true,
-        message: `${result.item.sku} marked on loan from ${result.source_location} / ${result.source_bin}.`,
+        message: `${result.item.sku} marked on loan from ${result.source_display_location} / ${result.source_bin}.`,
         result,
       })
     }
@@ -654,7 +773,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: `${result.item.sku} returned to ${result.destination_location} / ${result.destination_bin}.`,
+      message: `${result.item.sku} returned to ${result.destination_display_location} / ${result.destination_bin}.`,
       result,
     })
   } catch (error: any) {

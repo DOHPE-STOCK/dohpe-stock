@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
@@ -11,6 +10,7 @@ type TransferItem = {
   id: string
   item_id: string | null
   sku: string
+  source_bin?: string | null
   status: string
 }
 
@@ -27,10 +27,13 @@ type Transfer = {
 }
 
 type TimePeriod = '7days' | 'month' | 'year'
-type ReceiveBinChoice = 'Default' | 'FLOOR' | 'STOCK' | string
 
-function formatTransferNumber(value: number) {
-  return String(value).padStart(7, '0')
+type LocationConfig = {
+  name: string
+  label: string | null
+  is_active: boolean
+  bin_mode: 'basic' | 'range' | null
+  basic_bins: string[] | null
 }
 
 type StockItemRow = {
@@ -41,49 +44,68 @@ type StockItemRow = {
   current_bin: string | null
 }
 
+type ReceiveModalState = {
+  transfer: Transfer
+  selectedLocation: string
+}
+
 const DEFAULT_BIN = 'Default'
+const WAREHOUSE_LOCATION = 'LOCATION-1'
+
+const LOCATION_DISPLAY_ORDER = [
+  'LOCATION-1',
+  'LOCATION-2',
+  'LOCATION-3',
+  'LOCATION-4',
+  'LOCATION-5',
+]
+
+const FALLBACK_LOCATIONS: LocationConfig[] = [
+  { name: 'LOCATION-1', label: 'WAREHOUSE', is_active: true, bin_mode: 'range', basic_bins: [DEFAULT_BIN] },
+  { name: 'LOCATION-2', label: 'SHOP-1', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-3', label: 'SHOP-2', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-4', label: 'SHOP-3', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-5', label: 'SHOP-4', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+]
 
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
 }
 
+function canonicalLocationKey(location: string | null | undefined) {
+  return text(location).toUpperCase().replace(/[\s_]+/g, '-')
+}
+
+function formatTransferNumber(value: number) {
+  return String(value).padStart(7, '0')
+}
+
 function isReusableStockItem(item: StockItemRow | undefined) {
   return text(item?.sku_type).toLowerCase() === 'reusable'
 }
 
-function linnworksLocation(location: string) {
-  const value = text(location).toUpperCase()
-  if (!value || value === 'DEFAULT') return 'WAREHOUSE'
-  return value
+function configuredLocationRows(rows: LocationConfig[]) {
+  const configured = rows.filter((row) => text(row.label) || /^LOCATION-\d+$/i.test(text(row.name)))
+  return configured.length > 0 ? configured : rows
 }
 
-function defaultReceiveBin(location: string) {
-  const value = text(location).toUpperCase()
-  if (value.startsWith('SHOP-')) return 'STOCK'
-  return DEFAULT_BIN
-}
-
-function askReceiveBin(location: string) {
-  const suggested = defaultReceiveBin(location)
-  const answer = window.prompt(
-    `Receive into which bin at ${location}?\n\nFor shop transfers use FLOOR or STOCK.\nSuggested: ${suggested}`,
-    suggested
-  )
-
-  if (answer === null) return null
-
-  const clean = text(answer).toUpperCase()
-  return clean || suggested
-}
-
-function groupBySku(items: TransferItem[]) {
-  const groups = new Map<string, number>()
+function groupBySkuAndSourceBin(items: TransferItem[]) {
+  const groups = new Map<string, { sku: string; sourceBin: string; quantity: number }>()
 
   for (const item of items) {
     const sku = text(item.sku).toUpperCase()
     if (!sku) continue
-    groups.set(sku, (groups.get(sku) || 0) + 1)
+
+    const sourceBin = text(item.source_bin) || DEFAULT_BIN
+    const key = `${sku}::${sourceBin}`
+    const existing = groups.get(key)
+
+    groups.set(key, {
+      sku,
+      sourceBin,
+      quantity: (existing?.quantity || 0) + 1,
+    })
   }
 
   return groups
@@ -93,172 +115,107 @@ export default function TransfersPage() {
   const { staff } = useStaff()
 
   const [transfers, setTransfers] = useState<Transfer[]>([])
+  const [locationConfigs, setLocationConfigs] = useState<LocationConfig[]>([])
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('month')
-
-  async function loadItemsBySku(skus: string[]) {
-    const uniqueSkus = Array.from(new Set(skus.map((sku) => text(sku).toUpperCase()).filter(Boolean)))
-
-    if (uniqueSkus.length === 0) return new Map<string, StockItemRow>()
-
-    const { data, error } = await supabase
-      .from('items')
-      .select('id, sku, sku_type, current_location, current_bin')
-      .in('sku', uniqueSkus)
-
-    if (error) throw new Error(error.message)
-
-    return new Map(
-      (data || []).map((item: any) => [text(item.sku).toUpperCase(), item as StockItemRow])
-    )
-  }
-
-  async function adjustLocalStockLocation(params: {
-    item: StockItemRow
-    location: string
-    bin: string
-    delta: number
-  }) {
-    const locationName = linnworksLocation(params.location)
-    const binCode = text(params.bin) || DEFAULT_BIN
-    const now = new Date().toISOString()
-
-    const { data, error } = await supabase
-      .from('item_stock_locations')
-      .select('id, stock_level')
-      .eq('item_id', params.item.id)
-      .eq('location_name', locationName)
-      .eq('bin_code', binCode)
-      .limit(1)
-
-    if (error) throw new Error(error.message)
-
-    const existing = data?.[0]
-    const currentStock = Number(existing?.stock_level || 0)
-    const nextStock = currentStock + params.delta
-
-    if (nextStock < 0) {
-      throw new Error(
-        `${params.item.sku} does not have enough stock in ${params.location} / ${binCode}. Current: ${currentStock}, trying to move: ${Math.abs(params.delta)}.`
-      )
-    }
-
-    if (existing) {
-      const { error: updateError } = await supabase
-        .from('item_stock_locations')
-        .update({
-          stock_level: nextStock,
-          source: 'app_transfer',
-          updated_at: now,
-        })
-        .eq('id', existing.id)
-
-      if (updateError) throw new Error(updateError.message)
-      return
-    }
-
-    const { error: insertError } = await supabase
-      .from('item_stock_locations')
-      .insert({
-        item_id: params.item.id,
-        sku: params.item.sku,
-        location_name: locationName,
-        location_id: null,
-        bin_code: binCode,
-        stock_level: nextStock,
-        source: 'app_transfer',
-        synced_at: null,
-        updated_at: now,
-      })
-
-    if (insertError) throw new Error(insertError.message)
-  }
-
-  async function moveReusableTransferStock(params: {
-    transfer: Transfer
-    receivableItems: TransferItem[]
-    itemMap: Map<string, StockItemRow>
-    movedAt: string
-    destinationBin: string
-  }) {
-    const reusableRows = params.receivableItems.filter((row) =>
-      isReusableStockItem(params.itemMap.get(text(row.sku).toUpperCase()))
-    )
-
-    if (reusableRows.length === 0) return
-
-    const grouped = groupBySku(reusableRows)
-    const queueRows: any[] = []
-
-    for (const [sku, quantity] of grouped) {
-      const item = params.itemMap.get(sku)
-      if (!item) continue
-
-      await adjustLocalStockLocation({
-        item,
-        location: params.transfer.from_location,
-        bin: DEFAULT_BIN,
-        delta: -quantity,
-      })
-
-      await adjustLocalStockLocation({
-        item,
-        location: params.transfer.to_location,
-        bin: params.destinationBin,
-        delta: quantity,
-      })
-
-      queueRows.push(
-        {
-          item_id: item.id,
-          sku,
-          action: 'adjust_stock',
-          payload: {
-            sku,
-            delta: -quantity,
-            quantity,
-            location: params.transfer.from_location,
-            bin: DEFAULT_BIN,
-            strict_location: true,
-            reason: 'transfer_reusable_from_source',
-            transfer_id: params.transfer.id,
-            transfer_number: params.transfer.transfer_number,
-            moved_at: params.movedAt,
-            moved_by: staff?.name || null,
-          },
-          status: 'pending',
-        },
-        {
-          item_id: item.id,
-          sku,
-          action: 'adjust_stock',
-          payload: {
-            sku,
-            delta: quantity,
-            quantity,
-            location: params.transfer.to_location,
-            bin: params.destinationBin,
-            reason: 'transfer_reusable_to_destination',
-            transfer_id: params.transfer.id,
-            transfer_number: params.transfer.transfer_number,
-            moved_at: params.movedAt,
-            moved_by: staff?.name || null,
-          },
-          status: 'pending',
-        }
-      )
-    }
-
-    if (queueRows.length > 0) {
-      const { error } = await supabase.from('linnworks_sync_queue').insert(queueRows)
-      if (error) throw new Error(error.message)
-    }
-  }
+  const [receiveModal, setReceiveModal] = useState<ReceiveModalState | null>(null)
 
   useEffect(() => {
     fetchTransfers(timePeriod)
+    fetchLocationConfigs()
   }, [timePeriod])
+
+  async function fetchLocationConfigs() {
+    const { data, error } = await supabase
+      .from('locations')
+      .select('name, label, is_active, bin_mode, basic_bins')
+      .eq('is_active', true)
+
+    if (error) {
+      setLocationConfigs(FALLBACK_LOCATIONS)
+      return
+    }
+
+    const rows = configuredLocationRows((data || []) as LocationConfig[])
+    setLocationConfigs(rows.length > 0 ? rows : FALLBACK_LOCATIONS)
+  }
+
+  function getLocationConfig(location: string) {
+    const value = canonicalLocationKey(location)
+
+    return locationConfigs.find((config) => {
+      return (
+        canonicalLocationKey(config.name) === value ||
+        canonicalLocationKey(config.label) === value
+      )
+    })
+  }
+
+  function resolveLocationName(location: string) {
+    const clean = canonicalLocationKey(location)
+    const config = getLocationConfig(clean)
+
+    if (config?.name) return canonicalLocationKey(config.name)
+
+    if (clean === 'WAREHOUSE' || clean === 'DEFAULT') return 'LOCATION-1'
+
+    const shopMatch = clean.match(/^SHOP-(\d+)$/)
+    if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+    return clean || WAREHOUSE_LOCATION
+  }
+
+  function displayLocation(location: string) {
+    const name = resolveLocationName(location)
+    const config = getLocationConfig(name)
+
+    if (text(config?.label)) return text(config?.label)
+
+    if (name === 'LOCATION-1') return 'WAREHOUSE'
+
+    const match = name.match(/^LOCATION-(\d+)$/)
+    if (match && Number(match[1]) >= 2) return `SHOP-${Number(match[1]) - 1}`
+
+    return name || '-'
+  }
+
+  function getOrderedLocationOptions() {
+    const available = locationConfigs.length > 0 ? locationConfigs : FALLBACK_LOCATIONS
+    const byName = new Map<string, LocationConfig>()
+
+    for (const location of available) {
+      const name = resolveLocationName(location.name)
+      byName.set(name, { ...location, name })
+    }
+
+    const ordered = LOCATION_DISPLAY_ORDER
+      .map((name) => byName.get(name) || FALLBACK_LOCATIONS.find((row) => row.name === name))
+      .filter(Boolean) as LocationConfig[]
+
+    const extras = available
+      .map((row) => ({ ...row, name: resolveLocationName(row.name) }))
+      .filter((row) => !LOCATION_DISPLAY_ORDER.includes(row.name))
+
+    return [...ordered, ...extras].map((location) => ({
+      name: resolveLocationName(location.name),
+      label: displayLocation(location.name),
+    }))
+  }
+
+  function getDefaultReceiveBin(location: string) {
+    const config = getLocationConfig(location)
+
+    if (config?.bin_mode === 'basic') {
+      const bins = (config.basic_bins || [])
+        .map((bin) => text(bin).toUpperCase())
+        .filter(Boolean)
+
+      return bins[0] || DEFAULT_BIN
+    }
+
+    return DEFAULT_BIN
+  }
 
   function getStartDate(period: TimePeriod) {
     const date = new Date()
@@ -295,6 +252,7 @@ export default function TransfersPage() {
           id,
           item_id,
           sku,
+          source_bin,
           status
         )
       `)
@@ -345,28 +303,233 @@ export default function TransfersPage() {
     window.open(`/transfers/${transfer.id}/manifest`, '_blank')
   }
 
-  async function markTransferReceived(transfer: Transfer) {
+  async function loadItemsBySku(skus: string[]) {
+    const uniqueSkus = Array.from(new Set(skus.map((sku) => text(sku).toUpperCase()).filter(Boolean)))
+
+    if (uniqueSkus.length === 0) return new Map<string, StockItemRow>()
+
+    const { data, error } = await supabase
+      .from('items')
+      .select('id, sku, sku_type, current_location, current_bin')
+      .in('sku', uniqueSkus)
+
+    if (error) throw new Error(error.message)
+
+    return new Map(
+      (data || []).map((item: any) => [text(item.sku).toUpperCase(), item as StockItemRow])
+    )
+  }
+
+  async function adjustLocalStockLocation(params: {
+    item: StockItemRow
+    location: string
+    bin: string
+    delta: number
+    allowMissingSource?: boolean
+  }) {
+    const locationName = resolveLocationName(params.location)
+    const binCode = text(params.bin) || DEFAULT_BIN
+
+    const response = await fetch('/api/items/stock-location/adjust', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        item_id: params.item.id,
+        sku: params.item.sku,
+        location_name: locationName,
+        bin_code: binCode,
+        delta: params.delta,
+        allow_missing_source: params.allowMissingSource,
+        source: 'app_transfer',
+      }),
+    })
+
+    const result = await response.json().catch(() => null)
+
+    if (!response.ok || result?.ok === false) {
+      if (result?.error === 'insufficient_stock') {
+        const currentStock = Number(result.current_stock || 0)
+        const attemptedDelta = Number(result.attempted_delta || params.delta)
+        const readableLocation = displayLocation(result.location_name || locationName)
+        const readableBin = text(result.bin_code) || binCode
+
+        throw new Error(
+          `${params.item.sku} does not have enough stock in ${readableLocation} / ${readableBin}. Current: ${currentStock}, trying to move: ${Math.abs(attemptedDelta)}.`
+        )
+      }
+
+      throw new Error(
+        result?.error || `Could not adjust stock for ${params.item.sku} in ${displayLocation(locationName)} / ${binCode}.`
+      )
+    }
+
+    return result
+  }
+
+  async function moveReusableTransferStock(params: {
+    transfer: Transfer
+    receivableItems: TransferItem[]
+    itemMap: Map<string, StockItemRow>
+    movedAt: string
+    destinationBin: string
+    destinationLocation: string
+  }) {
+    const grouped = groupBySkuAndSourceBin(params.receivableItems)
+    const queueRows: any[] = []
+
+    for (const { sku, sourceBin, quantity } of grouped.values()) {
+      const item = params.itemMap.get(sku)
+      if (!item) continue
+
+      const sourceResult = await adjustLocalStockLocation({
+        item,
+        location: params.transfer.from_location,
+        bin: sourceBin,
+        delta: -quantity,
+        allowMissingSource: !isReusableStockItem(item),
+      })
+
+      if (sourceResult?.skipped) continue
+
+      await adjustLocalStockLocation({
+        item,
+        location: params.destinationLocation,
+        bin: params.destinationBin,
+        delta: quantity,
+      })
+
+      queueRows.push(
+        {
+          item_id: item.id,
+          sku,
+          action: 'adjust_stock',
+          payload: {
+            sku,
+            delta: -quantity,
+            quantity,
+            location: resolveLocationName(params.transfer.from_location),
+            bin: sourceBin,
+            strict_location: true,
+            reason: 'transfer_reusable_from_source',
+            transfer_id: params.transfer.id,
+            transfer_number: params.transfer.transfer_number,
+            moved_at: params.movedAt,
+            moved_by: staff?.name || null,
+          },
+          status: 'pending',
+        },
+        {
+          item_id: item.id,
+          sku,
+          action: 'adjust_stock',
+          payload: {
+            sku,
+            delta: quantity,
+            quantity,
+            location: resolveLocationName(params.destinationLocation),
+            bin: params.destinationBin,
+            reason: 'transfer_reusable_to_destination',
+            transfer_id: params.transfer.id,
+            transfer_number: params.transfer.transfer_number,
+            moved_at: params.movedAt,
+            moved_by: staff?.name || null,
+          },
+          status: 'pending',
+        }
+      )
+    }
+
+    if (queueRows.length > 0) {
+      const { error } = await supabase.from('linnworks_sync_queue').insert(queueRows)
+      if (error) throw new Error(error.message)
+    }
+  }
+
+  function openReceiveModal(transfer: Transfer) {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return
     }
 
-    const items = transfer.stock_transfer_items || []
-    const receivableItems = items.filter((item) => item.status === 'in_transfer')
-
-    if (receivableItems.length === 0) {
+    const counts = getCounts(transfer)
+    if (counts.inTransfer === 0) {
       setMessage('No in-transfer items to receive.')
       return
     }
 
+    setMessage('')
+    setReceiveModal({
+      transfer,
+      selectedLocation: resolveLocationName(transfer.to_location || WAREHOUSE_LOCATION),
+    })
+  }
+
+  function closeReceiveModal() {
+    if (loading) return
+    setReceiveModal(null)
+  }
+
+  function getReceivableItems(transfer: Transfer) {
+    return (transfer.stock_transfer_items || []).filter((item) => item.status === 'in_transfer')
+  }
+
+  function buildAllocateItemsParam(receivableItems: TransferItem[]) {
+    const grouped = groupBySkuAndSourceBin(receivableItems)
+
+    return Array.from(grouped.values())
+      .map(({ sku, sourceBin, quantity }) => {
+        return `${encodeURIComponent(sku)}:${quantity}:${encodeURIComponent(sourceBin)}`
+      })
+      .join(',')
+  }
+
+  function openAllocateForTransfer() {
+    if (!receiveModal || loading) return
+
+    const transfer = receiveModal.transfer
+    const receivableItems = getReceivableItems(transfer)
+
+    if (receivableItems.length === 0) {
+      setMessage('No in-transfer items to allocate.')
+      setReceiveModal(null)
+      return
+    }
+
+    const destinationLocation = resolveLocationName(receiveModal.selectedLocation)
+    const sourceLocation = resolveLocationName(transfer.from_location)
+    const transferNo = formatTransferNumber(transfer.transfer_number)
+    const items = buildAllocateItemsParam(receivableItems)
+
+    const params = new URLSearchParams()
+    params.set('receive_transfer_id', transfer.id)
+    params.set('transfer_number', transferNo)
+    params.set('destination_location', destinationLocation)
+    params.set('location', destinationLocation)
+    params.set('source_location', sourceLocation)
+    params.set('items', items)
+
+    setReceiveModal(null)
+    window.location.href = `/scanner/allocate?${params.toString()}`
+  }
+
+  async function receiveToDefault() {
+    if (!receiveModal || !staff || loading) return
+
+    const transfer = receiveModal.transfer
+    const receivableItems = getReceivableItems(transfer)
+
+    if (receivableItems.length === 0) {
+      setMessage('No in-transfer items to receive.')
+      setReceiveModal(null)
+      return
+    }
+
+    const destinationLocation = resolveLocationName(receiveModal.selectedLocation)
+    const destinationBin = getDefaultReceiveBin(destinationLocation)
     const transferNo = formatTransferNumber(transfer.transfer_number)
 
-    const destinationBin = askReceiveBin(transfer.to_location)
-
-    if (!destinationBin) return
-
     const confirmed = window.confirm(
-      `Accept transfer #${transferNo} by ${staff.name}?\n\nThis will mark ${receivableItems.length} unit(s) as received into ${transfer.to_location} / ${destinationBin}.`
+      `Accept transfer #${transferNo} by ${staff.name}?\n\nThis will mark ${receivableItems.length} unit(s) as received into ${displayLocation(destinationLocation)} / ${destinationBin}.`
     )
 
     if (!confirmed) return
@@ -397,6 +560,7 @@ export default function TransfersPage() {
         itemMap,
         movedAt: receivedAt,
         destinationBin,
+        destinationLocation,
       })
 
       const { error: transferItemsError } = await supabase
@@ -406,6 +570,7 @@ export default function TransfersPage() {
           received_at: receivedAt,
         })
         .in('id', transferItemIds)
+        .eq('status', 'in_transfer')
 
       if (transferItemsError) throw new Error(transferItemsError.message)
 
@@ -414,7 +579,7 @@ export default function TransfersPage() {
           .from('items')
           .update({
             location_status: 'received',
-            current_location: transfer.to_location,
+            current_location: destinationLocation,
             current_bin: destinationBin,
             last_saved_by: staff.id,
             linnworks_location_sync_status: 'pending',
@@ -432,7 +597,7 @@ export default function TransfersPage() {
             action: 'update_location',
             payload: {
               sku: item.sku,
-              location: transfer.to_location,
+              location: destinationLocation,
               bin: destinationBin,
               movement_type: 'transfer_receive',
               transfer_id: transfer.id,
@@ -458,12 +623,15 @@ export default function TransfersPage() {
           status: 'received',
           received_at: receivedAt,
           received_by: staff.id,
+          to_location: destinationLocation,
         })
         .eq('id', transfer.id)
+        .neq('status', 'received')
 
       if (transferError) throw new Error(transferError.message)
 
-      setMessage(`Transfer #${transferNo} received into ${transfer.to_location} / ${destinationBin} by ${staff.name}.`)
+      setReceiveModal(null)
+      setMessage(`Transfer #${transferNo} received into ${displayLocation(destinationLocation)} / ${destinationBin} by ${staff.name}.`)
       await fetchTransfers()
     } catch (error: any) {
       setMessage(error.message || 'Transfer receive failed.')
@@ -475,12 +643,12 @@ export default function TransfersPage() {
   return (
     <StaffPermissionGate permission="scanner">
       <main className="min-h-screen bg-neutral-950 p-5 text-white">
-        <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="flex flex-wrap items-center gap-4">
+        <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
             <div>
-              <h1 className="text-2xl font-bold">Stock Transfers</h1>
+              <h1 className="text-2xl font-black tracking-normal">Stock Transfers</h1>
 
-              <p className="text-sm text-neutral-400">
+              <p className="text-sm text-neutral-300">
                 View and receive warehouse/shop stock transfers.
               </p>
 
@@ -494,8 +662,6 @@ export default function TransfersPage() {
                 </p>
               )}
             </div>
-
-            <AppNav current="transfers" />
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -567,12 +733,12 @@ export default function TransfersPage() {
                       <div className="grid gap-2 text-sm text-neutral-300 sm:grid-cols-2">
                         <p>
                           <strong className="text-neutral-500">From:</strong>{' '}
-                          {transfer.from_location}
+                          {displayLocation(transfer.from_location)}
                         </p>
 
                         <p>
                           <strong className="text-neutral-500">To:</strong>{' '}
-                          {transfer.to_location}
+                          {displayLocation(transfer.to_location)}
                         </p>
 
                         <p>
@@ -618,17 +784,16 @@ export default function TransfersPage() {
                       <button
                         type="button"
                         onClick={() => printManifest(transfer)}
-                        className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-bold text-white hover:bg-neutral-800"
+                        className="rounded-xl border border-neutral-700 bg-neutral-800 px-4 py-2 text-sm font-bold text-white hover:bg-neutral-700"
                       >
                         Print Manifest
                       </button>
 
                       <button
-                        onClick={() => markTransferReceived(transfer)}
-                        disabled={
-                          loading || !staff || isReceived || counts.inTransfer === 0
-                        }
-                        className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+                        type="button"
+                        onClick={() => openReceiveModal(transfer)}
+                        disabled={loading || !staff || isReceived || counts.inTransfer === 0}
+                        className="rounded-xl bg-green-600 px-4 py-2.5 text-sm font-black text-white hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
                       >
                         Mark as Received
                       </button>
@@ -637,6 +802,88 @@ export default function TransfersPage() {
                 </section>
               )
             })}
+          </div>
+        )}
+
+        {receiveModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+            <section className="w-full max-w-5xl rounded-3xl border border-green-900 bg-neutral-950 p-6 shadow-2xl">
+              <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="mb-1 text-sm font-black uppercase text-neutral-500">
+                    To: {displayLocation(receiveModal.selectedLocation)}
+                  </p>
+
+                  <h2 className="text-3xl font-black">
+                    Receive transfer #{formatTransferNumber(receiveModal.transfer.transfer_number)}
+                  </h2>
+
+                  <p className="mt-1 text-sm text-neutral-400">
+                    Choose destination, then choose how to receive it.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={closeReceiveModal}
+                  disabled={loading}
+                  className="rounded-xl border border-neutral-800 px-5 py-3 text-sm font-black text-neutral-300 hover:border-white disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {getOrderedLocationOptions().map((location) => {
+                  const selected = resolveLocationName(receiveModal.selectedLocation) === location.name
+
+                  return (
+                    <button
+                      key={location.name}
+                      type="button"
+                      disabled={loading}
+                      onClick={() =>
+                        setReceiveModal((current) =>
+                          current
+                            ? {
+                                ...current,
+                                selectedLocation: location.name,
+                              }
+                            : current
+                        )
+                      }
+                      className={`rounded-xl border px-4 py-5 text-lg font-black disabled:opacity-40 ${
+                        selected
+                          ? 'border-white bg-white text-black'
+                          : 'border-neutral-800 bg-neutral-950 text-white hover:border-white'
+                      }`}
+                    >
+                      {location.label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={receiveToDefault}
+                  disabled={loading}
+                  className="rounded-xl bg-green-700 px-5 py-6 text-xl font-black text-white hover:bg-green-600 disabled:opacity-40"
+                >
+                  Default
+                </button>
+
+                <button
+                  type="button"
+                  onClick={openAllocateForTransfer}
+                  disabled={loading}
+                  className="rounded-xl bg-blue-700 px-5 py-6 text-xl font-black text-white hover:bg-blue-600 disabled:opacity-40"
+                >
+                  Allocate
+                </button>
+              </div>
+            </section>
           </div>
         )}
       </main>

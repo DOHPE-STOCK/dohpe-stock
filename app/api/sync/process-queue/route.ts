@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 
 export const dynamic = 'force-dynamic'
 
@@ -102,14 +103,135 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
+let activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
+
+type LocationBinMode = 'basic' | 'range'
+
+type AppLocationSetting = {
+  name: string
+  label: string
+  is_active: boolean
+  bin_mode: LocationBinMode
+  basic_bins: string[]
+}
+
+const DEFAULT_APP_LOCATION_SETTINGS: Record<string, AppLocationSetting> = {
+  'LOCATION-1': { name: 'LOCATION-1', label: 'WAREHOUSE', is_active: true, bin_mode: 'range', basic_bins: ['Default'] },
+  'LOCATION-2': { name: 'LOCATION-2', label: 'SHOP-1', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  'LOCATION-3': { name: 'LOCATION-3', label: 'SHOP-2', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  'LOCATION-4': { name: 'LOCATION-4', label: 'SHOP-3', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  'LOCATION-5': { name: 'LOCATION-5', label: 'SHOP-4', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+}
+
+let activeAppLocationSettings = DEFAULT_APP_LOCATION_SETTINGS
+
+
+async function loadLocationMappings(supabase: any) {
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
+
+  if (error) return DEFAULT_LOCATION_MAPPINGS
+
+  const saved = data?.settings?.location_mapping || data?.settings?.location_mappings || {}
+  const mappings: Record<string, string> = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const key = normaliseText(appLocation).toUpperCase()
+    const value = normaliseText(linnworksLocation)
+    if (key && value) mappings[key] = value
+  }
+
+  return mappings
+}
+
+async function loadAppLocationSettings(supabase: any) {
+  const settings: Record<string, AppLocationSetting> = {
+    ...DEFAULT_APP_LOCATION_SETTINGS,
+  }
+
+  const { data, error } = await supabase
+    .from('locations')
+    .select('name, label, is_active, bin_mode, basic_bins')
+    .in('name', Object.keys(DEFAULT_APP_LOCATION_SETTINGS))
+
+  if (error) return settings
+
+  for (const row of data || []) {
+    const name = normaliseText(row.name).toUpperCase()
+    if (!/^LOCATION-\d+$/i.test(name)) continue
+
+    settings[name] = {
+      ...(settings[name] || {
+        name,
+        label: name,
+        is_active: true,
+        bin_mode: 'basic',
+        basic_bins: ['Default'],
+      }),
+      name,
+      label: normaliseText(row.label) || settings[name]?.label || name,
+      is_active: row.is_active !== false,
+      bin_mode: row.bin_mode === 'range' ? 'range' : 'basic',
+      basic_bins: Array.isArray(row.basic_bins)
+        ? row.basic_bins.map((bin: any) => normaliseText(bin)).filter(Boolean)
+        : settings[name]?.basic_bins || ['Default'],
+    }
+  }
+
+  return settings
+}
+
+
 function mapAppLocationToLinnworksLocation(locationName: string) {
   const value = normaliseText(locationName)
-  const lower = value.toLowerCase()
+  const key = value.toUpperCase()
 
   if (!value) return 'Default'
-  if (lower === 'warehouse') return 'Default'
+  if (activeLocationMappings[key]) return activeLocationMappings[key]
 
   return value
+}
+
+function mapLinnworksLocationToAppLocation(locationName: string) {
+  const value = normaliseText(locationName)
+  const key = value.toUpperCase()
+
+  if (!value || key === 'DEFAULT' || key === 'WAREHOUSE') {
+    const warehouseEntry = Object.entries(activeLocationMappings).find(
+      ([appLocation, mapped]) =>
+        /^LOCATION-\d+$/i.test(appLocation) &&
+        ['default', 'warehouse'].includes(normaliseText(mapped).toLowerCase())
+    )
+
+    return warehouseEntry?.[0] || 'LOCATION-1'
+  }
+
+  if (/^LOCATION-\d+$/i.test(value)) return key
+
+  const locationEntry = Object.entries(activeLocationMappings).find(
+    ([appLocation, mapped]) =>
+      /^LOCATION-\d+$/i.test(appLocation) && normaliseText(mapped).toUpperCase() === key
+  )
+
+  if (locationEntry?.[0]) return locationEntry[0]
+
+  const shopMatch = key.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+  return key
 }
 
 function normaliseAction(value: any) {
@@ -501,6 +623,23 @@ function shouldSendTelegramForUpdateStock(payload: any) {
   return reason === 'online_sale' || reason === 'stock_update'
 }
 
+function shouldApplyOperationalStockAdjustment(payload: any) {
+  const reason = normaliseText(payload.reason).toLowerCase()
+
+  return !reason.startsWith('transfer_reusable_')
+}
+
+function shouldPushDirectPayloadBinRack(payload: any) {
+  const reason = normaliseText(payload.reason).toLowerCase()
+  const bin = normaliseText(payload.bin)
+
+  if (!bin) return false
+  if (reason.startsWith('transfer_reusable_')) return false
+  if (isPosSaleDeductionReason(reason) || isPosReturnIncrementReason(reason)) return false
+
+  return true
+}
+
 function isPosSaleDeductionReason(reason: string) {
   return ['pos_cash_sale', 'pos_card_sale', 'pos_exchange_sale'].includes(reason)
 }
@@ -518,30 +657,230 @@ function getPreferredReturnLocation(payload: any, item: any) {
 }
 
 function mapOperationalLocationToStoredLocation(locationName: string) {
-  const value = normaliseText(locationName)
-  const lower = value.toLowerCase()
-
-  if (!value) return 'Default'
-  if (lower === 'warehouse') return 'Default'
-  return value
+  return mapLinnworksLocationToAppLocation(locationName)
 }
 
 function isShopLocationName(locationName: string) {
-  return normaliseText(locationName).toLowerCase().startsWith('shop-')
+  return mapAppLocationToLinnworksLocation(locationName).toLowerCase().startsWith('shop-')
+}
+
+function canonicalAppLocationName(locationName: any) {
+  const raw = normaliseText(locationName)
+  if (!raw) return 'LOCATION-1'
+
+  if (/^LOCATION-\d+$/i.test(raw)) return raw.toUpperCase()
+
+  const mapped = mapLinnworksLocationToAppLocation(raw)
+  if (/^LOCATION-\d+$/i.test(mapped)) return mapped.toUpperCase()
+
+  return raw.toUpperCase()
+}
+
+function getAppLocationSetting(locationName: any) {
+  const appLocation = canonicalAppLocationName(locationName)
+  return (
+    activeAppLocationSettings[appLocation] || {
+      name: appLocation,
+      label: appLocation,
+      is_active: true,
+      bin_mode: 'basic' as LocationBinMode,
+      basic_bins: ['Default'],
+    }
+  )
+}
+
+function isRangeLocationName(locationName: any) {
+  return getAppLocationSetting(locationName).bin_mode === 'range'
+}
+
+function isBasicLocationName(locationName: any) {
+  return getAppLocationSetting(locationName).bin_mode !== 'range'
+}
+
+function splitNaturalParts(value: string) {
+  return normaliseText(value)
+    .toUpperCase()
+    .split(/(\d+)/)
+    .filter((part) => part.length > 0)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+}
+
+function naturalBinCompare(a: any, b: any) {
+  const left = splitNaturalParts(a)
+  const right = splitNaturalParts(b)
+  const max = Math.max(left.length, right.length)
+
+  for (let index = 0; index < max; index += 1) {
+    const aPart = left[index]
+    const bPart = right[index]
+
+    if (aPart === undefined) return -1
+    if (bPart === undefined) return 1
+
+    if (typeof aPart === 'number' && typeof bPart === 'number') {
+      if (aPart !== bPart) return aPart - bPart
+      continue
+    }
+
+    const aString = String(aPart)
+    const bString = String(bPart)
+
+    if (aString !== bString) return aString.localeCompare(bString)
+  }
+
+  return 0
+}
+
+async function getAppBinsForLocation(params: {
+  supabase: any
+  itemId?: string | null
+  locationName: string
+}) {
+  const { supabase, itemId } = params
+  const locationName = canonicalAppLocationName(params.locationName)
+
+  if (!itemId) return []
+
+  const { data, error } = await supabase
+    .from('item_stock_locations')
+    .select('location_name, bin_code, stock_level')
+    .eq('item_id', itemId)
+    .eq('location_name', locationName)
+
+  if (error) throw new Error(error.message)
+
+  return data || []
+}
+
+async function getLinnworksBinRackForLocation(params: {
+  supabase: any
+  itemId?: string | null
+  locationName: string
+}) {
+  const locationName = canonicalAppLocationName(params.locationName)
+  const setting = getAppLocationSetting(locationName)
+
+  if (setting.bin_mode !== 'range') {
+    return {
+      shouldPush: false,
+      value: '',
+      reason: `${locationName} is a basic-bin location. Linnworks uses broad location stock only.`,
+    }
+  }
+
+  const rows = await getAppBinsForLocation({
+    supabase: params.supabase,
+    itemId: params.itemId,
+    locationName,
+  })
+
+  const bins = Array.from(
+    new Set(
+      rows
+        .filter((row: any) => Number(row.stock_level || 0) > 0)
+        .map((row: any) => normaliseText(row.bin_code))
+        .filter(Boolean)
+    )
+  ).sort(naturalBinCompare)
+
+  return {
+    shouldPush: true,
+    value: bins.join('|'),
+    reason: bins.length > 0
+      ? 'Range/allocate location: pushed active app bins to Linnworks BinRack.'
+      : 'Range/allocate location: no active app bins remain, clearing Linnworks BinRack.',
+  }
+}
+
+
+function sameLinnworksLocation(a: any, b: any) {
+  const aRaw = normaliseText(a)
+  const bRaw = normaliseText(b)
+
+  if (!aRaw || !bRaw) return false
+
+  const aAsLinnworks = mapAppLocationToLinnworksLocation(aRaw).toLowerCase()
+  const bAsLinnworks = mapAppLocationToLinnworksLocation(bRaw).toLowerCase()
+
+  if (aAsLinnworks && bAsLinnworks && aAsLinnworks === bAsLinnworks) return true
+
+  const aAsApp = mapLinnworksLocationToAppLocation(aRaw).toUpperCase()
+  const bAsApp = mapLinnworksLocationToAppLocation(bRaw).toUpperCase()
+
+  return Boolean(aAsApp && bAsApp && aAsApp === bAsApp)
+}
+
+function getLinnworksLocationDisplay(value: any) {
+  return mapAppLocationToLinnworksLocation(normaliseText(value) || 'Default')
+}
+
+function isTransferReusableReason(reason: string) {
+  return reason === 'transfer_reusable_from_source' || reason === 'transfer_reusable_to_destination'
+}
+
+async function assertReusableTransferSourceAlreadyProcessed(params: {
+  supabase: any
+  row: any
+  sku: string
+  payload: any
+}) {
+  const transferId = normaliseText(params.payload.transfer_id)
+
+  if (!transferId) return
+
+  const { data, error } = await params.supabase
+    .from('linnworks_sync_queue')
+    .select('id, sku, status, error_message, payload, created_at')
+    .eq('sku', params.sku)
+    .order('created_at', { ascending: true })
+    .limit(100)
+
+  if (error) throw new Error(error.message)
+
+  const sourceRow = (data || []).find((candidate: any) => {
+    const candidatePayload = candidate.payload || {}
+
+    return (
+      normaliseText(candidatePayload.transfer_id) === transferId &&
+      normaliseText(candidatePayload.reason).toLowerCase() === 'transfer_reusable_from_source'
+    )
+  })
+
+  if (!sourceRow) {
+    throw new Error(
+      `Transfer ${transferId} destination increment is blocked because no source deduction queue row was found.`
+    )
+  }
+
+  if (sourceRow.status !== 'processed') {
+    throw new Error(
+      `Transfer ${transferId} destination increment is blocked until source deduction is processed. Source status: ${sourceRow.status}. ${sourceRow.error_message || ''}`.trim()
+    )
+  }
 }
 
 function getOperationalDeductionPriority(locationName: string, reason: string) {
-  const isShop = isShopLocationName(locationName)
-
-  if (isShop && isPosSaleDeductionReason(reason)) {
-    return ['FLOOR', 'STOCK', 'Default']
+  if (isRangeLocationName(locationName)) {
+    return []
   }
 
-  if (isShop) {
-    return ['STOCK', 'FLOOR', 'Default']
+  const setting = getAppLocationSetting(locationName)
+  const basicBins = setting.basic_bins.length > 0 ? setting.basic_bins : ['Default']
+  const normalisedBasicBins = basicBins.map((bin) => normaliseText(bin) || 'Default')
+
+  if (isShopLocationName(locationName) && isPosSaleDeductionReason(reason)) {
+    const priority = ['FLOOR', 'STOCK', 'Default']
+    return [
+      ...priority.filter((bin) =>
+        normalisedBasicBins.map((value) => value.toUpperCase()).includes(bin.toUpperCase())
+      ),
+      ...normalisedBasicBins.filter((bin) =>
+        !priority.map((value) => value.toUpperCase()).includes(bin.toUpperCase())
+      ),
+    ]
   }
 
-  return ['Default']
+  return normalisedBasicBins
 }
 
 async function upsertOperationalStockRow(params: {
@@ -614,7 +953,7 @@ async function recalcItemStockFromOperationalRows(supabase: any, item: any) {
       : sum
   }, 0)
   const warehouse = rows.reduce((sum: number, row: any) => {
-    const loc = normaliseText(row.location_name).toLowerCase()
+    const loc = mapAppLocationToLinnworksLocation(row.location_name).toLowerCase()
     return loc === 'default' || loc === 'warehouse'
       ? sum + Number(row.stock_level || 0)
       : sum
@@ -682,14 +1021,22 @@ async function applyOperationalStockAdjustment(params: {
 
   const quantityToDeduct = Math.abs(delta)
   let remaining = quantityToDeduct
-  const priority = [requestedBin, ...getOperationalDeductionPriority(locationName, reason)]
-  const uniquePriority = Array.from(new Set(priority.map((bin) => normaliseText(bin) || 'Default')))
 
-  for (const binCode of uniquePriority) {
+  const sortedRows = isRangeLocationName(locationName)
+    ? [...rows].sort((a: any, b: any) => naturalBinCompare(a.bin_code, b.bin_code))
+    : (() => {
+        const priority = [requestedBin, ...getOperationalDeductionPriority(locationName, reason)]
+        const uniquePriority = Array.from(new Set(priority.map((bin) => normaliseText(bin) || 'Default')))
+
+        return uniquePriority
+          .map((binCode) =>
+            rows.find((candidate: any) => normaliseText(candidate.bin_code).toUpperCase() === binCode.toUpperCase())
+          )
+          .filter(Boolean)
+      })()
+
+  for (const row of sortedRows) {
     if (remaining <= 0) break
-
-    const row = rows.find((candidate: any) => normaliseText(candidate.bin_code).toUpperCase() === binCode.toUpperCase())
-    if (!row) continue
 
     const currentStock = Number(row.stock_level || 0)
     if (currentStock <= 0) continue
@@ -761,27 +1108,36 @@ function chooseLocationForAdjustment(params: {
     normaliseText(payload.sale_location) ||
     ''
 
-  const wantedLocation = mapAppLocationToLinnworksLocation(rawWantedLocation)
-  const wantedLocationLower = wantedLocation.toLowerCase()
+  const wantedLocation = getLinnworksLocationDisplay(rawWantedLocation)
   const rowsWithStock = stockRows.filter((row) => row.locationId && row.stockLevel > 0)
 
+  const findMatchingLocation = (wanted: string) => {
+    if (!wanted) return null
+
+    return (
+      stockRows.find((row) => sameLinnworksLocation(row.locationName, wanted)) ||
+      stockRows.find((row) => sameLinnworksLocation(row.locationName, mapLinnworksLocationToAppLocation(wanted))) ||
+      null
+    )
+  }
+
   if (delta < 0) {
-    if (wantedLocationLower) {
-      const exactWanted = stockRows.find(
-        (row) => row.locationName.toLowerCase() === wantedLocationLower
-      )
+    if (rawWantedLocation || wantedLocation) {
+      const exactWanted = findMatchingLocation(rawWantedLocation) || findMatchingLocation(wantedLocation)
 
       if (exactWanted && exactWanted.stockLevel > 0) {
         return {
           ...exactWanted,
           newStockLevel: Math.max(0, exactWanted.stockLevel + delta),
-          selectionReason: 'wanted_location_had_stock',
+          selectionReason: isTransferReusableReason(reason)
+            ? 'transfer_source_location_had_linnworks_stock'
+            : 'wanted_location_had_stock',
         }
       }
 
       if (payload.strict_location === true) {
         throw new Error(
-          `Wanted location ${wantedLocation} has no stock for ${payload.sku || item?.sku}. Refusing to deduct from another location.`
+          `Wanted location ${wantedLocation || rawWantedLocation} has no Linnworks stock for ${payload.sku || item?.sku}. Refusing to deduct from another location.`
         )
       }
     }
@@ -822,28 +1178,28 @@ function chooseLocationForAdjustment(params: {
   if (delta > 0) {
     const preferredReturnLocation = isPosReturnIncrementReason(reason)
       ? getPreferredReturnLocation(payload, item)
-      : wantedLocation
+      : (rawWantedLocation || wantedLocation)
 
-    const preferredReturnLocationLower = preferredReturnLocation.toLowerCase()
-
-    if (preferredReturnLocationLower) {
-      const exactWanted = stockRows.find(
-        (row) => row.locationName.toLowerCase() === preferredReturnLocationLower
-      )
+    if (preferredReturnLocation) {
+      const exactWanted =
+        findMatchingLocation(preferredReturnLocation) ||
+        findMatchingLocation(mapAppLocationToLinnworksLocation(preferredReturnLocation))
 
       if (exactWanted) {
         return {
           ...exactWanted,
           newStockLevel: exactWanted.stockLevel + delta,
-          selectionReason: isPosReturnIncrementReason(reason)
-            ? 'pos_return_to_current_shop_location'
-            : 'wanted_location_for_increment',
+          selectionReason: isTransferReusableReason(reason)
+            ? 'transfer_destination_location'
+            : isPosReturnIncrementReason(reason)
+              ? 'pos_return_to_current_shop_location'
+              : 'wanted_location_for_increment',
         }
       }
     }
 
     if (isPosReturnIncrementReason(reason)) {
-      const shopOneRow = stockRows.find((row) => row.locationName.toLowerCase() === 'shop-1')
+      const shopOneRow = stockRows.find((row) => sameLinnworksLocation(row.locationName, 'SHOP-1'))
 
       if (shopOneRow) {
         return {
@@ -854,12 +1210,10 @@ function chooseLocationForAdjustment(params: {
       }
     }
 
-    const itemLocation = mapAppLocationToLinnworksLocation(normaliseText(item?.current_location)).toLowerCase()
+    const itemLocation = normaliseText(item?.current_location)
 
     if (itemLocation) {
-      const itemLocationRow = stockRows.find(
-        (row) => row.locationName.toLowerCase() === itemLocation
-      )
+      const itemLocationRow = findMatchingLocation(itemLocation)
 
       if (itemLocationRow) {
         return {
@@ -871,7 +1225,7 @@ function chooseLocationForAdjustment(params: {
     }
 
     const defaultRow =
-      stockRows.find((row) => row.locationName.toLowerCase() === 'default') ||
+      stockRows.find((row) => sameLinnworksLocation(row.locationName, 'Default')) ||
       stockRows[0]
 
     if (!defaultRow?.locationId) {
@@ -993,6 +1347,17 @@ async function processAdjustStockQueueRow(params: {
     throw new Error('adjust_stock requires payload.delta, for example -1 or 1.')
   }
 
+  const reason = normaliseText(payload.reason).toLowerCase()
+
+  if (reason === 'transfer_reusable_to_destination') {
+    await assertReusableTransferSourceAlreadyProcessed({
+      supabase,
+      row,
+      sku,
+      payload,
+    })
+  }
+
   const stockItemId =
     normaliseText(payload.linnworks_item_id) ||
     normaliseText(payload.stockItemId) ||
@@ -1031,7 +1396,6 @@ async function processAdjustStockQueueRow(params: {
     delta,
   })
 
-  const reason = normaliseText(payload.reason).toLowerCase()
   const expectedLocation = mapAppLocationToLinnworksLocation(
     normaliseText(payload.location) ||
       normaliseText(payload.sale_location) ||
@@ -1064,15 +1428,46 @@ async function processAdjustStockQueueRow(params: {
     locationId: selected.locationId,
   })
 
-  // Do not push app FLOOR/STOCK bins into Linnworks BinRack.
-  // Linnworks stays broad-location only unless WMS is enabled later.
-  if (item?.id) {
+  if (item?.id && shouldApplyOperationalStockAdjustment(payload)) {
     results.app_operational_stock = await applyOperationalStockAdjustment({
       supabase,
       item,
       payload,
       delta,
     })
+  } else if (item?.id) {
+    results.app_operational_stock = {
+      skipped: true,
+      reason: 'Local transfer stock is adjusted when the transfer is received.',
+    }
+  }
+
+  const selectedAppLocation = mapLinnworksLocationToAppLocation(selected.locationName)
+  const binRackFromAppBins = await getLinnworksBinRackForLocation({
+    supabase,
+    itemId: item?.id,
+    locationName: selectedAppLocation,
+  })
+
+  if (binRackFromAppBins.shouldPush) {
+    results.binrack = await updateStockField(server, token, {
+      stockItemId,
+      fieldName: 'BinRack',
+      fieldValue: binRackFromAppBins.value,
+      locationId: selected.locationId,
+    })
+  } else if (shouldPushDirectPayloadBinRack(payload)) {
+    results.binrack = await updateStockField(server, token, {
+      stockItemId,
+      fieldName: 'BinRack',
+      fieldValue: normaliseText(payload.bin),
+      locationId: selected.locationId,
+    })
+  } else {
+    results.binrack = {
+      skipped: true,
+      reason: binRackFromAppBins.reason || 'BinRack update not needed for this adjust_stock action.',
+    }
   }
 
   if (usedFallbackLocation) {
@@ -1187,13 +1582,24 @@ async function processUpdateStockQueueRow(params: {
     locationId,
   })
 
-  if (binRack) {
+  const binRackFromAppBins = await getLinnworksBinRackForLocation({
+    supabase,
+    itemId: item?.id,
+    locationName: appLocationName,
+  })
+
+  if (binRackFromAppBins.shouldPush) {
     results.binrack = await updateStockField(server, token, {
       stockItemId,
       fieldName: 'BinRack',
-      fieldValue: binRack,
+      fieldValue: binRackFromAppBins.value || binRack,
       locationId,
     })
+  } else {
+    results.binrack = {
+      skipped: true,
+      reason: binRackFromAppBins.reason,
+    }
   }
 
   if (shouldSendTelegramForUpdateStock(payload)) {
@@ -1289,7 +1695,25 @@ async function processUpdateLocationQueueRow(params: {
 
   const results: any = {}
 
-  results.binrack = { skipped: true, reason: 'App bin only. Linnworks BinRack not updated without WMS.' }
+  const binRackFromAppBins = await getLinnworksBinRackForLocation({
+    supabase,
+    itemId: null,
+    locationName: appLocationName,
+  })
+
+  if (binRackFromAppBins.shouldPush || shouldPushDirectPayloadBinRack(payload)) {
+    results.binrack = await updateStockField(server, token, {
+      stockItemId,
+      fieldName: 'BinRack',
+      fieldValue: binRack,
+      locationId,
+    })
+  } else {
+    results.binrack = {
+      skipped: true,
+      reason: binRackFromAppBins.reason || 'No BinRack update needed for this location mode.',
+    }
+  }
 
   const now = new Date().toISOString()
 
@@ -1322,7 +1746,7 @@ async function processUpdateLocationQueueRow(params: {
         .from('item_stock_locations')
         .select('id, stock_level')
         .eq('item_id', item.id)
-        .eq('location_name', linnworksLocationName)
+        .eq('location_name', mapOperationalLocationToStoredLocation(linnworksLocationName))
         .limit(1)
 
       if (!existingError) {
@@ -1342,7 +1766,7 @@ async function processUpdateLocationQueueRow(params: {
             .insert({
               item_id: item.id,
               sku,
-              location_name: linnworksLocationName,
+              location_name: mapOperationalLocationToStoredLocation(linnworksLocationName),
               location_id: locationId,
               bin_code: binRack,
               stock_level: 0,
@@ -1374,6 +1798,24 @@ async function processQueue(request: Request) {
 
   try {
     const supabase = getSupabaseAdmin()
+    const integrationConfig = await getLinnworksIntegrationConfig(supabase)
+    const integrationGate = shouldRunLinnworksRoute({
+      config: integrationConfig,
+      route: 'process_queue',
+      manual: new URL(request.url).searchParams.get('manual') === 'true',
+    })
+
+    if (!integrationGate.ok) {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        message: integrationGate.reason,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+      })
+    }
+    activeLocationMappings = await loadLocationMappings(supabase)
+    activeAppLocationSettings = await loadAppLocationSettings(supabase)
 
     const body = await request.json().catch(() => ({}))
     const limit = Math.min(Number(body.limit || 10), 50)

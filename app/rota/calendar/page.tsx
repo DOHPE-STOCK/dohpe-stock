@@ -420,7 +420,7 @@ export default function RotaCalendarPage() {
                   type="button"
                   onClick={createEvent}
                   disabled={!connected || saving}
-                  className="flex-1 rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
+                  className="flex-1 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
                 >
                   {saving ? 'Saving...' : 'Save'}
                 </button>
@@ -461,7 +461,7 @@ export default function RotaCalendarPage() {
                 type="button"
                 onClick={() => openAddEntry()}
                 disabled={!connected}
-                className="rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:bg-neutral-600 disabled:text-neutral-300"
+                className="rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-neutral-600 disabled:text-neutral-300"
               >
                 Add entry
               </button>

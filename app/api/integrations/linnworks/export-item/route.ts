@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
 const CHANNEL_SOURCE = 'EBAY'
 const CHANNEL_SUBSOURCE = 'dohpe_vintage_UK'
@@ -91,12 +92,59 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
+async function loadLocationMappings() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!url || !serviceKey) return DEFAULT_LOCATION_MAPPINGS
+
+  const supabase = createClient(url, serviceKey)
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
+
+  if (error) return DEFAULT_LOCATION_MAPPINGS
+
+  const saved = data?.settings?.location_mapping || data?.settings?.location_mappings || {}
+  const mappings: Record<string, string> = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const key = normaliseText(appLocation).toUpperCase()
+    const value = normaliseText(linnworksLocation)
+    if (key && value) mappings[key] = value
+  }
+
+  return mappings
+}
+
 function mapAppLocationToLinnworksLocation(locationName: string) {
   const value = normaliseText(locationName)
-  const lower = value.toLowerCase()
+  const key = value.toUpperCase()
 
   if (!value) return 'Default'
-  if (lower === 'warehouse') return 'Default'
+  if (DEFAULT_LOCATION_MAPPINGS[key]) return DEFAULT_LOCATION_MAPPINGS[key]
+
+  return value
+}
+
+function mapAppLocationWithMappings(locationName: string, mappings: Record<string, string>) {
+  const value = normaliseText(locationName)
+  const key = value.toUpperCase()
+
+  if (!value) return 'Default'
+  if (mappings[key]) return mappings[key]
 
   return value
 }
@@ -899,6 +947,8 @@ export async function POST(request: Request) {
       normaliseText(body.current_location) ||
       normaliseText(body.default_location) ||
       'Default'
+    const locationMappings = await loadLocationMappings()
+    const linnworksLocationName = mapAppLocationWithMappings(locationName, locationMappings)
 
     const binRack =
       normaliseText(body.current_bin) ||
@@ -907,7 +957,7 @@ export async function POST(request: Request) {
 
     const locations = await linnworksGet(server, token, '/api/Inventory/GetStockLocations')
     const locationId = Array.isArray(locations)
-      ? findLocationId(locations, locationName)
+      ? findLocationId(locations, linnworksLocationName)
       : null
 
     const sellingPrice = normaliseNumber(body.selling_price)
@@ -961,7 +1011,7 @@ export async function POST(request: Request) {
             fieldValue: stockLevel,
             locationId,
           })
-        : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
+        : { ok: false, skipped: true, reason: `Location not found: ${linnworksLocationName}` },
 
       stock_value:
         locationId && stockValue !== null
@@ -980,7 +1030,7 @@ export async function POST(request: Request) {
             fieldValue: binRack,
             locationId,
           })
-        : { ok: false, skipped: true, reason: `Location not found: ${locationName}` },
+        : { ok: false, skipped: true, reason: `Location not found: ${linnworksLocationName}` },
     }
 
     const extendedPropertyValues: Record<string, string> = {

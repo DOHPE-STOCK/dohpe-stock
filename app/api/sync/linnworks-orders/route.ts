@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,6 +27,23 @@ type Deduction = {
   quantity: number
   row_id: string
 }
+
+type LocationSetting = {
+  name: string
+  label: string
+  is_active: boolean
+  bin_mode: 'basic' | 'range'
+  basic_bins: string[]
+}
+
+const DEFAULT_LOCATION_SETTINGS: LocationSetting[] = [
+  { name: 'LOCATION-1', label: 'WAREHOUSE', is_active: true, bin_mode: 'range', basic_bins: ['Default'] },
+  { name: 'LOCATION-2', label: 'SHOP-1', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-3', label: 'SHOP-2', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-4', label: 'SHOP-3', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-5', label: 'SHOP-4', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+]
+
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -104,8 +122,151 @@ function normaliseNumber(value: any) {
   return Number.isFinite(num) ? num : null
 }
 
+const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
+  'LOCATION-1': 'Default',
+  'LOCATION-2': 'SHOP-1',
+  'LOCATION-3': 'SHOP-2',
+  'LOCATION-4': 'SHOP-3',
+  'LOCATION-5': 'SHOP-4',
+  WAREHOUSE: 'Default',
+  DEFAULT: 'Default',
+}
+
+let activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
+
+async function loadLocationMappings(supabase: any) {
+  const { data, error } = await supabase
+    .from('integration_settings')
+    .select('settings')
+    .eq('channel', 'linnworks')
+    .maybeSingle()
+
+  if (error) return DEFAULT_LOCATION_MAPPINGS
+
+  const saved = data?.settings?.location_mapping || data?.settings?.location_mappings || {}
+  const mappings: Record<string, string> = { ...DEFAULT_LOCATION_MAPPINGS }
+
+  for (const [appLocation, linnworksLocation] of Object.entries(saved)) {
+    const key = normaliseText(appLocation).toUpperCase()
+    const value = normaliseText(linnworksLocation)
+    if (key && value) mappings[key] = value
+  }
+
+  return mappings
+}
+
+
+async function loadLocationSettings(supabase: any) {
+  const settings = new Map<string, LocationSetting>()
+
+  for (const location of DEFAULT_LOCATION_SETTINGS) {
+    settings.set(location.name.toUpperCase(), {
+      ...location,
+      basic_bins: [...location.basic_bins],
+    })
+  }
+
+  const { data, error } = await supabase
+    .from('locations')
+    .select('name, label, is_active, bin_mode, basic_bins')
+
+  if (error) return settings
+
+  for (const row of data || []) {
+    const name = normaliseText(row.name).toUpperCase()
+    if (!name) continue
+
+    const existing = settings.get(name)
+
+    settings.set(name, {
+      name,
+      label: normaliseText(row.label) || existing?.label || name,
+      is_active: row.is_active !== false,
+      bin_mode: row.bin_mode === 'range' ? 'range' : 'basic',
+      basic_bins: Array.isArray(row.basic_bins) && row.basic_bins.length > 0
+        ? row.basic_bins.map((bin: any) => normaliseText(bin).toUpperCase()).filter(Boolean)
+        : existing?.basic_bins || ['Default'],
+    })
+  }
+
+  return settings
+}
+
+function getLocationSetting(
+  locationSettings: Map<string, LocationSetting>,
+  locationName: any
+) {
+  const storage = appStorageLocation(locationName)
+  return (
+    locationSettings.get(storage.toUpperCase()) ||
+    DEFAULT_LOCATION_SETTINGS.find((location) => location.name === storage.toUpperCase()) ||
+    null
+  )
+}
+
+function isRangeLocation(
+  locationSettings: Map<string, LocationSetting>,
+  locationName: any
+) {
+  return getLocationSetting(locationSettings, locationName)?.bin_mode === 'range'
+}
+
+function getBasicBinPriority(
+  locationSettings: Map<string, LocationSetting>,
+  locationName: any
+) {
+  const setting = getLocationSetting(locationSettings, locationName)
+  const configuredBins = setting?.basic_bins?.length ? setting.basic_bins : ['Default']
+
+  return configuredBins.map((bin) => normaliseText(bin).toUpperCase()).filter(Boolean)
+}
+
+function splitBinParts(value: string) {
+  return normaliseText(value)
+    .toUpperCase()
+    .split(/(\d+)/)
+    .filter((part) => part.length > 0)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+}
+
+function compareNaturalBin(a: string, b: string) {
+  const ap = splitBinParts(a)
+  const bp = splitBinParts(b)
+  const max = Math.max(ap.length, bp.length)
+
+  for (let i = 0; i < max; i += 1) {
+    const av = ap[i]
+    const bv = bp[i]
+
+    if (av === undefined) return -1
+    if (bv === undefined) return 1
+
+    if (typeof av === 'number' && typeof bv === 'number') {
+      if (av !== bv) return av - bv
+      continue
+    }
+
+    const as = String(av)
+    const bs = String(bv)
+
+    if (as !== bs) return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' })
+  }
+
+  return 0
+}
+
+function mapAppLocationToLinnworksLocation(locationName: string) {
+  const value = normaliseText(locationName)
+  const key = value.toUpperCase()
+
+  if (!value) return 'Default'
+  if (activeLocationMappings[key]) return activeLocationMappings[key]
+  if (key === 'WAREHOUSE') return 'Default'
+  return value
+}
+
 function canonicalLocation(value: any) {
-  const clean = normaliseText(value)
+  const clean = mapAppLocationToLinnworksLocation(value)
   const lower = clean.toLowerCase()
 
   if (!clean) return WAREHOUSE_LOCATION
@@ -114,8 +275,73 @@ function canonicalLocation(value: any) {
   return clean.toUpperCase().startsWith('SHOP-') ? clean.toUpperCase() : clean
 }
 
+function appStorageLocation(value: any) {
+  const clean = normaliseText(value)
+  const key = clean.toUpperCase()
+
+  if (!clean) return 'LOCATION-1'
+  if (/^LOCATION-\d+$/i.test(clean)) return key
+
+  if (key === 'DEFAULT' || key === 'WAREHOUSE') {
+    const warehouseEntry = Object.entries(activeLocationMappings).find(([, mapped]) => {
+      const mappedKey = normaliseText(mapped).toUpperCase()
+      return mappedKey === 'DEFAULT' || mappedKey === 'WAREHOUSE'
+    })
+
+    return warehouseEntry?.[0] || 'LOCATION-1'
+  }
+
+  const displayMatch = Object.entries(activeLocationMappings).find(([, mapped]) => {
+    return normaliseText(mapped).toUpperCase() === key
+  })
+
+  if (displayMatch?.[0]) return displayMatch[0]
+
+  const shopMatch = key.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
+  return key
+}
+
 function isShopLocation(value: any) {
+  const location = appStorageLocation(value).toUpperCase()
+
+  if (/^LOCATION-\d+$/.test(location)) {
+    return location !== 'LOCATION-1'
+  }
+
   return canonicalLocation(value).toUpperCase().startsWith('SHOP-')
+}
+
+function telegramLocationKeys(value: any) {
+  const storage = appStorageLocation(value)
+  const display = canonicalLocation(storage)
+  const keys = new Set<string>()
+
+  if (storage) keys.add(storage)
+  if (display) keys.add(display)
+
+  return Array.from(keys)
+}
+
+function getTelegramForLocation(map: Map<string, any>, value: any) {
+  for (const key of telegramLocationKeys(value)) {
+    const result = map.get(key)
+    if (result) return result
+  }
+
+  return null
+}
+
+function setTelegramForLocation(map: Map<string, any>, value: any, result: any) {
+  for (const key of telegramLocationKeys(value)) {
+    map.set(key, result)
+  }
+}
+
+function shopLocationNumber(value: any) {
+  const match = canonicalLocation(value).match(/^SHOP-(\d+)$/i)
+  return match ? Number(match[1]) : 999
 }
 
 function isUuid(value: string) {
@@ -434,23 +660,53 @@ async function getAppStockRows(supabase: any, itemId: string) {
   return (data || []) as AppStockRow[]
 }
 
-function sortOnlineDeductionRows(rows: AppStockRow[]) {
-  const priority = (row: AppStockRow) => {
-    const location = canonicalLocation(row.location_name)
-    const bin = normaliseText(row.bin_code).toUpperCase()
+function getLocationDeductionPriority(locationName: any) {
+  const storage = appStorageLocation(locationName)
 
-    if (location === WAREHOUSE_LOCATION) return 10
-    if (isShopLocation(location) && bin === 'STOCK') return 20
-    if (isShopLocation(location) && bin === 'FLOOR') return 30
-    if (isShopLocation(location)) return 40
+  if (storage === 'LOCATION-1') return 0
 
-    return 90
-  }
+  const shopMatch = storage.match(/^LOCATION-(\d+)$/)
+  if (shopMatch) return Number(shopMatch[1]) * 100
 
+  return 9999
+}
+
+function sortOnlineDeductionRows(
+  rows: AppStockRow[],
+  locationSettings: Map<string, LocationSetting>
+) {
   return [...rows].sort((a, b) => {
-    const ap = priority(a)
-    const bp = priority(b)
-    if (ap !== bp) return ap - bp
+    const aLocationPriority = getLocationDeductionPriority(a.location_name)
+    const bLocationPriority = getLocationDeductionPriority(b.location_name)
+
+    if (aLocationPriority !== bLocationPriority) {
+      return aLocationPriority - bLocationPriority
+    }
+
+    const aLocation = appStorageLocation(a.location_name)
+    const bLocation = appStorageLocation(b.location_name)
+
+    if (aLocation !== bLocation) {
+      return aLocation.localeCompare(bLocation, undefined, { numeric: true, sensitivity: 'base' })
+    }
+
+    const aBin = normaliseText(a.bin_code) || WAREHOUSE_BIN
+    const bBin = normaliseText(b.bin_code) || WAREHOUSE_BIN
+    const rangeLocation = isRangeLocation(locationSettings, aLocation)
+
+    if (rangeLocation) {
+      const binCompare = compareNaturalBin(aBin, bBin)
+      if (binCompare !== 0) return binCompare
+    } else {
+      const priority = getBasicBinPriority(locationSettings, aLocation)
+      const ai = priority.indexOf(aBin.toUpperCase())
+      const bi = priority.indexOf(bBin.toUpperCase())
+      const ap = ai === -1 ? 999 : ai
+      const bp = bi === -1 ? 999 : bi
+
+      if (ap !== bp) return ap - bp
+    }
+
     return Number(b.stock_level || 0) - Number(a.stock_level || 0)
   })
 }
@@ -472,12 +728,24 @@ async function deductAppBinsForOnlineOrder(params: {
   supabase: any
   itemId: string
   quantity: number
+  locationSettings: Map<string, LocationSetting>
 }) {
   const rows = await getAppStockRows(params.supabase, params.itemId)
   let remaining = Math.max(0, Number(params.quantity || 0))
   const deductions: any[] = []
+  const sortedRows = sortOnlineDeductionRows(rows, params.locationSettings)
+  const availableStock = sortedRows.reduce(
+    (sum, row) => sum + Math.max(0, Number(row.stock_level || 0)),
+    0
+  )
 
-  for (const row of sortOnlineDeductionRows(rows)) {
+  if (availableStock < remaining) {
+    throw new Error(
+      `Insufficient app stock for online order reservation. Needed ${remaining}, available ${availableStock}.`
+    )
+  }
+
+  for (const row of sortedRows) {
     if (remaining <= 0) break
 
     const current = Number(row.stock_level || 0)
@@ -490,7 +758,7 @@ async function deductAppBinsForOnlineOrder(params: {
 
     deductions.push({
       row_id: row.id,
-      location_name: canonicalLocation(row.location_name),
+      location_name: appStorageLocation(row.location_name),
       bin_code: normaliseText(row.bin_code) || WAREHOUSE_BIN,
       quantity: deduct,
     })
@@ -532,7 +800,7 @@ async function updateItemSummary(supabase: any, itemId: string) {
       stock_level: stockLevel,
       warehouse_stock: warehouseStock,
       shop_floor_stock: shopFloorStock,
-      current_location: displayRow ? canonicalLocation(displayRow.location_name) : null,
+      current_location: displayRow ? appStorageLocation(displayRow.location_name) : null,
       current_bin: displayRow?.bin_code || null,
       updated_at: new Date().toISOString(),
     })
@@ -578,25 +846,25 @@ async function getOrCreatePendingTransfer(params: {
   fromLocation: string
 }) {
   const { start, end } = todayRange()
+  const fromLocation = appStorageLocation(params.fromLocation)
+  const warehouseLocation = 'LOCATION-1'
 
-  const { data: existing, error: existingError } = await params.supabase
+  const { data: existingRows, error: existingError } = await params.supabase
     .from('stock_transfers')
-    .select('id, transfer_number')
-    .eq('from_location', params.fromLocation)
-    .eq('to_location', WAREHOUSE_LOCATION)
+    .select('id, transfer_number, from_location, to_location')
+    .in('from_location', [fromLocation, canonicalLocation(fromLocation)])
+    .in('to_location', [warehouseLocation, WAREHOUSE_LOCATION])
     .eq('status', PENDING_TRANSFER_STATUS)
     .eq('reason', TRANSFER_REASON)
     .gte('created_at', start)
     .lt('created_at', end)
     .order('created_at', { ascending: true })
     .limit(1)
-    .maybeSingle()
 
   if (existingError) throw new Error(existingError.message)
 
-  if (existing?.id) {
-    return existing
-  }
+  const existing = existingRows?.[0]
+  if (existing?.id) return existing
 
   const transferNumber = await getNextTransferNumber(params.supabase)
 
@@ -604,8 +872,8 @@ async function getOrCreatePendingTransfer(params: {
     .from('stock_transfers')
     .insert({
       transfer_number: transferNumber,
-      from_location: params.fromLocation,
-      to_location: WAREHOUSE_LOCATION,
+      from_location: fromLocation,
+      to_location: warehouseLocation,
       status: PENDING_TRANSFER_STATUS,
       reason: TRANSFER_REASON,
     })
@@ -649,7 +917,7 @@ async function addDeductionsToShopTransfers(params: {
   const groupedByShop = new Map<string, Deduction[]>()
 
   for (const deduction of shopDeductions) {
-    const shop = canonicalLocation(deduction.location_name)
+    const shop = appStorageLocation(deduction.location_name)
     const existing = groupedByShop.get(shop) || []
     existing.push(deduction)
     groupedByShop.set(shop, existing)
@@ -672,8 +940,8 @@ async function addDeductionsToShopTransfers(params: {
         source_order_id: params.orderId,
         source_order_item_id: params.orderItemId,
         source_bin: deduction.bin_code,
-        telegram_chat_id: params.telegramByShop.get(shop)?.chat_id || null,
-        telegram_message_id: params.telegramByShop.get(shop)?.message_id || null,
+        telegram_chat_id: getTelegramForLocation(params.telegramByShop, shop)?.chat_id || null,
+        telegram_message_id: getTelegramForLocation(params.telegramByShop, shop)?.message_id || null,
       })
     }
   }
@@ -716,7 +984,7 @@ async function sendShopTelegramMessages(params: {
   const groupedByShop = new Map<string, Deduction[]>()
 
   for (const deduction of params.deductions.filter((row) => isShopLocation(row.location_name))) {
-    const shop = canonicalLocation(deduction.location_name)
+    const shop = appStorageLocation(deduction.location_name)
     const existing = groupedByShop.get(shop) || []
     existing.push(deduction)
     groupedByShop.set(shop, existing)
@@ -726,12 +994,14 @@ async function sendShopTelegramMessages(params: {
 
   for (const [shop, deductions] of groupedByShop) {
     try {
+      const displayShop = canonicalLocation(shop)
       const message = `🛒 Online order shop transfer required
 
 SKU: ${params.sku}
 Brand: ${params.brand || 'Unknown'}
 Category: ${params.category || 'Unknown'}
 ${formatShopRequiredLines(deductions)}
+Pickup location: ${displayShop}
 Source: ${params.source || 'Unknown'}
 Sub source: ${params.subSource || 'Unknown'}
 Order ID: ${params.orderId}`
@@ -739,9 +1009,10 @@ Order ID: ${params.orderId}`
       const telegramResult = params.imageUrl
         ? await sendTelegramPhotoMessage({ imageUrl: params.imageUrl, caption: message })
         : await sendTelegramMessage(message)
-      resultByShop.set(shop, telegramResult)
+
+      setTelegramForLocation(resultByShop, shop, telegramResult)
     } catch (error: any) {
-      resultByShop.set(shop, {
+      setTelegramForLocation(resultByShop, shop, {
         ok: false,
         error: error.message || 'Telegram send failed',
       })
@@ -756,6 +1027,24 @@ async function processLinnworksOpenOrders(request: Request) {
 
   try {
     const supabase = getSupabaseAdmin()
+    const integrationConfig = await getLinnworksIntegrationConfig(supabase)
+    const integrationGate = shouldRunLinnworksRoute({
+      config: integrationConfig,
+      route: 'open_orders',
+      manual: new URL(request.url).searchParams.get('manual') === 'true',
+    })
+
+    if (!integrationGate.ok) {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        message: integrationGate.reason,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+      })
+    }
+    activeLocationMappings = await loadLocationMappings(supabase)
+    const locationSettings = await loadLocationSettings(supabase)
     const body = await request.json().catch(() => ({}))
 
     const maxOrdersToCheck = Math.min(Number(body.maxOrders || 200), 200)
@@ -905,7 +1194,14 @@ async function processLinnworksOpenOrders(request: Request) {
           supabase,
           itemId: localItem.id,
           quantity,
+          locationSettings,
         })
+
+        if (Number(operationalDeduction.deducted_quantity || 0) !== quantity) {
+          throw new Error(
+            `Online order reservation failed for ${sku}. Needed ${quantity}, deducted ${operationalDeduction.deducted_quantity}.`
+          )
+        }
 
         const summary = await updateItemSummary(supabase, localItem.id)
 
@@ -942,6 +1238,7 @@ async function processLinnworksOpenOrders(request: Request) {
           first_seen_status: 'open',
           current_status: 'open',
           stock_deducted: true,
+          stock_deductions: operationalDeduction.deductions,
           telegram_sent: telegramSent,
           updated_at: new Date().toISOString(),
         }
@@ -970,6 +1267,7 @@ async function processLinnworksOpenOrders(request: Request) {
           item_summary: summary,
           transfer_items_created: transferItems.length,
           telegram_sent: telegramSent,
+          telegram_results: Object.fromEntries(telegramByShop),
           reason: 'online_sale_reserved_and_transfer_created',
         })
       }

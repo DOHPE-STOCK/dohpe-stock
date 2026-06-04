@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
@@ -31,6 +31,7 @@ type LinnworksSettings = {
   sync_description_app_to_linnworks: boolean
   sync_category_app_to_linnworks: boolean
   sync_images_app_to_linnworks: boolean
+  location_mapping: Record<string, string>
   field_mapping: Record<string, string>
 }
 
@@ -43,6 +44,14 @@ type IntegrationSetting = {
   settings: LinnworksSettings | any
   last_synced_at: string | null
   last_error: string | null
+}
+
+type LocationRow = {
+  name: string
+  label: string | null
+  is_active: boolean
+  bin_mode: 'basic' | 'range' | null
+  basic_bins: string[] | null
 }
 
 const defaultSettings: LinnworksSettings = {
@@ -70,6 +79,14 @@ const defaultSettings: LinnworksSettings = {
   sync_description_app_to_linnworks: true,
   sync_category_app_to_linnworks: true,
   sync_images_app_to_linnworks: true,
+  location_mapping: {
+    'LOCATION-1': 'Default',
+    'LOCATION-2': 'SHOP-1',
+    'LOCATION-3': 'SHOP-2',
+    'LOCATION-4': 'SHOP-3',
+    'LOCATION-5': 'SHOP-4',
+    WAREHOUSE: 'Default',
+  },
   field_mapping: {
     sku: 'SKU',
     final_title: 'Title',
@@ -83,6 +100,25 @@ const defaultSettings: LinnworksSettings = {
     reporting_category: 'Category',
     item_images: 'Images',
   },
+}
+
+const LOCATION_ORDER = ['LOCATION-1', 'LOCATION-2', 'LOCATION-3', 'LOCATION-4', 'LOCATION-5']
+
+const fallbackLocations: LocationRow[] = [
+  { name: 'LOCATION-1', label: 'WAREHOUSE', is_active: true, bin_mode: 'range', basic_bins: ['Default'] },
+  { name: 'LOCATION-2', label: 'SHOP-1', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-3', label: 'SHOP-2', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-4', label: 'SHOP-3', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  { name: 'LOCATION-5', label: 'SHOP-4', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+]
+
+function text(value: any) {
+  if (value === null || value === undefined) return ''
+  return String(value).trim()
+}
+
+function canonicalLocation(value: any) {
+  return text(value).toUpperCase().replace(/[\s_]+/g, '-')
 }
 
 function mergeSettings(settings: any): LinnworksSettings {
@@ -101,19 +137,37 @@ function mergeSettings(settings: any): LinnworksSettings {
       ...defaultSettings.field_mapping,
       ...(settings?.field_mapping || {}),
     },
+    location_mapping: {
+      ...defaultSettings.location_mapping,
+      ...(settings?.location_mapping || settings?.location_mappings || {}),
+    },
   }
 }
 
 export default function LinnworksIntegrationPage() {
   const [integration, setIntegration] = useState<IntegrationSetting | null>(null)
   const [settings, setSettings] = useState<LinnworksSettings>(defaultSettings)
+  const [locations, setLocations] = useState<LocationRow[]>(fallbackLocations)
+  const [enabled, setEnabled] = useState(true)
+  const [autoSync, setAutoSync] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
   useEffect(() => {
-    fetchIntegration()
+    Promise.all([fetchIntegration(), fetchLocations()]).finally(() => setLoading(false))
   }, [])
+
+  const orderedLocations = useMemo(() => {
+    const byName = new Map(locations.map((location) => [canonicalLocation(location.name), location]))
+
+    const ordered = LOCATION_ORDER.map((name) => byName.get(name) || fallbackLocations.find((row) => row.name === name))
+      .filter(Boolean) as LocationRow[]
+
+    const extras = locations.filter((row) => !LOCATION_ORDER.includes(canonicalLocation(row.name)))
+
+    return [...ordered, ...extras]
+  }, [locations])
 
   useEffect(() => {
     if (!message) return
@@ -136,7 +190,6 @@ export default function LinnworksIntegrationPage() {
 
     if (error) {
       setMessage(error.message)
-      setLoading(false)
       return
     }
 
@@ -144,7 +197,23 @@ export default function LinnworksIntegrationPage() {
 
     setIntegration(data as IntegrationSetting)
     setSettings(merged)
-    setLoading(false)
+    setEnabled(Boolean(data.enabled))
+    setAutoSync(Boolean(data.auto_sync))
+  }
+
+  async function fetchLocations() {
+    const { data, error } = await supabase
+      .from('locations')
+      .select('name, label, is_active, bin_mode, basic_bins')
+      .eq('is_active', true)
+
+    if (!error && data && data.length > 0) {
+      setLocations(data as LocationRow[])
+    }
+  }
+
+  function displayLocation(location: LocationRow) {
+    return text(location.label) || location.name
   }
 
   function updateSetting<K extends keyof LinnworksSettings>(
@@ -167,6 +236,16 @@ export default function LinnworksIntegrationPage() {
     }))
   }
 
+  function updateLocationMapping(appLocation: string, linnworksLocation: string) {
+    setSettings((current) => ({
+      ...current,
+      location_mapping: {
+        ...current.location_mapping,
+        [appLocation]: linnworksLocation,
+      },
+    }))
+  }
+
   async function saveSettings() {
     if (!integration) return
 
@@ -175,6 +254,8 @@ export default function LinnworksIntegrationPage() {
     const { error } = await supabase
       .from('integration_settings')
       .update({
+        enabled,
+        auto_sync: autoSync,
         settings,
         updated_at: new Date().toISOString(),
       })
@@ -236,12 +317,12 @@ export default function LinnworksIntegrationPage() {
   return (
     <StaffPermissionGate permission="integrations">
       <main className="min-h-screen bg-neutral-950 p-5 text-white">
-        <div className="mb-5 flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-          <div className="flex flex-wrap items-center gap-4">
+        <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
             <div>
-              <h1 className="text-2xl font-bold">Linnworks Configuration</h1>
+              <h1 className="text-2xl font-black tracking-normal">Linnworks Configuration</h1>
 
-              <p className="text-sm text-neutral-400">
+              <p className="text-sm text-neutral-300">
                 Manual export first, then automatic sync for app-managed Linnworks inventory.
               </p>
             </div>
@@ -282,6 +363,44 @@ export default function LinnworksIntegrationPage() {
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
+            <h2 className="mb-4 text-lg font-semibold">Master Controls</h2>
+
+            <div className="grid gap-2 text-sm md:grid-cols-2">
+              <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
+                <span>
+                  <span className="block font-bold">Enabled</span>
+                  <span className="text-xs text-neutral-500">
+                    If off, Linnworks sync routes should not run once the route gates are added.
+                  </span>
+                </span>
+
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                  className="h-4 w-4"
+                />
+              </label>
+
+              <label className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
+                <span>
+                  <span className="block font-bold">Auto Sync</span>
+                  <span className="text-xs text-neutral-500">
+                    If off, cron-triggered sync routes should skip once the route gates are added.
+                  </span>
+                </span>
+
+                <input
+                  type="checkbox"
+                  checked={autoSync}
+                  onChange={(e) => setAutoSync(e.target.checked)}
+                  className="h-4 w-4"
+                />
+              </label>
+            </div>
+          </section>
+
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
             <h2 className="mb-4 text-lg font-semibold">Sync Mode</h2>
 
@@ -312,7 +431,7 @@ export default function LinnworksIntegrationPage() {
                   className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
                 >
                   <option value="controlled_two_way">
-                    Controlled two-way: stock level two-way, product data app → Linnworks
+                    Controlled two-way: stock level two-way, product data app to Linnworks
                   </option>
                   <option value="app_to_linnworks_only">App to Linnworks only</option>
                   <option value="linnworks_to_app_stock_only">
@@ -453,6 +572,65 @@ export default function LinnworksIntegrationPage() {
           </section>
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
+            <h2 className="mb-4 text-lg font-semibold">Location Mapping</h2>
+
+            <p className="mb-4 text-sm text-neutral-400">
+              App storage keys stay stable. Display names come from Settings → Locations.
+              The right-hand value is the exact Linnworks location name.
+            </p>
+
+            <div className="grid gap-3">
+              {orderedLocations.map((location) => {
+                const appLocation = canonicalLocation(location.name)
+                const linnworksLocation = settings.location_mapping[appLocation] || ''
+
+                return (
+                  <div
+                    key={appLocation}
+                    className="grid gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3 lg:grid-cols-[1.2fr_1fr_1fr]"
+                  >
+                    <label>
+                      <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
+                        App storage key
+                      </span>
+                      <input
+                        value={appLocation}
+                        disabled
+                        className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-neutral-400"
+                      />
+                    </label>
+
+                    <label>
+                      <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
+                        Display name
+                      </span>
+                      <input
+                        value={displayLocation(location)}
+                        disabled
+                        className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-neutral-300"
+                      />
+                    </label>
+
+                    <label>
+                      <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
+                        Linnworks location
+                      </span>
+                      <input
+                        value={linnworksLocation}
+                        onChange={(e) =>
+                          updateLocationMapping(appLocation, e.target.value)
+                        }
+                        placeholder="Default / SHOP-1 / etc"
+                        className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2"
+                      />
+                    </label>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
             <h2 className="mb-4 text-lg font-semibold">Safety Rules</h2>
 
             <div className="grid gap-2 text-sm md:grid-cols-2">
@@ -496,13 +674,13 @@ export default function LinnworksIntegrationPage() {
             <div className="grid gap-2 text-sm md:grid-cols-2">
               {[
                 ['sync_stock_levels_two_way', 'Stock level two-way sync'],
-                ['sync_price_app_to_linnworks', 'Price app → Linnworks'],
-                ['sync_location_app_to_linnworks', 'Location app → Linnworks'],
-                ['sync_binrack_app_to_linnworks', 'BinRack app → Linnworks'],
-                ['sync_title_app_to_linnworks', 'Title app → Linnworks'],
-                ['sync_description_app_to_linnworks', 'Description app → Linnworks'],
-                ['sync_category_app_to_linnworks', 'Category app → Linnworks'],
-                ['sync_images_app_to_linnworks', 'Images app → Linnworks'],
+                ['sync_price_app_to_linnworks', 'Price app to Linnworks'],
+                ['sync_location_app_to_linnworks', 'Location app to Linnworks'],
+                ['sync_binrack_app_to_linnworks', 'BinRack app to Linnworks'],
+                ['sync_title_app_to_linnworks', 'Title app to Linnworks'],
+                ['sync_description_app_to_linnworks', 'Description app to Linnworks'],
+                ['sync_category_app_to_linnworks', 'Category app to Linnworks'],
+                ['sync_images_app_to_linnworks', 'Images app to Linnworks'],
               ].map(([key, label]) => (
                 <label
                   key={key}
@@ -568,3 +746,4 @@ export default function LinnworksIntegrationPage() {
     </StaffPermissionGate>
   )
 }
+

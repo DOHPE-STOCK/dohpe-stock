@@ -10,8 +10,7 @@ type NavKey =
   | 'settings'
   | 'sku'
   | 'inventory'
-  | 'create-bin'
-  | 'checkout'
+  | 'processing'
   | 'working'
   | 'review'
   | 'finalised'
@@ -20,6 +19,7 @@ type NavKey =
   | 'allocate'
   | 'loan'
   | 'rota'
+  | 'reports'
 
 type AppNavProps = {
   current?: NavKey
@@ -30,24 +30,19 @@ type NavItem = {
   key: NavKey
   label: string
   href: string
-  iconOnly?: boolean
-  permission?: string
+  permission?: string | string[]
 }
 
 const navItems: NavItem[] = [
   { key: 'sku', label: 'SKU Search', href: '/' },
-  { key: 'inventory', label: 'Inventory', href: '/inventory', permission: 'working' },
-  { key: 'create-bin', label: 'Create Bin', href: '/create-bin', permission: 'scanner' },
-  { key: 'checkout', label: 'Checkout', href: '/checkout', permission: 'checkout' },
-  { key: 'working', label: 'Working', href: '/working', permission: 'working' },
-  { key: 'review', label: 'Review', href: '/review', permission: 'review' },
-  { key: 'finalised', label: 'Finalised', href: '/finalised', permission: 'finalised' },
-  { key: 'photo-imports', label: 'Photo Imports', href: '/photo-imports', permission: 'working' },
+  { key: 'inventory', label: 'Inventory', href: '/inventory', permission: 'inventory' },
+  { key: 'processing', label: 'Processing', href: '/processing', permission: ['working', 'review', 'finalised'] },
   { key: 'transfers', label: 'Transfers', href: '/transfers', permission: 'scanner' },
   { key: 'allocate', label: 'Allocate', href: '/scanner/allocate', permission: 'scanner' },
   { key: 'loan', label: 'Loan', href: '/scanner/loan', permission: 'scanner' },
   { key: 'rota', label: 'Rota', href: '/rota', permission: 'reports' },
-  { key: 'settings', label: '⚙', href: '/settings', iconOnly: true, permission: 'settings' },
+  { key: 'reports', label: 'Reports', href: '/reports', permission: 'reports' },
+  { key: 'settings', label: 'Settings', href: '/settings', permission: 'settings' },
 ]
 
 export default function AppNav({ current, onNavigate }: AppNavProps) {
@@ -55,6 +50,7 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
   const { staff, can, clearStaff } = useStaff()
 
   const [userLabel, setUserLabel] = useState('')
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -106,6 +102,10 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
     if (staff.role === 'admin') return true
     if (!item.permission) return true
 
+    if (Array.isArray(item.permission)) {
+      return item.permission.some((permission) => can(permission))
+    }
+
     return can(item.permission)
   }
 
@@ -123,30 +123,20 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
   }
 
   const visibleNavItems = navItems.filter(canSeeNavItem)
+  const navButton =
+    'rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-xs font-black text-white hover:border-white/25 hover:bg-white/20'
+  const currentButton =
+    'rounded-lg border border-emerald-400 bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500'
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="app-nav relative flex w-full flex-col gap-3 pt-1">
+      <div className="app-nav-pages flex flex-wrap items-center gap-2 pr-0 sm:pr-44">
         {visibleNavItems.map((item) => {
-          const isCurrent = current === item.key
+          const className = current === item.key ? currentButton : navButton
 
-          const normalClass =
-            'rounded-lg px-4 py-2 text-xs font-bold bg-zinc-800 hover:bg-zinc-700 text-white'
-
-          const iconClass = 'px-2 text-lg text-zinc-400 hover:text-white'
-
-          if (isCurrent) {
+          if (current === item.key) {
             return (
-              <button
-                key={item.key}
-                type="button"
-                disabled
-                className={
-                  item.iconOnly
-                    ? `${iconClass} text-white`
-                    : `${normalClass} bg-zinc-700 ring-1 ring-zinc-500`
-                }
-              >
+              <button key={item.key} type="button" disabled className={className}>
                 {item.label}
               </button>
             )
@@ -158,7 +148,7 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
                 key={item.key}
                 type="button"
                 onClick={() => onNavigate(item.href)}
-                className={item.iconOnly ? iconClass : normalClass}
+                className={className}
               >
                 {item.label}
               </button>
@@ -166,65 +156,71 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
           }
 
           return (
-            <Link
-              key={item.key}
-              href={item.href}
-              className={item.iconOnly ? iconClass : normalClass}
-            >
+            <Link key={item.key} href={item.href} className={className}>
               {item.label}
             </Link>
           )
         })}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="app-session-controls flex items-center gap-2 sm:absolute sm:right-0 sm:top-0">
         {staff ? (
-          <>
-            <span className="max-w-[150px] truncate rounded-lg bg-emerald-950 px-3 py-2 text-xs font-bold text-emerald-200">
-              Staff: {staff.name}
-            </span>
-
-            <button
-              type="button"
-              onClick={switchStaff}
-              className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-bold text-zinc-200 hover:bg-zinc-700"
-            >
-              Switch staff
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={switchStaff}
+            title="Switch staff"
+            className="max-w-[120px] truncate rounded-md border border-emerald-300/25 bg-emerald-400/15 px-2 py-1 text-[11px] font-black text-emerald-100 hover:bg-emerald-400/25"
+          >
+            Staff: {staff.name}
+          </button>
         ) : (
           <Link
             href="/staff"
-            className="rounded-lg bg-yellow-300 px-3 py-2 text-xs font-black text-black hover:bg-yellow-200"
+            className="keep-dark-text rounded-md bg-yellow-300 px-2 py-1 text-[11px] font-black text-black hover:bg-yellow-200"
           >
             Staff PIN
           </Link>
         )}
 
         {userLabel ? (
-          <>
-            <span className="max-w-[180px] truncate rounded-lg bg-zinc-900 px-3 py-2 text-xs font-bold text-zinc-300">
-              {userLabel}
-            </span>
-
+          <div className="relative">
             <button
               type="button"
-              onClick={signOut}
-              disabled={busy}
-              className="rounded-lg bg-red-900/60 px-3 py-2 text-xs font-bold text-red-100 hover:bg-red-800 disabled:opacity-50"
+              onClick={() => setUserMenuOpen((value) => !value)}
+              title={userLabel}
+              className="flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-white/10 text-xs font-black text-white hover:bg-white/20"
             >
-              Sign out
+              {userLabel.slice(0, 1).toUpperCase()}
             </button>
-          </>
+
+            {userMenuOpen && (
+              <div className="absolute right-0 top-9 z-30 w-52 rounded-xl border border-white/10 bg-black p-2 text-white shadow-2xl">
+                <p className="mb-2 truncate px-2 text-[11px] font-bold text-white/70">
+                  {userLabel}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={signOut}
+                  disabled={busy}
+                  className="w-full rounded-lg bg-red-600 px-3 py-2 text-left text-xs font-black text-white hover:bg-red-500 disabled:opacity-50"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <Link
             href="/login"
-            className="rounded-lg bg-white px-3 py-2 text-xs font-black text-black hover:bg-zinc-200"
+            title="Log in"
+            className="keep-dark-text flex h-7 w-7 items-center justify-center rounded-full bg-white text-xs font-black text-black hover:bg-zinc-200"
           >
-            Log in
+            U
           </Link>
         )}
       </div>
     </div>
   )
 }
+

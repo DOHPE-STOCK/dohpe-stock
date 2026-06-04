@@ -1,12 +1,13 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
-import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 import { supabase } from '@/lib/supabase'
 
 type ScanMode = 'bin' | 'items'
+type ItemScanMode = 'sku' | 'rfid'
 type SkuType = 'single_use' | 'reusable' | string
 
 type WarehouseBin = {
@@ -28,8 +29,15 @@ type PendingItem = {
   quantity: number
 }
 
-const WAREHOUSE_LOCATION = 'WAREHOUSE'
-const WAREHOUSE_LINNWORKS_LOCATION = 'Default'
+type LocationConfig = {
+  name: string
+  label: string | null
+  is_active: boolean
+  bin_mode: 'basic' | 'range' | null
+  basic_bins: string[] | null
+}
+
+const WAREHOUSE_LOCATION = 'LOCATION-1'
 const DEFAULT_BIN = 'Default'
 
 function cleanScanValue(value: string) {
@@ -45,19 +53,19 @@ function isReusable(item: Pick<PendingItem, 'sku_type'>) {
   return text(item.sku_type).toLowerCase() === 'reusable'
 }
 
+function canonicalLocationKey(location: string | null | undefined) {
+  return text(location).toUpperCase().replace(/[\s_]+/g, '-')
+}
+
 function stockLocationName(appLocation: string) {
-  const value = text(appLocation).toUpperCase()
-  if (!value || value === 'DEFAULT') return WAREHOUSE_LOCATION
+  const value = canonicalLocationKey(appLocation)
   if (!value) return WAREHOUSE_LOCATION
+  if (value === 'WAREHOUSE' || value === 'DEFAULT') return WAREHOUSE_LOCATION
+
+  const shopMatch = value.match(/^SHOP-(\d+)$/)
+  if (shopMatch) return `LOCATION-${Number(shopMatch[1]) + 1}`
+
   return value
-}
-
-function getActiveLocation(bin: WarehouseBin | null) {
-  return stockLocationName(bin?.location_name || WAREHOUSE_LOCATION)
-}
-
-function getActiveBinCode(bin: WarehouseBin | null) {
-  return text(bin?.bin_code) || DEFAULT_BIN
 }
 
 function parseBinScan(value: string) {
@@ -67,12 +75,19 @@ function parseBinScan(value: string) {
 
   if (queryMatch?.[1]) {
     return {
-      location: locationMatch?.[1] ? decodeURIComponent(locationMatch[1]).trim().toUpperCase() : '',
+      location: locationMatch?.[1]
+        ? decodeURIComponent(locationMatch[1]).trim().toUpperCase()
+        : '',
       bin: decodeURIComponent(queryMatch[1]).trim().toUpperCase(),
     }
   }
 
   return { location: '', bin: cleanScanValue(raw) }
+}
+
+function configuredLocationRows(rows: LocationConfig[]) {
+  const configured = rows.filter((row) => text(row.label) || /^LOCATION-\d+$/i.test(text(row.name)))
+  return configured.length > 0 ? configured : rows
 }
 
 export default function AllocatePage() {
@@ -82,21 +97,102 @@ export default function AllocatePage() {
   const [scanValue, setScanValue] = useState('')
   const [mode, setMode] = useState<ScanMode>('bin')
   const [activeBin, setActiveBin] = useState<WarehouseBin | null>(null)
+  const [itemScanMode, setItemScanMode] = useState<ItemScanMode>('sku')
   const [pendingItems, setPendingItems] = useState<PendingItem[]>([])
+  const [locationConfigs, setLocationConfigs] = useState<LocationConfig[]>([])
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [allocating, setAllocating] = useState(false)
+  const [prefillContext, setPrefillContext] = useState<{
+    receiveTransferId?: string
+    transferNumber?: string
+    destinationLocation?: string
+    sourceLocation?: string
+    sourceBin?: string
+  } | null>(null)
 
   useEffect(() => {
+    fetchLocationConfigs()
+
     const params = new URLSearchParams(window.location.search)
     const binFromUrl = params.get('bin')
     const locationFromUrl = params.get('location')
+    const itemsFromUrl = params.get('items')
+    const receiveTransferId = params.get('receive_transfer_id') || ''
+    const transferNumber = params.get('transfer_number') || ''
+    const destinationLocation = stockLocationName(
+      locationFromUrl || params.get('destination_location') || WAREHOUSE_LOCATION
+    )
+    const sourceLocation = stockLocationName(params.get('source_location') || WAREHOUSE_LOCATION)
+    const sourceBin = params.get('source_bin') || DEFAULT_BIN
+
+    if (receiveTransferId || itemsFromUrl || destinationLocation) {
+      setPrefillContext({
+        receiveTransferId,
+        transferNumber,
+        destinationLocation,
+        sourceLocation,
+        sourceBin,
+      })
+    }
+
+    if (itemsFromUrl) {
+      preloadItemsFromUrl(itemsFromUrl, sourceLocation, sourceBin, transferNumber)
+    }
 
     if (binFromUrl) {
-      scanBin(cleanScanValue(binFromUrl), locationFromUrl ? cleanScanValue(locationFromUrl) : '')
+      scanBin(cleanScanValue(binFromUrl), cleanScanValue(destinationLocation))
     }
 
     focusInput()
   }, [])
+
+  async function fetchLocationConfigs() {
+    const { data, error } = await supabase
+      .from('locations')
+      .select('name, label, is_active, bin_mode, basic_bins')
+      .eq('is_active', true)
+
+    if (!error) {
+      setLocationConfigs(configuredLocationRows((data || []) as LocationConfig[]))
+    }
+  }
+
+  function getLocationConfig(location: string) {
+    const value = stockLocationName(location)
+
+    return locationConfigs.find((config) => {
+      return (
+        stockLocationName(config.name) === value ||
+        canonicalLocationKey(config.label) === value
+      )
+    })
+  }
+
+  function displayLocation(location: string | null | undefined) {
+    const storage = stockLocationName(location || WAREHOUSE_LOCATION)
+    const config = getLocationConfig(storage)
+
+    if (text(config?.label)) return text(config?.label)
+    if (storage === 'LOCATION-1') return 'WAREHOUSE'
+
+    const match = storage.match(/^LOCATION-(\d+)$/)
+    if (match && Number(match[1]) >= 2) return `SHOP-${Number(match[1]) - 1}`
+
+    return storage
+  }
+
+  function getActiveLocation(bin: WarehouseBin | null) {
+    return stockLocationName(bin?.location_name || WAREHOUSE_LOCATION)
+  }
+
+  function getActiveDisplayLocation(bin: WarehouseBin | null) {
+    return displayLocation(getActiveLocation(bin))
+  }
+
+  function getActiveBinCode(bin: WarehouseBin | null) {
+    return text(bin?.bin_code) || DEFAULT_BIN
+  }
 
   function focusInput() {
     setTimeout(() => inputRef.current?.focus(), 50)
@@ -106,10 +202,73 @@ export default function AllocatePage() {
     return /^[A-Z0-9\-_]+$/.test(value)
   }
 
+  function parsePrefillItems(value: string) {
+    return value
+      .split(',')
+      .map((part) => {
+        const [skuRaw, quantityRaw, sourceBinRaw] = part.split(':')
+        const sku = cleanScanValue(decodeURIComponent(skuRaw || ''))
+        const quantity = Math.max(1, Number(quantityRaw || 1))
+        const sourceBin = sourceBinRaw ? cleanScanValue(decodeURIComponent(sourceBinRaw)) : ''
+        return sku ? { sku, quantity, sourceBin } : null
+      })
+      .filter(Boolean) as { sku: string; quantity: number; sourceBin: string }[]
+  }
+
+  async function preloadItemsFromUrl(
+    value: string,
+    sourceLocation: string,
+    sourceBin: string,
+    transferNumber = ''
+  ) {
+    const parsed = parsePrefillItems(value)
+    const skus = parsed.map((item) => item.sku)
+
+    if (skus.length === 0) return
+
+    setBusy(true)
+    setMessage('Loading transfer items for allocation...')
+
+    const { data, error } = await supabase
+      .from('items')
+      .select('id, sku, barcode_number, sku_type, current_location, current_bin, location_status')
+      .in('sku', skus)
+
+    setBusy(false)
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    const bySku = new Map((data || []).map((item: any) => [cleanScanValue(item.sku), item as PendingItem]))
+    const rows: PendingItem[] = []
+
+    for (const prefill of parsed) {
+      const item = bySku.get(prefill.sku)
+      if (!item) continue
+
+      rows.push({
+        ...item,
+        current_location: stockLocationName(sourceLocation || item.current_location || WAREHOUSE_LOCATION),
+        current_bin: text(prefill.sourceBin || sourceBin || item.current_bin) || DEFAULT_BIN,
+        quantity: prefill.quantity,
+      })
+    }
+
+    setPendingItems(rows)
+    setMode('bin')
+    setMessage(
+      rows.length > 0
+        ? `Loaded ${rows.reduce((sum, item) => sum + item.quantity, 0)} unit(s)${transferNumber ? ` from transfer #${transferNumber}` : ''}. Scan or type destination bin now.`
+        : 'No matching transfer items found to allocate.'
+    )
+  }
+
   async function handleScan() {
     const value = cleanScanValue(scanValue)
 
-    if (!value || busy) return
+    if (!value || busy || allocating) return
 
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
@@ -134,7 +293,8 @@ export default function AllocatePage() {
     if (!binCode) return
 
     const cleanBin = cleanScanValue(binCode)
-    const cleanLocation = locationName ? stockLocationName(locationName) : ''
+    const fallbackLocation = prefillContext?.destinationLocation || WAREHOUSE_LOCATION
+    const cleanLocation = locationName ? stockLocationName(locationName) : stockLocationName(fallbackLocation)
 
     setBusy(true)
 
@@ -157,7 +317,34 @@ export default function AllocatePage() {
     }
 
     if (!data || data.length === 0) {
-      setMessage(cleanLocation ? `Bin not found: ${cleanLocation} / ${cleanBin}` : `Bin not found: ${cleanBin}`)
+      const { data: created, error: createError } = await supabase
+        .from('warehouse_bins')
+        .upsert(
+          {
+            bin_code: cleanBin,
+            label: cleanBin,
+            location_name: cleanLocation,
+            is_active: true,
+          },
+          { onConflict: 'bin_code,location_name' }
+        )
+        .select('id, bin_code, location_name, label, is_active')
+        .single()
+
+      if (createError) {
+        setMessage(createError.message)
+        return
+      }
+
+      const selectedBin = created as WarehouseBin
+      setActiveBin(selectedBin)
+      setMode('items')
+      setMessage(
+        `Bin auto-created and selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. ${
+          pendingItems.length > 0 ? 'Preloaded items are ready to allocate.' : 'Scan item SKUs now.'
+        }`
+      )
+      focusInput()
       return
     }
 
@@ -169,14 +356,17 @@ export default function AllocatePage() {
     const selectedBin = data[0] as WarehouseBin
 
     if (!selectedBin.is_active) {
-      setMessage(`Bin inactive: ${getActiveLocation(selectedBin)} / ${selectedBin.bin_code}`)
+      setMessage(`Bin inactive: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}`)
       return
     }
 
     setActiveBin(selectedBin)
     setMode('items')
-    setPendingItems([])
-    setMessage(`Bin selected: ${getActiveLocation(selectedBin)} / ${selectedBin.bin_code}. Scan item SKUs now.`)
+    setMessage(
+      `Bin selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. ${
+        pendingItems.length > 0 ? 'Preloaded items are ready to allocate.' : 'Scan item SKUs now.'
+      }`
+    )
     focusInput()
   }
 
@@ -194,11 +384,42 @@ export default function AllocatePage() {
 
     setBusy(true)
 
-    const { data, error } = await supabase
-      .from('items')
-      .select('id, sku, barcode_number, sku_type, current_location, current_bin, location_status')
-      .or(`sku.eq.${scannedValue},barcode_number.eq.${scannedValue}`)
-      .maybeSingle()
+    let data: PendingItem | null = null
+    let error: { message: string } | null = null
+
+    if (itemScanMode === 'rfid') {
+      const normalizedIdentifier = cleanScanValue(scannedValue)
+
+      const identifierResult = await supabase
+        .from('item_identifiers')
+        .select('item_id')
+        .eq('identifier_type', 'rfid')
+        .eq('identifier_value_normalized', normalizedIdentifier)
+        .eq('is_active', true)
+        .maybeSingle()
+
+      if (identifierResult.error) {
+        error = identifierResult.error
+      } else if (identifierResult.data?.item_id) {
+        const itemResult = await supabase
+          .from('items')
+          .select('id, sku, barcode_number, sku_type, current_location, current_bin, location_status')
+          .eq('id', identifierResult.data.item_id)
+          .maybeSingle()
+
+        data = itemResult.data as PendingItem | null
+        error = itemResult.error
+      }
+    } else {
+      const itemResult = await supabase
+        .from('items')
+        .select('id, sku, barcode_number, sku_type, current_location, current_bin, location_status')
+        .or(`sku.eq.${scannedValue},barcode_number.eq.${scannedValue}`)
+        .maybeSingle()
+
+      data = itemResult.data as PendingItem | null
+      error = itemResult.error
+    }
 
     setBusy(false)
 
@@ -208,7 +429,7 @@ export default function AllocatePage() {
     }
 
     if (!data) {
-      setMessage(`Item not found: ${scannedValue}`)
+      setMessage(`${itemScanMode === 'rfid' ? 'RFID' : 'Item'} not found: ${scannedValue}`)
       return
     }
 
@@ -263,7 +484,6 @@ export default function AllocatePage() {
   function resetBin() {
     setActiveBin(null)
     setMode('bin')
-    setPendingItems([])
     setMessage('Scan bin.')
     focusInput()
   }
@@ -276,64 +496,37 @@ export default function AllocatePage() {
   }) {
     const locationName = stockLocationName(params.location)
     const binCode = text(params.bin) || DEFAULT_BIN
-    const now = new Date().toISOString()
 
-    const { data, error } = await supabase
-      .from('item_stock_locations')
-      .select('id, stock_level')
-      .eq('item_id', params.item.id)
-      .eq('location_name', locationName)
-      .eq('bin_code', binCode)
-      .limit(1)
-
-    if (error) throw new Error(error.message)
-
-    const existing = data?.[0]
-    const currentStock = Number(existing?.stock_level || 0)
-    const nextStock = currentStock + params.delta
-
-    if (nextStock < 0) {
-      throw new Error(
-        `${params.item.sku} does not have enough stock in ${params.location} / ${binCode}. Current: ${currentStock}, trying to move: ${Math.abs(params.delta)}.`
-      )
-    }
-
-    if (existing) {
-      const { error: updateError } = await supabase
-        .from('item_stock_locations')
-        .update({
-          stock_level: nextStock,
-          source: 'app_allocate',
-          updated_at: now,
-        })
-        .eq('id', existing.id)
-
-      if (updateError) throw new Error(updateError.message)
-      return
-    }
-
-    const { error: insertError } = await supabase
-      .from('item_stock_locations')
-      .insert({
+    const response = await fetch('/api/items/stock-location/adjust', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
         item_id: params.item.id,
         sku: params.item.sku,
         location_name: locationName,
-        location_id: null,
         bin_code: binCode,
-        stock_level: nextStock,
+        delta: params.delta,
         source: 'app_allocate',
-        synced_at: null,
-        updated_at: now,
-      })
+      }),
+    })
 
-    if (insertError) throw new Error(insertError.message)
+    const result = await response.json().catch(() => null)
+
+    if (!response.ok || result?.ok === false) {
+      if (result?.error === 'insufficient_stock') {
+        throw new Error(
+          `${params.item.sku} does not have enough stock in ${displayLocation(locationName)} / ${binCode}. Current: ${Number(
+            result.current_stock || 0
+          )}, trying to move: ${Math.abs(Number(result.attempted_delta || params.delta))}.`
+        )
+      }
+
+      throw new Error(result?.error || 'Stock location adjustment failed.')
+    }
   }
 
   async function allocateItems() {
-    if (!staff) {
-      setMessage('No active staff selected. Go to staff PIN screen first.')
-      return
-    }
+    if (!staff || allocating) return
 
     if (!activeBin) {
       setMessage('Scan a bin first.')
@@ -348,11 +541,12 @@ export default function AllocatePage() {
     const totalQty = pendingItems.reduce((sum, item) => sum + item.quantity, 0)
 
     const confirmed = window.confirm(
-      `Allocate ${totalQty} unit(s) to ${getActiveLocation(activeBin)} / ${getActiveBinCode(activeBin)} by ${staff.name}?\n\nReusable SKUs move from their current/default stock row into the selected location/bin. Single-use SKUs move the item row.`
+      `Allocate ${totalQty} unit(s) to ${getActiveDisplayLocation(activeBin)} / ${getActiveBinCode(activeBin)} by ${staff.name}?`
     )
 
     if (!confirmed) return
 
+    setAllocating(true)
     setBusy(true)
     setMessage('Allocating...')
 
@@ -385,7 +579,7 @@ export default function AllocatePage() {
             singleUseItems.map((item) => ({
               item_id: item.id,
               sku: item.sku,
-              from_location: item.current_location,
+              from_location: stockLocationName(item.current_location || WAREHOUSE_LOCATION),
               from_bin: item.current_bin,
               to_location: getActiveLocation(activeBin),
               to_bin: getActiveBinCode(activeBin),
@@ -478,9 +672,40 @@ export default function AllocatePage() {
         if (reusableQueueError) throw new Error(reusableQueueError.message)
       }
 
-      setMessage(`Allocated ${totalQty} unit(s) to ${getActiveLocation(activeBin)} / ${getActiveBinCode(activeBin)} by ${staff.name}`)
+      if (prefillContext?.receiveTransferId) {
+        const { error: transferItemsError } = await supabase
+          .from('stock_transfer_items')
+          .update({
+            status: 'received',
+            received_at: now,
+          })
+          .eq('transfer_id', prefillContext.receiveTransferId)
+          .eq('status', 'in_transfer')
+
+        if (transferItemsError) throw new Error(transferItemsError.message)
+
+        const { error: transferError } = await supabase
+          .from('stock_transfers')
+          .update({
+            status: 'received',
+            received_at: now,
+            received_by: staff.id,
+            to_location: getActiveLocation(activeBin),
+          })
+          .eq('id', prefillContext.receiveTransferId)
+          .neq('status', 'received')
+
+        if (transferError) throw new Error(transferError.message)
+      }
+
+      setMessage(
+        `Allocated ${totalQty} unit(s) to ${getActiveDisplayLocation(activeBin)} / ${getActiveBinCode(activeBin)} by ${staff.name}${
+          prefillContext?.transferNumber ? ` from transfer #${prefillContext.transferNumber}` : ''
+        }`
+      )
       setPendingItems([])
     } catch (error: any) {
+      setAllocating(false)
       setMessage(error.message || 'Allocation failed.')
     } finally {
       setBusy(false)
@@ -495,12 +720,12 @@ export default function AllocatePage() {
         onClick={focusInput}
       >
         <div className="mx-auto max-w-5xl space-y-4">
-          <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+          <header className="app-header rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <h1 className="text-2xl font-bold sm:text-3xl">Allocate</h1>
-                <p className="text-sm text-neutral-400">
-                  Scan a bin QR to open this page with the bin already selected.
+                <h1 className="text-2xl font-black tracking-normal sm:text-3xl">Allocate</h1>
+                <p className="text-sm text-neutral-300">
+                  Scan a bin QR, or open from Mark as Received with items preloaded then scan/type the destination bin.
                 </p>
 
                 {staff ? (
@@ -514,7 +739,13 @@ export default function AllocatePage() {
                 )}
               </div>
 
-              <AppNav current="allocate" />
+              <Link
+                href="/scanner/create-bin"
+                onClick={(event) => event.stopPropagation()}
+                className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white hover:bg-emerald-500"
+              >
+                Create Bin
+              </Link>
             </div>
           </header>
 
@@ -540,13 +771,43 @@ export default function AllocatePage() {
                 {activeBin?.bin_code || 'NONE'}
               </p>
 
-              {activeBin?.label && (
-                <p className="mt-1 text-sm text-neutral-400">{activeBin.label}</p>
+              {activeBin && (
+                <p className="mt-1 text-sm text-neutral-400">
+                  {getActiveDisplayLocation(activeBin)} / {getActiveBinCode(activeBin)}
+                </p>
               )}
             </div>
           </section>
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            {mode === 'items' && (
+              <div className="mb-3 grid grid-cols-2 gap-2 sm:flex">
+                <button
+                  type="button"
+                  onClick={() => setItemScanMode('sku')}
+                  className={`rounded-xl px-4 py-3 text-sm font-black ${
+                    itemScanMode === 'sku'
+                      ? 'bg-white text-black'
+                      : 'border border-neutral-700 bg-neutral-950 text-white'
+                  }`}
+                >
+                  SKU / BARCODE
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setItemScanMode('rfid')}
+                  className={`rounded-xl px-4 py-3 text-sm font-black ${
+                    itemScanMode === 'rfid'
+                      ? 'bg-white text-black'
+                      : 'border border-neutral-700 bg-neutral-950 text-white'
+                  }`}
+                >
+                  RFID
+                </button>
+              </div>
+            )}
+
             <input
               ref={inputRef}
               value={scanValue}
@@ -559,9 +820,11 @@ export default function AllocatePage() {
                   ? 'Go to staff PIN screen first'
                   : mode === 'bin'
                     ? 'Scan bin barcode'
-                    : 'Scan item SKU or reusable barcode'
+                    : itemScanMode === 'rfid'
+                      ? 'Scan item RFID'
+                      : 'Scan item SKU or reusable barcode'
               }
-              disabled={busy || !staff}
+              disabled={busy || allocating || !staff}
               inputMode="none"
               autoComplete="off"
               autoCorrect="off"
@@ -572,7 +835,7 @@ export default function AllocatePage() {
 
             <button
               onClick={handleScan}
-              disabled={busy || !scanValue.trim() || !staff}
+              disabled={busy || allocating || !scanValue.trim() || !staff}
               className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
             >
               {busy ? 'PROCESSING...' : mode === 'bin' ? 'SET BIN' : 'ADD ITEM'}
@@ -597,17 +860,18 @@ export default function AllocatePage() {
               <div className="grid grid-cols-2 gap-2 sm:flex">
                 <button
                   onClick={resetBin}
-                  className="rounded-xl border border-neutral-700 px-4 py-4 text-sm font-black"
+                  disabled={busy || allocating}
+                  className="rounded-xl border border-neutral-700 px-4 py-4 text-sm font-black disabled:opacity-40"
                 >
                   CHANGE BIN
                 </button>
 
                 <button
                   onClick={allocateItems}
-                  disabled={busy || !staff || !activeBin || pendingItems.length === 0}
+                  disabled={busy || allocating || !staff || !activeBin || pendingItems.length === 0}
                   className="rounded-xl bg-green-600 px-4 py-4 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
                 >
-                  ALLOCATE
+                  {allocating ? 'ALLOCATING...' : 'ALLOCATE'}
                 </button>
               </div>
             </div>
@@ -619,9 +883,12 @@ export default function AllocatePage() {
             ) : (
               <div className="space-y-2">
                 {pendingItems.map((item) => {
+                  const sourceLocation = stockLocationName(item.current_location || WAREHOUSE_LOCATION)
+                  const destinationLocation = getActiveLocation(activeBin)
+
                   const alreadyInBin =
                     !isReusable(item) &&
-                    item.current_location === WAREHOUSE_LOCATION &&
+                    sourceLocation === destinationLocation &&
                     item.current_bin === activeBin?.bin_code
 
                   return (
@@ -635,8 +902,8 @@ export default function AllocatePage() {
                         </p>
                         <p className="text-sm text-neutral-400">
                           {isReusable(item)
-                            ? `Reusable: ${WAREHOUSE_LOCATION} / ${DEFAULT_BIN} → ${WAREHOUSE_LOCATION} / ${activeBin?.bin_code || '-'}`
-                            : `Current: ${item.current_location || '-'} / ${item.current_bin || '-'}`}
+                            ? `Reusable: ${displayLocation(sourceLocation)} / ${item.current_bin || DEFAULT_BIN} → ${displayLocation(destinationLocation)} / ${activeBin?.bin_code || '-'}`
+                            : `Current: ${displayLocation(sourceLocation)} / ${item.current_bin || '-'}`}
                         </p>
 
                         {alreadyInBin && (
@@ -650,7 +917,8 @@ export default function AllocatePage() {
                         {isReusable(item) && item.quantity > 1 && (
                           <button
                             onClick={() => reduceReusableQuantity(item.sku)}
-                            className="rounded-lg bg-neutral-800 px-3 py-2 text-sm font-black text-neutral-100"
+                            disabled={busy || allocating}
+                            className="rounded-lg bg-neutral-800 px-3 py-2 text-sm font-black text-neutral-100 disabled:opacity-40"
                           >
                             -1
                           </button>
@@ -658,7 +926,8 @@ export default function AllocatePage() {
 
                         <button
                           onClick={() => removeItem(item.sku)}
-                          className="rounded-lg bg-red-900 px-3 py-2 text-sm font-black text-red-100"
+                          disabled={busy || allocating}
+                          className="rounded-lg bg-red-900 px-3 py-2 text-sm font-black text-red-100 disabled:opacity-40"
                         >
                           REMOVE
                         </button>

@@ -174,7 +174,9 @@ export default function PhotoImportGroupPage() {
         sku,
         status: 'working',
         stock_level: 1,
-        location_status: 'unknown',
+        location_status: 'stored',
+        current_location: 'WAREHOUSE',
+        current_bin: 'Default',
         ebay_status: 'not_listed',
         linnworks_status: 'not_synced',
         shopify_status: 'not_listed',
@@ -431,12 +433,12 @@ export default function PhotoImportGroupPage() {
     <StaffPermissionGate permission="working">
       <main className="min-h-screen bg-neutral-950 text-white">
         <div className="mx-auto max-w-7xl space-y-5 p-4">
-          <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+          <header className="app-header rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-bold">Photo Import: {group.sku}</h1>
+                <h1 className="text-2xl font-black tracking-normal">Photo Import: {group.sku}</h1>
 
-                <p className="text-sm text-neutral-400">
+                <p className="text-sm text-neutral-300">
                   Review selected photos before attaching them to the item.
                 </p>
               </div>
@@ -612,3 +614,4 @@ export default function PhotoImportGroupPage() {
     </StaffPermissionGate>
   )
 }
+

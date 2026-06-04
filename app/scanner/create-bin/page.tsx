@@ -19,10 +19,11 @@ type ZoneConfig = {
 const MAX_LABELS = 500
 
 const FALLBACK_LOCATIONS: LocationOption[] = [
-  { name: 'WAREHOUSE', label: 'WAREHOUSE' },
-  { name: 'SHOP-1', label: 'SHOP-1' },
-  { name: 'SHOP-2', label: 'SHOP-2' },
-  { name: 'SHOP-3', label: 'SHOP-3' },
+  { name: 'LOCATION-1', label: 'WAREHOUSE' },
+  { name: 'LOCATION-2', label: 'SHOP-1' },
+  { name: 'LOCATION-3', label: 'SHOP-2' },
+  { name: 'LOCATION-4', label: 'SHOP-3' },
+  { name: 'LOCATION-5', label: 'SHOP-4' },
 ]
 
 function cleanLocation(value: string) {
@@ -208,7 +209,7 @@ async function loadLocationOptions() {
 
 export default function CreateBinPage() {
   const [locations, setLocations] = useState<LocationOption[]>(FALLBACK_LOCATIONS)
-  const [location, setLocation] = useState('WAREHOUSE')
+  const [location, setLocation] = useState('LOCATION-1')
   const [customLocation, setCustomLocation] = useState('')
 
   const [mode, setMode] = useState<GeneratorMode>('word')
@@ -440,20 +441,20 @@ export default function CreateBinPage() {
   }
 
   function openTestAllocatePage() {
-    window.open(getAllocateUrl(activeLocation || 'WAREHOUSE', 'TEST-0-0'), '_blank')
+    window.open(getAllocateUrl(activeLocation || 'LOCATION-1', 'TEST-0-0'), '_blank')
   }
 
   return (
     <main className="min-h-screen bg-neutral-950 p-3 text-white select-none sm:p-5">
       <div className="mx-auto max-w-5xl space-y-4">
-        <header className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+        <header className="app-header rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h1 className="text-2xl font-bold sm:text-3xl">
                 Create Bin QR Labels
               </h1>
 
-              <p className="text-sm text-neutral-400">
+              <p className="text-sm text-neutral-300">
                 Select a location, then create one exact word/bin label or a structured range with up to 4 zones.
               </p>
             </div>
@@ -686,7 +687,11 @@ export default function CreateBinPage() {
             </p>
 
             <p className="mt-2 text-sm text-neutral-500">
-              QR location: {activeLocation || 'NO LOCATION'} · Estimated labels: {previewBins.length || '—'} · Maximum allowed: {MAX_LABELS}
+              QR location: {activeLocation || 'NO LOCATION'} - Estimated labels: {previewBins.length || '-'} - Maximum allowed: {MAX_LABELS}
+            </p>
+
+            <p className="mt-1 text-xs font-semibold uppercase text-neutral-600">
+              The printed text stays as the bin code only. The QR carries location and bin for Allocate.
             </p>
           </div>
 
@@ -724,3 +729,4 @@ export default function CreateBinPage() {
     </main>
   )
 }
+
