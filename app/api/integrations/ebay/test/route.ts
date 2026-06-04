@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getEbayIntegrationConfig } from '@/lib/ebayIntegrationSettings'
-import { ebayRequest, getDefaultCategoryTreeId } from '@/lib/ebayApi'
+import { ebayRequest, getDefaultCategoryTreeId, getEbayUserProfile } from '@/lib/ebayApi'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -22,6 +22,14 @@ export async function GET() {
 
     let fulfillmentPolicyCount = 0
     let policyWarning: string | null = null
+    const profile = await getEbayUserProfile(config.settings).catch(() => null)
+    const accountName =
+      profile?.businessAccount?.doingBusinessAs ||
+      profile?.businessAccount?.name ||
+      profile?.username ||
+      profile?.userId ||
+      config.settings.ebay_account_name ||
+      null
 
     try {
       const fulfillmentPolicies = await ebayRequest(
@@ -40,6 +48,13 @@ export async function GET() {
         connection_status: 'connected',
         last_synced_at: new Date().toISOString(),
         last_error: policyWarning,
+        settings: {
+          ...config.settings,
+          ebay_user_id: profile?.userId || config.settings.ebay_user_id || null,
+          ebay_username: profile?.username || config.settings.ebay_username || null,
+          ebay_account_name: accountName,
+          ebay_account_type: profile?.accountType || config.settings.ebay_account_type || null,
+        },
       })
       .eq('channel', 'ebay')
 
@@ -49,6 +64,9 @@ export async function GET() {
       category_tree_id: categoryTreeId,
       fulfillment_policy_count: fulfillmentPolicyCount,
       policy_warning: policyWarning,
+      ebay_account_name: accountName,
+      ebay_username: profile?.username || config.settings.ebay_username || null,
+      ebay_account_type: profile?.accountType || config.settings.ebay_account_type || null,
     })
   } catch (error: any) {
     return NextResponse.json(

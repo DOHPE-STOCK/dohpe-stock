@@ -18,9 +18,16 @@ function ebayIdentityBaseUrl(settings?: EbaySettings) {
     : 'https://api.ebay.com'
 }
 
+function ebayProfileBaseUrl(settings?: EbaySettings) {
+  return settings?.environment === 'sandbox'
+    ? 'https://apiz.sandbox.ebay.com'
+    : 'https://apiz.ebay.com'
+}
+
 function ebayScopes() {
   return [
     'https://api.ebay.com/oauth/api_scope',
+    'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
     'https://api.ebay.com/oauth/api_scope/sell.account',
     'https://api.ebay.com/oauth/api_scope/sell.inventory',
     'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
@@ -132,6 +139,24 @@ export async function getEbayAccessToken(settings?: EbaySettings) {
   }
 
   return data.access_token as string
+}
+
+export async function getEbayUserProfile(settings: EbaySettings, accessToken?: string) {
+  const token = accessToken || (await getEbayAccessToken(settings))
+  const response = await fetch(`${ebayProfileBaseUrl(settings)}/commerce/identity/v1/user/`, {
+    headers: {
+      accept: 'application/json',
+      authorization: `Bearer ${token}`,
+    },
+  })
+
+  const data = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(`eBay identity lookup failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`)
+  }
+
+  return data
 }
 
 export async function ebayRequest(settings: EbaySettings, path: string, options: RequestInit = {}) {

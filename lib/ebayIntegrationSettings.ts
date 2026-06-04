@@ -46,6 +46,10 @@ export type EbaySettings = {
   use_linnworks_for_live_listing: boolean
   shadow_compare_with_linnworks: boolean
   oauth_refresh_token?: string
+  ebay_user_id?: string | null
+  ebay_username?: string | null
+  ebay_account_name?: string | null
+  ebay_account_type?: string | null
   category_mappings: EbayCategoryMapping[]
   condition_mappings: EbayConditionMapping[]
   optional_aspect_mapping: EbayOptionalAspectMapping[]

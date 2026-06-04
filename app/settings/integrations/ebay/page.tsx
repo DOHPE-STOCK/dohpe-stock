@@ -448,6 +448,10 @@ export default function EbayIntegrationPage() {
     fulfillment: settings.fulfillment_policy_id,
     returns: settings.return_policy_id,
   }
+  const ebayConnected = integration?.connection_status === 'connected'
+  const ebayActive = enabled && ebayConnected
+  const ebayAccountLabel =
+    text(settings.ebay_account_name) || text(settings.ebay_username) || text(settings.ebay_user_id) || 'Connected account'
 
   return (
     <StaffPermissionGate permission="integrations">
@@ -494,12 +498,24 @@ export default function EbayIntegrationPage() {
               Create Sandbox Policies
             </button>
 
-            <a
-              href="/api/integrations/ebay/connect"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-black text-white hover:bg-blue-500"
-            >
-              Connect eBay
-            </a>
+            {ebayActive ? (
+              <div className="flex items-center gap-2 rounded-xl border border-green-500/40 bg-green-600 px-4 py-2 text-white shadow-lg">
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-white text-xs font-black text-green-700">
+                  ✓
+                </span>
+                <div className="min-w-0">
+                  <div className="text-xs font-black uppercase leading-3 text-green-100">eBay active</div>
+                  <div className="max-w-[180px] truncate text-sm font-black leading-5">{ebayAccountLabel}</div>
+                </div>
+              </div>
+            ) : (
+              <a
+                href="/api/integrations/ebay/connect"
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-black text-white hover:bg-blue-500"
+              >
+                eBay connect
+              </a>
+            )}
 
             <button
               type="button"

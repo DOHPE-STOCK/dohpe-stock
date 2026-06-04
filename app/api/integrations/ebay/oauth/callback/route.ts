@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getEbayIntegrationConfig } from '@/lib/ebayIntegrationSettings'
-import { exchangeEbayCodeForTokens } from '@/lib/ebayApi'
+import { exchangeEbayCodeForTokens, getEbayUserProfile } from '@/lib/ebayApi'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -60,11 +60,22 @@ export async function GET(request: NextRequest) {
     const supabase = getSupabaseAdmin()
     const config = await getEbayIntegrationConfig(supabase)
     const tokens = await exchangeEbayCodeForTokens(config.settings, code)
+    const profile = await getEbayUserProfile(config.settings, tokens.access_token).catch(() => null)
+    const accountName =
+      profile?.businessAccount?.doingBusinessAs ||
+      profile?.businessAccount?.name ||
+      profile?.username ||
+      profile?.userId ||
+      null
 
     const nextSettings = {
       ...config.settings,
       oauth_refresh_token: tokens.refresh_token,
       oauth_refresh_token_saved_at: new Date().toISOString(),
+      ebay_user_id: profile?.userId || null,
+      ebay_username: profile?.username || null,
+      ebay_account_name: accountName,
+      ebay_account_type: profile?.accountType || null,
     }
 
     await supabase
