@@ -499,13 +499,18 @@ export default function EbayIntegrationPage() {
             </button>
 
             {ebayActive ? (
-              <div className="flex items-center gap-2 rounded-xl border border-green-500/40 bg-green-600 px-4 py-2 text-white shadow-lg">
-                <span className="grid h-6 w-6 place-items-center rounded-full bg-white text-xs font-black text-green-700">
-                  ✓
+              <div className="flex items-center gap-3 rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2 text-white shadow-sm">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-sm font-black text-neutral-950">
+                  e
                 </span>
                 <div className="min-w-0">
-                  <div className="text-xs font-black uppercase leading-3 text-green-100">eBay active</div>
-                  <div className="max-w-[180px] truncate text-sm font-black leading-5">{ebayAccountLabel}</div>
+                  <div className="flex items-center gap-2 text-[11px] font-black uppercase leading-3 text-neutral-400">
+                    <span className="h-2 w-2 rounded-full bg-green-400" />
+                    <span>eBay connected</span>
+                  </div>
+                  <div className="mt-0.5 max-w-[190px] truncate text-sm font-black leading-5 text-white">
+                    {ebayAccountLabel}
+                  </div>
                 </div>
               </div>
             ) : (
