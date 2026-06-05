@@ -518,12 +518,17 @@ export default function ItemPage() {
   const [ebayCategorySearch, setEbayCategorySearch] = useState('')
   const [ebayCategorySuggestions, setEbayCategorySuggestions] = useState<any[]>([])
   const [searchingEbayCategories, setSearchingEbayCategories] = useState(false)
+  const [subCategoryOptions, setSubCategoryOptions] = useState<string[]>([])
 
   const originalItemRef = useRef<any>(null)
 
   useEffect(() => {
     fetchItem()
   }, [id])
+
+  useEffect(() => {
+    fetchSubCategoryOptions(item?.reporting_category)
+  }, [item?.reporting_category])
 
   useEffect(() => {
     if (!message) return
@@ -555,6 +560,26 @@ export default function ItemPage() {
     setItem(data)
     originalItemRef.current = data
     setHasUnsavedChanges(false)
+  }
+
+  async function fetchSubCategoryOptions(category: string | null | undefined) {
+    const selectedCategory = text(category)
+
+    if (!selectedCategory) {
+      setSubCategoryOptions([])
+      return
+    }
+
+    const { data } = await supabase
+      .from('items')
+      .select('sub_category')
+      .eq('reporting_category', selectedCategory)
+      .not('sub_category', 'is', null)
+      .limit(500)
+
+    setSubCategoryOptions(
+      Array.from(new Set((data || []).map((row: any) => text(row.sub_category)).filter(Boolean))).sort()
+    )
   }
 
   async function checkEbayReadiness(skuOverride?: string) {
@@ -1675,7 +1700,7 @@ export default function ItemPage() {
                   label="Sub Category"
                   value={item.sub_category || ''}
                   onChange={(v: string) => updateSubCategory(v)}
-                  options={reportingCategories}
+                  options={subCategoryOptions}
                   listId="sub-categories"
                   placeholder="Type or select sub category"
                 />

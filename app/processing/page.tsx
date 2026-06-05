@@ -5,6 +5,8 @@ import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 import FinalisedPanel from '@/app/processing/components/FinalisedPanel'
+import InboundPanel from '@/app/processing/components/InboundPanel'
+import ReceivingPanel from '@/app/processing/components/ReceivingPanel'
 import ReviewPanel from '@/app/processing/components/ReviewPanel'
 import WorkingPanel from '@/app/processing/components/WorkingPanel'
 import { supabase } from '@/lib/supabase'
@@ -70,9 +72,19 @@ export default function ProcessingPage() {
   const [items, setItems] = useState<ProcessingItem[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
+  const [receivingBatchId, setReceivingBatchId] = useState('')
 
   useEffect(() => {
     fetchProcessingItems()
+  }, [])
+
+  useEffect(() => {
+    function refreshOnFocus() {
+      fetchProcessingItems()
+    }
+
+    window.addEventListener('focus', refreshOnFocus)
+    return () => window.removeEventListener('focus', refreshOnFocus)
   }, [])
 
   const visibleStages = useMemo(() => {
@@ -128,39 +140,24 @@ export default function ProcessingPage() {
     return 0
   }
 
-  function renderPlaceholder(stage: ProcessingStage) {
-    const isInbound = stage === 'inbound'
-
-    return (
-      <div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-950 p-6">
-        <p className="text-sm font-bold text-zinc-400">
-          {isInbound
-            ? 'Inbound will hold supplier email/PDF imports, parsed invoice lines, confidence checks, and manual verification before creating a goods-in batch.'
-            : 'Receiving will hold verified batches awaiting quantity confirmation, RFID assignment, and received-cost/category defaults before items move to Working.'}
-        </p>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          {(isInbound
-            ? ['Email/document source', 'Parsed invoice lines', 'Create verified batch']
-            : ['Expected quantity', 'RFID assignment', 'Confirm received batch']
-          ).map((label) => (
-            <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-              <p className="text-xs font-black uppercase tracking-wide text-zinc-500">Next build</p>
-              <p className="mt-1 text-sm font-black text-white">{label}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
   function renderStagePanel() {
-    if (activeStage === 'inbound' || activeStage === 'receiving') {
-      return renderPlaceholder(activeStage)
+    if (activeStage === 'inbound') {
+      return (
+        <InboundPanel
+          onOpenReceiving={(batchId) => {
+            setReceivingBatchId(batchId)
+            setActiveStage('receiving')
+          }}
+        />
+      )
     }
 
-    if (activeStage === 'working') return <WorkingPanel embedded />
-    if (activeStage === 'review') return <ReviewPanel embedded />
+    if (activeStage === 'receiving') {
+      return <ReceivingPanel selectedBatchId={receivingBatchId} onChanged={fetchProcessingItems} />
+    }
+
+    if (activeStage === 'working') return <WorkingPanel embedded onChanged={fetchProcessingItems} />
+    if (activeStage === 'review') return <ReviewPanel embedded onChanged={fetchProcessingItems} />
     return <FinalisedPanel embedded />
   }
 

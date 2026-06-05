@@ -9,17 +9,31 @@ import { supabase } from '@/lib/supabase'
 type WorkingItem = {
   id: string
   sku: string
+  status?: string | null
   brand: string | null
   reporting_category: string | null
   basic_title: string | null
   ai_title: string | null
+  sent_to_review_at?: string | null
+  current_location?: string | null
+  current_bin?: string | null
+  inbound_batch_id?: string | null
+  inbound_batch_code?: string | null
+  rfid_tid?: string | null
+}
+
+type BatchStats = {
+  total: number
+  sentToReview: number
+  quarantine: number
 }
 
 type WorkingPanelProps = {
   embedded?: boolean
+  onChanged?: () => void
 }
 
-export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
+export default function WorkingPanel({ embedded = false, onChanged }: WorkingPanelProps) {
   const router = useRouter()
   const { staff } = useStaff()
 
@@ -29,6 +43,8 @@ export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
   const [sku, setSku] = useState('')
   const [searched, setSearched] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [openBatches, setOpenBatches] = useState<Record<string, boolean>>({})
+  const [batchStatsById, setBatchStatsById] = useState<Record<string, BatchStats>>({})
 
   useEffect(() => {
     fetchWorkingItems()
@@ -46,9 +62,57 @@ export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
       return
     }
 
-    const workingItems = data || []
+    const workingItems = (data || []) as WorkingItem[]
     setItems(workingItems)
     fetchThumbnails(workingItems)
+    fetchBatchStats(workingItems)
+  }
+
+  async function fetchBatchStats(workingItems: WorkingItem[]) {
+    const batchIds = Array.from(
+      new Set(
+        workingItems
+          .map((item) => item.inbound_batch_id)
+          .filter((batchId): batchId is string => Boolean(batchId))
+      )
+    )
+
+    if (batchIds.length === 0) {
+      setBatchStatsById({})
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('items')
+      .select('id,inbound_batch_id,status,sent_to_review_at,current_location,current_bin')
+      .in('inbound_batch_id', batchIds)
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    const stats = (data || []).reduce<Record<string, BatchStats>>((acc, item) => {
+      const batchId = item.inbound_batch_id as string | null
+      if (!batchId) return acc
+
+      if (!acc[batchId]) acc[batchId] = { total: 0, sentToReview: 0, quarantine: 0 }
+
+      const status = String(item.status || '').toLowerCase()
+      const quarantineText = `${item.current_location || ''} ${item.current_bin || ''}`.toLowerCase()
+
+      acc[batchId].total += 1
+      if (item.sent_to_review_at || status === 'review' || status === 'finalised') {
+        acc[batchId].sentToReview += 1
+      }
+      if (quarantineText.includes('qtine') || quarantineText.includes('quarantine')) {
+        acc[batchId].quarantine += 1
+      }
+
+      return acc
+    }, {})
+
+    setBatchStatsById(stats)
   }
 
   async function fetchThumbnails(workingItems: WorkingItem[]) {
@@ -157,6 +221,13 @@ export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
       return
     }
 
+    await supabase.from('item_identifiers').delete().eq('item_id', item.id)
+    await supabase.from('item_stock_locations').delete().eq('item_id', item.id)
+    await supabase
+      .from('inbound_batch_rfids')
+      .update({ item_id: null, status: 'void' })
+      .eq('item_id', item.id)
+
     const { error } = await supabase
       .from('items')
       .delete()
@@ -170,9 +241,115 @@ export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
       return
     }
 
+    if (item.inbound_batch_id) {
+      const { count } = await supabase
+        .from('items')
+        .select('id', { count: 'exact', head: true })
+        .eq('inbound_batch_id', item.inbound_batch_id)
+        .eq('status', 'working')
+
+      if ((count || 0) === 0) {
+        await supabase
+          .from('inbound_batches')
+          .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+          .eq('id', item.inbound_batch_id)
+      }
+    }
+
     setMessage(`${item.sku} deleted`)
-    fetchWorkingItems()
+    await fetchWorkingItems()
+    onChanged?.()
   }
+
+  async function deleteWorkingBatch(group: { key: string; label: string; items: WorkingItem[] }) {
+    if (!staff) {
+      setMessage('No active staff selected. Go to staff PIN screen first.')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Delete working batch ${group.label}?\n\nThis removes ${group.items.length} working item(s) and any linked image rows. This cannot be undone.`
+    )
+
+    if (!confirmed) return
+
+    const itemIds = group.items.map((item) => item.id)
+    const batchId = group.items.find((item) => item.inbound_batch_id)?.inbound_batch_id || null
+
+    setLoading(true)
+    setMessage(`Deleting ${group.label}...`)
+
+    const { error: imageError } = await supabase
+      .from('item_images')
+      .delete()
+      .in('item_id', itemIds)
+
+    if (imageError) {
+      setLoading(false)
+      setMessage(imageError.message)
+      return
+    }
+
+    await supabase.from('item_identifiers').delete().in('item_id', itemIds)
+    await supabase.from('item_stock_locations').delete().in('item_id', itemIds)
+    await supabase
+      .from('inbound_batch_rfids')
+      .update({ item_id: null, status: 'void' })
+      .in('item_id', itemIds)
+
+    const { error } = await supabase
+      .from('items')
+      .delete()
+      .in('id', itemIds)
+      .eq('status', 'working')
+
+    setLoading(false)
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    if (batchId) {
+      await supabase
+        .from('inbound_batches')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', batchId)
+    }
+
+    setMessage(`${group.label} deleted`)
+    await fetchWorkingItems()
+    onChanged?.()
+  }
+
+  function batchKey(item: WorkingItem) {
+    return item.inbound_batch_id || item.inbound_batch_code || `single-${item.id}`
+  }
+
+  function batchLabel(item: WorkingItem) {
+    return item.inbound_batch_code || 'Unbatched working items'
+  }
+
+  const groupedItems = items.reduce<Array<{ key: string; label: string; items: WorkingItem[] }>>(
+    (groups, item) => {
+      const key = batchKey(item)
+      const existing = groups.find((group) => group.key === key)
+
+      if (existing) {
+        existing.items.push(item)
+        return groups
+      }
+
+      groups.push({
+        key,
+        label: batchLabel(item),
+        items: [item],
+      })
+
+      return groups
+    },
+    []
+  )
 
   return (
     <div className={embedded ? 'space-y-4' : ''}>
@@ -200,17 +377,16 @@ export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
       <section className="mb-5 max-w-xl rounded-xl border border-zinc-800 bg-zinc-900 p-5">
         <label className="block">
           <span className="mb-2 block text-sm font-bold text-zinc-300">Scan or Enter SKU</span>
-
           <input
             autoFocus={!embedded}
             value={sku}
-            onChange={(e) => {
-              setSku(e.target.value)
+            onChange={(event) => {
+              setSku(event.target.value)
               setSearched(false)
               setMessage('')
             }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') searchSku()
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') searchSku()
             }}
             placeholder="Scan or enter SKU"
             className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-4 text-xl text-white outline-none focus:border-white"
@@ -242,7 +418,6 @@ export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
           <div className="mt-5 rounded-lg border border-zinc-700 bg-zinc-950 p-4">
             <p className="text-sm text-zinc-300">No item found for:</p>
             <p className="mt-1 text-xl font-bold">{sku.trim()}</p>
-
             <button
               onClick={createItem}
               disabled={loading || !staff}
@@ -259,56 +434,108 @@ export default function WorkingPanel({ embedded = false }: WorkingPanelProps) {
           No items in working queue.
         </div>
       ) : (
-        <div className="space-y-3">
-          {items.map((item) => {
-            const thumbnailUrl = imagesByItem[item.id]
+        <div className="space-y-4">
+          {groupedItems.map((group) => {
+            const open = openBatches[group.key] ?? true
+            const firstItem = group.items[0]
+            const batchDefaults = [firstItem.brand, firstItem.reporting_category].filter(Boolean).join(' · ')
+            const batchStats = firstItem.inbound_batch_id ? batchStatsById[firstItem.inbound_batch_id] : null
 
             return (
-              <section key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
-                <div className="grid gap-4 md:grid-cols-[72px_1fr_180px] md:items-center">
-                  <div className="h-16 w-16 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950">
-                    {thumbnailUrl ? (
-                      <img
-                        src={thumbnailUrl}
-                        alt="Item thumbnail"
-                        className="h-full w-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[10px] text-zinc-500">
-                        No image
-                      </div>
+              <section key={group.key} className="rounded-xl border border-zinc-800 bg-zinc-950">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-xl bg-zinc-900 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => setOpenBatches((current) => ({ ...current, [group.key]: !open }))}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <span className="block text-sm font-black text-white">{group.label}</span>
+                    <span className="mt-1 block text-xs font-bold text-zinc-400">
+                      {group.items.length} item(s){batchDefaults ? ` · ${batchDefaults}` : ''}
+                    </span>
+                    {batchStats && (
+                      <span className="mt-1 block text-xs font-bold text-zinc-400">
+                        Batch progress: {batchStats.sentToReview} sent to review · {batchStats.quarantine} quarantine
+                        {batchStats.total !== group.items.length ? ` · ${batchStats.total} total` : ''}
+                      </span>
                     )}
-                  </div>
+                  </button>
 
-                  <div>
-                    <h2 className="text-base font-bold">{item.sku}</h2>
-                    <p className="text-sm text-zinc-400">
-                      {item.brand || 'No brand'} · {item.reporting_category || 'No category'}
-                    </p>
-                    <p className="mt-1 line-clamp-1 text-sm text-zinc-500">
-                      {item.basic_title || item.ai_title || '-'}
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Link
-                      href={`/items/${item.id}`}
-                      className="rounded-lg bg-zinc-800 px-3 py-2 text-center text-xs font-bold text-white hover:bg-zinc-700"
-                    >
-                      Open
-                    </Link>
-
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => deleteWorkingItem(item)}
-                      disabled={loading || !staff}
-                      className="rounded-lg bg-red-900 px-3 py-2 text-center text-xs font-bold text-red-100 hover:bg-red-800 disabled:opacity-40"
+                      onClick={() => setOpenBatches((current) => ({ ...current, [group.key]: !open }))}
+                      className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white hover:bg-zinc-700"
                     >
-                      Delete
+                      {open ? 'Hide' : 'Open'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteWorkingBatch(group)}
+                      disabled={loading || !staff}
+                      className="rounded-lg bg-red-900 px-3 py-2 text-xs font-black text-red-100 hover:bg-red-800 disabled:opacity-40"
+                    >
+                      Delete Batch
                     </button>
                   </div>
                 </div>
+
+                {open && (
+                  <div className="space-y-3 p-3">
+                    {group.items.map((item) => {
+                      const thumbnailUrl = imagesByItem[item.id]
+
+                      return (
+                        <section key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
+                          <div className="grid gap-4 md:grid-cols-[72px_1fr_180px] md:items-center">
+                            <div className="h-16 w-16 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950">
+                              {thumbnailUrl ? (
+                                <img
+                                  src={thumbnailUrl}
+                                  alt="Item thumbnail"
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                />
+                              ) : (
+                                <div className="flex h-full items-center justify-center text-[10px] text-zinc-500">
+                                  No image
+                                </div>
+                              )}
+                            </div>
+
+                            <div>
+                              <h2 className="text-base font-bold">{item.sku}</h2>
+                              <p className="text-sm text-zinc-400">
+                                {item.brand || 'No brand'} · {item.reporting_category || 'No category'}
+                              </p>
+                              <p className="mt-1 line-clamp-1 text-sm text-zinc-500">
+                                {item.basic_title || item.ai_title || item.rfid_tid || '-'}
+                              </p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <Link
+                                href={`/items/${item.id}`}
+                                className="rounded-lg bg-zinc-800 px-3 py-2 text-center text-xs font-bold text-white hover:bg-zinc-700"
+                              >
+                                Open
+                              </Link>
+
+                              <button
+                                type="button"
+                                onClick={() => deleteWorkingItem(item)}
+                                disabled={loading || !staff}
+                                className="rounded-lg bg-red-900 px-3 py-2 text-center text-xs font-bold text-red-100 hover:bg-red-800 disabled:opacity-40"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        </section>
+                      )
+                    })}
+                  </div>
+                )}
               </section>
             )
           })}

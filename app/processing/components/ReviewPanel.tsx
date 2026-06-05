@@ -6,9 +6,10 @@ import { supabase } from '@/lib/supabase'
 
 type ReviewPanelProps = {
   embedded?: boolean
+  onChanged?: () => void
 }
 
-export default function ReviewPanel({ embedded = false }: ReviewPanelProps) {
+export default function ReviewPanel({ embedded = false, onChanged }: ReviewPanelProps) {
   const [items, setItems] = useState<any[]>([])
   const [imagesByItem, setImagesByItem] = useState<Record<string, string>>({})
   const [ebayReadinessBySku, setEbayReadinessBySku] = useState<Record<string, any>>({})
@@ -131,7 +132,8 @@ export default function ReviewPanel({ embedded = false }: ReviewPanelProps) {
     }
 
     setMessage(`SKU ${item.sku} finalised`)
-    fetchReviewItems()
+    await fetchReviewItems()
+    onChanged?.()
   }
 
   return (

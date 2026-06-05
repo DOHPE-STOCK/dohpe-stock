@@ -220,6 +220,10 @@ function cleanReusableSku(value: string) {
   return value.trim().toUpperCase()
 }
 
+function normaliseIdentifier(value: string) {
+  return value.trim().replace(/\s+/g, '').toUpperCase()
+}
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -674,6 +678,67 @@ export default function SkuSearchPage() {
     }
 
     let itemData = data
+
+    if (!itemData) {
+      const { data: identifierData, error: identifierError } = await supabase
+        .from('item_identifiers')
+        .select('item_id')
+        .eq('identifier_value_normalized', normaliseIdentifier(rawSku))
+        .eq('is_active', true)
+        .maybeSingle()
+
+      if (identifierError) {
+        setMessage(identifierError.message)
+        return
+      }
+
+      if (identifierData?.item_id) {
+        const { data: identifierItem, error: identifierItemError } = await supabase
+          .from('items')
+          .select(`
+            id,
+            sku,
+            barcode_number,
+            brand,
+            reporting_category,
+            tagged_size,
+            waist_in,
+            condition,
+            selling_price,
+            stock_level,
+            sku_type,
+            ai_title,
+            basic_title,
+            location_status,
+            current_location,
+            current_bin,
+            loan_status,
+            loaned_by,
+            ebay_status,
+            linnworks_status,
+            shopify_status,
+            square_status,
+            loyverse_status,
+            vinted_status,
+            depop_status,
+            tiktok_shop_status,
+            item_images (
+              processed_url,
+              original_url,
+              image_order
+            )
+          `)
+          .eq('id', identifierData.item_id)
+          .maybeSingle()
+
+        if (identifierItemError) {
+          setMessage(identifierItemError.message)
+          return
+        }
+
+        itemData = identifierItem
+      }
+    }
 
     if (!itemData) {
       const confirmed = window.confirm(
