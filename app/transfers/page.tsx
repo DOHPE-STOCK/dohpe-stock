@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 
@@ -662,6 +663,8 @@ export default function TransfersPage() {
                 </p>
               )}
             </div>
+
+            <AppNav current="transfers" />
           </div>
 
           <div className="flex flex-wrap items-center gap-3">

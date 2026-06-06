@@ -34,7 +34,7 @@ type NavItem = {
 }
 
 const navItems: NavItem[] = [
-  { key: 'sku', label: 'SKU Search', href: '/' },
+  { key: 'sku', label: 'Search/Create', href: '/' },
   { key: 'inventory', label: 'Inventory', href: '/inventory', permission: 'inventory' },
   { key: 'processing', label: 'Processing', href: '/processing', permission: ['working', 'review', 'finalised'] },
   { key: 'transfers', label: 'Transfers', href: '/transfers', permission: 'scanner' },

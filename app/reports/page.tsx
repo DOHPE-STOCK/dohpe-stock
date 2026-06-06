@@ -29,6 +29,7 @@ type PayrollSettings = {
 }
 
 type PayrollStaffSettings = {
+  include_in_payroll?: boolean
   holiday_method?: HolidayMethod
   holiday_weeks?: number
   accrual_percent?: number
@@ -406,6 +407,7 @@ const defaultPayrollSettings: PayrollSettings = {
 }
 
 const defaultPayrollStaffSettings: Required<PayrollStaffSettings> = {
+  include_in_payroll: true,
   holiday_method: 'fixed_weeks',
   holiday_weeks: 5.6,
   accrual_percent: 12.07,
@@ -418,6 +420,7 @@ function normalisePayrollStaffSettings(settings?: PayrollStaffSettings | null): 
   return {
     ...defaultPayrollStaffSettings,
     ...(settings || {}),
+    include_in_payroll: settings?.include_in_payroll !== false,
     holiday_method:
       settings?.holiday_method === 'accrual_percent' ? 'accrual_percent' : 'fixed_weeks',
     holiday_weeks: Number(settings?.holiday_weeks ?? defaultPayrollStaffSettings.holiday_weeks),
@@ -706,12 +709,19 @@ function calculateFinalisedPayrollTotals(
 
 function accrualHoursForStaff(workHours: number, staff?: StaffUser) {
   const staffSettings = normalisePayrollStaffSettings(staff?.payroll_settings)
+  if (!staffSettings.include_in_payroll) return 0
+
   const accrualRate =
     staffSettings.holiday_method === 'accrual_percent'
       ? staffSettings.accrual_percent / 100
       : fixedWeeksAccrualRate(staffSettings.holiday_weeks)
 
   return workHours * accrualRate
+}
+
+function includeStaffInPayroll(staff?: StaffUser) {
+  if (!staff) return true
+  return normalisePayrollStaffSettings(staff.payroll_settings).include_in_payroll !== false
 }
 
 export default function ReportsPage() {
@@ -1349,7 +1359,7 @@ export default function ReportsPage() {
     )
     const carry: Record<string, number> = {}
 
-    for (const staff of staffUsers.filter((user) => user.is_active !== false)) {
+    for (const staff of staffUsers.filter((user) => user.is_active !== false && includeStaffInPayroll(user))) {
       const totals = previousTotals[staff.id]
       const previousOverrideKey = `${dateKey(previousStart)}:${staff.id}`
       const previousCarried = rolloverOverridesByYearStaff[previousOverrideKey]?.hours || 0
@@ -1360,13 +1370,83 @@ export default function ReportsPage() {
 
     for (const [staffId, totals] of Object.entries(previousTotals)) {
       if (carry[staffId] !== undefined) continue
+      if (!includeStaffInPayroll(staffById[staffId])) continue
       const previousOverrideKey = `${dateKey(previousStart)}:${staffId}`
       const previousCarried = rolloverOverridesByYearStaff[previousOverrideKey]?.hours || 0
       carry[staffId] = Math.max(0, previousCarried - totals.holidayHours)
     }
 
     return carry
-  }, [holidayYearStartKey, rotaFinalisations, rolloverOverridesByYearStaff, selectedPayrollCompany, staffNameById, staffUsers])
+  }, [holidayYearStartKey, rotaFinalisations, rolloverOverridesByYearStaff, selectedPayrollCompany, staffById, staffNameById, staffUsers])
+
+  const previewPayrollTotals = useMemo(() => {
+    const rows: PayrollTotalsByStaff = {}
+    if (!rotaPreviewPayload) return rows
+
+    const previewEnd = addDays(startOfToday(), 1)
+    const effectiveEnd = payrollRange.end < previewEnd ? payrollRange.end : previewEnd
+    const previewCompanies =
+      selectedPayrollCompany === 'ALL' ? ['dohpe', 'dlretail'] : [selectedPayrollCompany]
+    const finalisedWeekKeys = new Set(
+      rotaFinalisations.map((row) => `${row.company_key}:${row.week_id}`)
+    )
+
+    const staffMatches = (staffId: string) =>
+      (selectedPayrollStaffId === 'ALL' || staffId === selectedPayrollStaffId) &&
+      includeStaffInPayroll(staffById[staffId])
+
+    for (let date = new Date(payrollRange.start); date < effectiveEnd; date = addDays(date, 1)) {
+      const week = startOfWeek(date)
+      const weekId = dateKey(week)
+      const dayId = dateKey(date)
+      const dayIndex = Math.round((date.getTime() - week.getTime()) / 86400000)
+
+      for (const company of previewCompanies) {
+        if (finalisedWeekKeys.has(`${company}:${weekId}`)) continue
+        if (rotaPreviewPayload.closedDays?.[company]?.[dayId]) continue
+
+        const edited = rotaPreviewPayload.editedWeeks?.[company]?.[weekId]
+        const savedDay = rotaPreviewPayload.rota?.[company]?.[weekId]?.[dayId] || []
+        const defaultDay = rotaPreviewPayload.defaultRota?.[company]?.[String(dayIndex)] || []
+        const shifts = edited ? savedDay : defaultDay.length > 0 ? defaultDay : savedDay
+
+        for (const shift of shifts) {
+          if (!shift.staffId || !staffMatches(shift.staffId)) continue
+          const staff = staffById[shift.staffId]
+          if (!includeStaffInPayroll(staff)) continue
+
+          const staffName = staff?.name || staffNameById[shift.staffId] || 'Unknown'
+          if (!rows[shift.staffId]) {
+            rows[shift.staffId] = {
+              staffId: shift.staffId,
+              staffName,
+              workHours: 0,
+              holidayHours: 0,
+              breakHours: 0,
+            }
+          }
+
+          const { paidHours, breakHours } = rotaShiftHours(shift, staff)
+          if (shift.type === 'holiday') {
+            rows[shift.staffId].holidayHours += paidHours
+          } else {
+            rows[shift.staffId].workHours += paidHours
+            rows[shift.staffId].breakHours += breakHours
+          }
+        }
+      }
+    }
+
+    return rows
+  }, [
+    payrollRange,
+    rotaFinalisations,
+    rotaPreviewPayload,
+    selectedPayrollCompany,
+    selectedPayrollStaffId,
+    staffById,
+    staffNameById,
+  ])
 
   const payrollRows = useMemo(() => {
     const rows: Record<string, PayrollReportRow> = {}
@@ -1377,16 +1457,18 @@ export default function ReportsPage() {
       staffNameById
     )
 
-    for (const staff of staffUsers.filter((user) => user.is_active !== false)) {
+    for (const staff of staffUsers.filter((user) => user.is_active !== false && includeStaffInPayroll(user))) {
       const overrideKey = `${holidayYearStartKey}:${staff.id}`
       const override = rolloverOverridesByYearStaff[overrideKey]
       const carriedOverHours = override?.hours ?? automaticCarryByStaff[staff.id] ?? 0
+      const finalisedTotals = currentTotals[staff.id]
+      const previewTotals = previewPayrollTotals[staff.id]
       rows[staff.id] = {
         staffId: staff.id,
         staffName: staff.name,
-        workHours: currentTotals[staff.id]?.workHours || 0,
-        holidayHours: currentTotals[staff.id]?.holidayHours || 0,
-        breakHours: currentTotals[staff.id]?.breakHours || 0,
+        workHours: (finalisedTotals?.workHours || 0) + (previewTotals?.workHours || 0),
+        holidayHours: (finalisedTotals?.holidayHours || 0) + (previewTotals?.holidayHours || 0),
+        breakHours: (finalisedTotals?.breakHours || 0) + (previewTotals?.breakHours || 0),
         paidHours: 0,
         holidayAccruedHours: 0,
         carriedOverHours,
@@ -1398,6 +1480,29 @@ export default function ReportsPage() {
 
     for (const [staffId, totals] of Object.entries(currentTotals)) {
       if (rows[staffId]) continue
+      if (!includeStaffInPayroll(staffById[staffId])) continue
+      const overrideKey = `${holidayYearStartKey}:${staffId}`
+      const override = rolloverOverridesByYearStaff[overrideKey]
+      const carriedOverHours = override?.hours ?? automaticCarryByStaff[staffId] ?? 0
+      const previewTotals = previewPayrollTotals[staffId]
+      rows[staffId] = {
+        staffId,
+        staffName: totals.staffName,
+        workHours: totals.workHours + (previewTotals?.workHours || 0),
+        holidayHours: totals.holidayHours + (previewTotals?.holidayHours || 0),
+        breakHours: totals.breakHours + (previewTotals?.breakHours || 0),
+        paidHours: 0,
+        holidayAccruedHours: 0,
+        carriedOverHours,
+        autoCarriedOverHours: automaticCarryByStaff[staffId] || 0,
+        carriedOverOverridden: Boolean(override),
+        holidayBalanceHours: carriedOverHours,
+      }
+    }
+
+    for (const [staffId, totals] of Object.entries(previewPayrollTotals)) {
+      if (rows[staffId]) continue
+      if (!includeStaffInPayroll(staffById[staffId])) continue
       const overrideKey = `${holidayYearStartKey}:${staffId}`
       const override = rolloverOverridesByYearStaff[overrideKey]
       const carriedOverHours = override?.hours ?? automaticCarryByStaff[staffId] ?? 0
@@ -1432,10 +1537,12 @@ export default function ReportsPage() {
     automaticCarryByStaff,
     holidayYearStartKey,
     payrollRange,
+    previewPayrollTotals,
     rotaFinalisations,
     rolloverOverridesByYearStaff,
     selectedPayrollCompany,
     selectedPayrollStaffId,
+    staffById,
     staffNameById,
     staffUsers,
   ])
@@ -1467,7 +1574,8 @@ export default function ReportsPage() {
       segments.map((segment) => [segment.key, segment])
     )
     const staffMatches = (staffId: string) =>
-      selectedPayrollStaffId === 'ALL' || staffId === selectedPayrollStaffId
+      (selectedPayrollStaffId === 'ALL' || staffId === selectedPayrollStaffId) &&
+      includeStaffInPayroll(staffById[staffId])
     const addHours = (
       segment: PayrollChartSegment,
       staffId: string,

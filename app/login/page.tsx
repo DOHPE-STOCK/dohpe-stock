@@ -50,7 +50,7 @@ function LoginPageContent() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-neutral-950 p-4 text-white">
       <div className="w-full max-w-sm rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
-        <h1 className="mb-4 text-2xl font-bold">Dohpe Stock Login</h1>
+        <h1 className="mb-4 text-2xl font-bold">Loopbase Login</h1>
 
         <form
           onSubmit={(e) => {

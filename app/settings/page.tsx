@@ -37,6 +37,7 @@ type PayrollSettings = {
 }
 
 type PayrollStaffSettings = {
+  include_in_payroll?: boolean
   holiday_method?: HolidayMethod
   holiday_weeks?: number
   accrual_percent?: number
@@ -67,6 +68,7 @@ type FixedCost = {
 
 type OpenSection =
   | 'integrations'
+  | 'processing'
   | 'locations'
   | 'users'
   | 'payroll'
@@ -112,6 +114,7 @@ const defaultPayrollSettings: PayrollSettings = {
 }
 
 const defaultPayrollStaffSettings: Required<PayrollStaffSettings> = {
+  include_in_payroll: true,
   holiday_method: 'fixed_weeks',
   holiday_weeks: 5.6,
   accrual_percent: 12.07,
@@ -141,6 +144,7 @@ function normalisePayrollStaffSettings(settings?: PayrollStaffSettings | null): 
   return {
     ...defaultPayrollStaffSettings,
     ...(settings || {}),
+    include_in_payroll: settings?.include_in_payroll !== false,
     holiday_method:
       settings?.holiday_method === 'accrual_percent' ? 'accrual_percent' : 'fixed_weeks',
     holiday_weeks: Number(settings?.holiday_weeks ?? defaultPayrollStaffSettings.holiday_weeks),
@@ -709,6 +713,7 @@ export default function SettingsPage() {
         image_export_quality: Number(settings.image_export_quality),
         ai_copy_rules: settings.ai_copy_rules,
         ui_theme: settings.ui_theme || 'dark',
+        enable_rfid_receiving: Boolean(settings.enable_rfid_receiving),
         updated_at: new Date().toISOString(),
       })
       .eq('id', 'default')
@@ -1126,6 +1131,11 @@ export default function SettingsPage() {
       description: 'Linnworks, eBay, Shopify, Vinted and other channels.',
     },
     {
+      section: 'processing',
+      title: 'Processing',
+      description: 'Inbound, receiving and working workflow options.',
+    },
+    {
       section: 'locations',
       title: 'Locations',
       description: 'Display names and bin modes.',
@@ -1238,6 +1248,53 @@ export default function SettingsPage() {
 
           {openSection === 'integrations' && (
             <IntegrationsPanel />
+          )}
+
+          <SectionHeader
+            section="processing"
+            title="Processing"
+            description="Choose whether receiving uses the RFID table workflow or the normal barcode/batch workflow."
+            colour="emerald"
+          />
+
+          {openSection === 'processing' && (
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+                    Receiving Workflow
+                  </h2>
+
+                  <p className="mt-1 text-sm text-zinc-500">
+                    This only controls Processing &gt; Receiving. RFID tags already linked to items still scan in Search/Create and Checkout.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setSettings({
+                    ...settings,
+                    enable_rfid_receiving: !Boolean(settings.enable_rfid_receiving),
+                  })
+                }
+                className={`w-full rounded-xl border p-4 text-left transition ${
+                  settings.enable_rfid_receiving
+                    ? 'border-emerald-600 bg-emerald-950 text-white'
+                    : 'border-zinc-800 bg-zinc-950 text-zinc-300'
+                }`}
+              >
+                <span className="block text-sm font-black">
+                  {settings.enable_rfid_receiving ? 'RFID receiving enabled' : 'RFID receiving disabled'}
+                </span>
+                <span className="mt-1 block text-sm font-bold text-zinc-400">
+                  {settings.enable_rfid_receiving
+                    ? 'Receiving will show the RFID table bridge, live TID count and TID-linked batch creation.'
+                    : 'Receiving will create normal working batches without requiring the RFID table bridge.'}
+                </span>
+              </button>
+            </section>
           )}
 
           <SectionHeader
@@ -1846,11 +1903,35 @@ export default function SettingsPage() {
                     return (
                       <div
                         key={user.id}
-                        className="grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4 xl:grid-cols-[1.2fr_150px_140px_220px]"
+                        className="grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4 xl:grid-cols-[1.2fr_170px_150px_140px_220px]"
                       >
                         <div>
                           <p className="text-sm font-black text-white">{user.name}</p>
                           <p className="mt-1 text-xs font-bold text-zinc-500">{user.role || 'staff'}</p>
+                        </div>
+
+                        <div>
+                          <span className="mb-1 block text-xs font-bold uppercase text-zinc-500">
+                            Reports
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateStaffPayrollSettings(user.id, {
+                                include_in_payroll: !staffPayroll.include_in_payroll,
+                              })
+                            }
+                            className={`h-10 w-full rounded-lg px-3 text-xs font-black ${
+                              staffPayroll.include_in_payroll
+                                ? 'bg-emerald-700 text-white'
+                                : 'bg-zinc-800 text-zinc-400'
+                            }`}
+                          >
+                            {staffPayroll.include_in_payroll ? 'Included' : 'Excluded'}
+                          </button>
+                          <p className="mt-1 text-[10px] font-bold text-zinc-500">
+                            Payroll & holiday figures
+                          </p>
                         </div>
 
                         <label>

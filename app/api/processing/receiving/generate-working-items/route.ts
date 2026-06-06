@@ -121,6 +121,7 @@ export async function POST(request: Request) {
     const batchId = text(body.batch_id || body.batchId)
     const staffId = text(body.staff_id || body.staffId)
     const actualQuantity = Number(body.actual_quantity ?? body.actualQuantity ?? 0)
+    const useRfid = Boolean(body.use_rfid ?? body.useRfid ?? true)
     const tids = Array.from(
       new Set(
         (Array.isArray(body.tids) ? body.tids : [])
@@ -138,7 +139,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, message: 'Actual quantity must be greater than 0.' }, { status: 400 })
     }
 
-    if (tids.length !== actualQuantity) {
+    if (useRfid && tids.length !== actualQuantity) {
       return NextResponse.json(
         { ok: false, message: `RFID TID count (${tids.length}) must match actual quantity (${actualQuantity}).` },
         { status: 400 }
@@ -164,25 +165,27 @@ export async function POST(request: Request) {
       )
     }
 
-    const { data: existingTids, error: tidCheckError } = await supabase
-      .from('item_identifiers')
-      .select('identifier_value')
-      .eq('identifier_type', 'rfid')
-      .in('identifier_value_normalized', tids)
-      .eq('is_active', true)
+    if (useRfid) {
+      const { data: existingTids, error: tidCheckError } = await supabase
+        .from('item_identifiers')
+        .select('identifier_value')
+        .eq('identifier_type', 'rfid')
+        .in('identifier_value_normalized', tids)
+        .eq('is_active', true)
 
-    if (tidCheckError) throw new Error(tidCheckError.message)
+      if (tidCheckError) throw new Error(tidCheckError.message)
 
-    if ((existingTids || []).length > 0) {
-      return NextResponse.json(
-        {
-          ok: false,
-          message: `RFID TID already assigned: ${(existingTids || [])
-            .map((row: any) => row.identifier_value)
-            .join(', ')}`,
-        },
-        { status: 409 }
-      )
+      if ((existingTids || []).length > 0) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message: `RFID TID already assigned: ${(existingTids || [])
+              .map((row: any) => row.identifier_value)
+              .join(', ')}`,
+          },
+          { status: 409 }
+        )
+      }
     }
 
     const skus = await generateSkus(supabase, actualQuantity)
@@ -210,7 +213,7 @@ export async function POST(request: Request) {
       cost_price: batch.cost_price === null || batch.cost_price === undefined ? null : Number(batch.cost_price),
       inbound_batch_id: batch.id,
       inbound_batch_code: batch.batch_code,
-      rfid_tid: tids[index],
+      rfid_tid: useRfid ? tids[index] : null,
       last_saved_by: staffId || null,
       updated_at: now,
     }))
@@ -239,8 +242,8 @@ export async function POST(request: Request) {
 
     if (stockError) throw new Error(stockError.message)
 
-    const identifierRows = (createdItems || []).flatMap((item: any) => [
-      {
+    const identifierRows = (createdItems || []).flatMap((item: any) => {
+      const rows = [{
         item_id: item.id,
         sku: item.sku,
         identifier_type: 'sku',
@@ -248,8 +251,10 @@ export async function POST(request: Request) {
         identifier_value_normalized: normalizeIdentifier(item.sku),
         is_active: true,
         assigned_by: staffId || null,
-      },
-      {
+      }]
+
+      if (useRfid && item.rfid_tid) {
+        rows.push({
         item_id: item.id,
         sku: item.sku,
         identifier_type: 'rfid',
@@ -257,8 +262,11 @@ export async function POST(request: Request) {
         identifier_value_normalized: normalizeIdentifier(item.rfid_tid),
         is_active: true,
         assigned_by: staffId || null,
-      },
-    ])
+        })
+      }
+
+      return rows
+    })
 
     const { error: identifierError } = await supabase
       .from('item_identifiers')
@@ -266,21 +274,23 @@ export async function POST(request: Request) {
 
     if (identifierError) throw new Error(identifierError.message)
 
-    const rfidRows = (createdItems || []).map((item: any) => ({
-      batch_id: batch.id,
-      tid: item.rfid_tid,
-      tid_normalized: normalizeIdentifier(item.rfid_tid),
-      item_id: item.id,
-      status: 'assigned',
-      assigned_at: now,
-      updated_at: now,
-    }))
+    if (useRfid) {
+      const rfidRows = (createdItems || []).map((item: any) => ({
+        batch_id: batch.id,
+        tid: item.rfid_tid,
+        tid_normalized: normalizeIdentifier(item.rfid_tid),
+        item_id: item.id,
+        status: 'assigned',
+        assigned_at: now,
+        updated_at: now,
+      }))
 
-    const { error: rfidError } = await supabase
-      .from('inbound_batch_rfids')
-      .upsert(rfidRows, { onConflict: 'tid_normalized' })
+      const { error: rfidError } = await supabase
+        .from('inbound_batch_rfids')
+        .upsert(rfidRows, { onConflict: 'tid_normalized' })
 
-    if (rfidError) throw new Error(rfidError.message)
+      if (rfidError) throw new Error(rfidError.message)
+    }
 
     const { error: batchUpdateError } = await supabase
       .from('inbound_batches')

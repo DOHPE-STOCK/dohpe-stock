@@ -1666,10 +1666,10 @@ export default function SkuSearchPage() {
       <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
           <div>
-            <h1 className="text-2xl font-black tracking-normal">SKU Search</h1>
+            <h1 className="text-2xl font-black tracking-normal">Search/Create</h1>
 
             <p className="text-sm text-neutral-300">
-              Scan SKUs, preview labels, move location, and open items for editing.
+              Scan SKUs, barcodes, RFID tags, transfer labels, or create items.
             </p>
 
             {staff ? (
