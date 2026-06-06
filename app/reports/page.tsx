@@ -30,6 +30,8 @@ type PayrollSettings = {
 
 type PayrollStaffSettings = {
   include_in_payroll?: boolean
+  hourly_rate?: number
+  pay_rate_history?: Array<{ effective_date: string; hourly_rate: number }>
   holiday_method?: HolidayMethod
   holiday_weeks?: number
   accrual_percent?: number
@@ -97,6 +99,8 @@ type PayrollReportRow = {
   holidayHours: number
   breakHours: number
   paidHours: number
+  hourlyRate: number
+  wageSpend: number
   holidayAccruedHours: number
   carriedOverHours: number
   autoCarriedOverHours: number
@@ -408,6 +412,8 @@ const defaultPayrollSettings: PayrollSettings = {
 
 const defaultPayrollStaffSettings: Required<PayrollStaffSettings> = {
   include_in_payroll: true,
+  hourly_rate: 0,
+  pay_rate_history: [],
   holiday_method: 'fixed_weeks',
   holiday_weeks: 5.6,
   accrual_percent: 12.07,
@@ -417,10 +423,22 @@ const defaultPayrollStaffSettings: Required<PayrollStaffSettings> = {
 }
 
 function normalisePayrollStaffSettings(settings?: PayrollStaffSettings | null): Required<PayrollStaffSettings> {
+  const payRateHistory = Array.isArray(settings?.pay_rate_history)
+    ? settings.pay_rate_history
+        .map((entry) => ({
+          effective_date: String(entry?.effective_date || '').slice(0, 10),
+          hourly_rate: Number(entry?.hourly_rate ?? 0),
+        }))
+        .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry.effective_date))
+        .sort((a, b) => a.effective_date.localeCompare(b.effective_date))
+    : []
+
   return {
     ...defaultPayrollStaffSettings,
     ...(settings || {}),
     include_in_payroll: settings?.include_in_payroll !== false,
+    hourly_rate: Number(settings?.hourly_rate ?? 0),
+    pay_rate_history: payRateHistory,
     holiday_method:
       settings?.holiday_method === 'accrual_percent' ? 'accrual_percent' : 'fixed_weeks',
     holiday_weeks: Number(settings?.holiday_weeks ?? defaultPayrollStaffSettings.holiday_weeks),
@@ -433,6 +451,20 @@ function normalisePayrollStaffSettings(settings?: PayrollStaffSettings | null): 
 
 function hours(value: number) {
   return `${(value || 0).toFixed(2)}h`
+}
+
+function hourlyRateForDate(staff: StaffUser | undefined, date: Date) {
+  const settings = normalisePayrollStaffSettings(staff?.payroll_settings)
+  const dateValue = dateKey(date)
+  let rate = settings.pay_rate_history.length > 0 ? settings.pay_rate_history[0].hourly_rate : settings.hourly_rate
+
+  for (const entry of settings.pay_rate_history) {
+    if (entry.effective_date <= dateValue) {
+      rate = entry.hourly_rate
+    }
+  }
+
+  return Number(rate || 0)
 }
 
 function parseDateInput(value: string) {
@@ -530,6 +562,7 @@ type PayrollTotalsByStaff = Record<
     workHours: number
     holidayHours: number
     breakHours: number
+    wageSpend: number
   }
 >
 
@@ -541,8 +574,9 @@ type PayrollChartSegment = {
   workHours: number
   holidayHours: number
   excludedHours: number
+  wageSpend: number
   staffNames: string[]
-  staffHours: Record<string, { staffName: string; workHours: number; holidayHours: number; excludedHours: number; preview: boolean; excluded: boolean }>
+  staffHours: Record<string, { staffName: string; workHours: number; holidayHours: number; excludedHours: number; wageSpend: number; preview: boolean; excluded: boolean }>
   hasPreviewHours: boolean
 }
 
@@ -563,6 +597,7 @@ function payrollChartSegments(
         workHours: 0,
         holidayHours: 0,
         excludedHours: 0,
+        wageSpend: 0,
         staffNames: [],
         staffHours: {},
         hasPreviewHours: false,
@@ -582,6 +617,7 @@ function payrollChartSegments(
       workHours: 0,
       holidayHours: 0,
       excludedHours: 0,
+      wageSpend: 0,
       staffNames: [],
       staffHours: {},
       hasPreviewHours: false,
@@ -629,7 +665,8 @@ function calculateFinalisedPayrollTotals(
   finalisations: RotaFinalisationRow[],
   range: { start: Date; end: Date },
   companyKey: string,
-  staffNameById: Record<string, string>
+  staffNameById: Record<string, string>,
+  staffById: Record<string, StaffUser>
 ): PayrollTotalsByStaff {
   const rows: PayrollTotalsByStaff = {}
   const relevantWeeks = finalisations.filter((row) => {
@@ -642,25 +679,7 @@ function calculateFinalisedPayrollTotals(
   for (const finalisedWeek of relevantWeeks) {
     const shifts = rowShifts(finalisedWeek)
 
-    if (finalisedWeek.totals?.staffTotals) {
-      const totals = rowStaffTotals(finalisedWeek)
-
-      for (const [staffId, total] of Object.entries<any>(totals)) {
-        if (!rows[staffId]) {
-          rows[staffId] = {
-            staffId,
-            staffName: staffNameById[staffId] || total?.name || 'Unknown staff',
-            workHours: 0,
-            holidayHours: 0,
-            breakHours: 0,
-          }
-        }
-
-        rows[staffId].workHours += num(total?.workHours)
-        rows[staffId].holidayHours += num(total?.holidayHours)
-        rows[staffId].breakHours += num(total?.breakHours)
-      }
-    } else if (shifts.length > 0) {
+    if (shifts.length > 0) {
       for (const shift of shifts) {
         if (shift.date) {
           const shiftDate = parseDateInput(shift.date)
@@ -674,11 +693,14 @@ function calculateFinalisedPayrollTotals(
             workHours: 0,
             holidayHours: 0,
             breakHours: 0,
+            wageSpend: 0,
           }
         }
 
         const shiftHours = num(shift.paidHours ?? shift.hours)
         const breakHours = num(shift.breakHours)
+        const shiftDate = shift.date ? parseDateInput(shift.date) : weekDate(finalisedWeek.week_id)
+        rows[shift.staffId].wageSpend += shiftHours * hourlyRateForDate(staffById[shift.staffId], shiftDate)
 
         if (shift.type === 'holiday') {
           rows[shift.staffId].holidayHours += shiftHours
@@ -686,6 +708,28 @@ function calculateFinalisedPayrollTotals(
           rows[shift.staffId].workHours += shiftHours
           rows[shift.staffId].breakHours += breakHours
         }
+      }
+    } else if (finalisedWeek.totals?.staffTotals) {
+      const totals = rowStaffTotals(finalisedWeek)
+
+      for (const [staffId, total] of Object.entries<any>(totals)) {
+        if (!rows[staffId]) {
+          rows[staffId] = {
+            staffId,
+            staffName: staffNameById[staffId] || total?.name || 'Unknown staff',
+            workHours: 0,
+            holidayHours: 0,
+            breakHours: 0,
+            wageSpend: 0,
+          }
+        }
+
+        const workHours = num(total?.workHours)
+        const holidayHours = num(total?.holidayHours)
+        rows[staffId].workHours += workHours
+        rows[staffId].holidayHours += holidayHours
+        rows[staffId].breakHours += num(total?.breakHours)
+        rows[staffId].wageSpend += (workHours + holidayHours) * hourlyRateForDate(staffById[staffId], weekDate(finalisedWeek.week_id))
       }
     } else {
       const totals = rowStaffTotals(finalisedWeek)
@@ -698,11 +742,15 @@ function calculateFinalisedPayrollTotals(
             workHours: 0,
             holidayHours: 0,
             breakHours: 0,
+            wageSpend: 0,
           }
         }
 
-        rows[staffId].workHours += num(total?.workHours)
-        rows[staffId].holidayHours += num(total?.holidayHours)
+        const workHours = num(total?.workHours)
+        const holidayHours = num(total?.holidayHours)
+        rows[staffId].workHours += workHours
+        rows[staffId].holidayHours += holidayHours
+        rows[staffId].wageSpend += (workHours + holidayHours) * hourlyRateForDate(staffById[staffId], weekDate(finalisedWeek.week_id))
       }
     }
   }
@@ -1358,7 +1406,8 @@ export default function ReportsPage() {
       rotaFinalisations,
       previousRange,
       selectedPayrollCompany,
-      staffNameById
+      staffNameById,
+      staffById
     )
     const carry: Record<string, number> = {}
 
@@ -1423,13 +1472,15 @@ export default function ReportsPage() {
             rows[shift.staffId] = {
               staffId: shift.staffId,
               staffName,
-              workHours: 0,
-              holidayHours: 0,
-              breakHours: 0,
-            }
+            workHours: 0,
+            holidayHours: 0,
+            breakHours: 0,
+            wageSpend: 0,
           }
+        }
 
           const { paidHours, breakHours } = rotaShiftHours(shift, staff)
+          rows[shift.staffId].wageSpend += paidHours * hourlyRateForDate(staff, date)
           if (shift.type === 'holiday') {
             rows[shift.staffId].holidayHours += paidHours
           } else {
@@ -1457,7 +1508,8 @@ export default function ReportsPage() {
       rotaFinalisations,
       payrollRange,
       selectedPayrollCompany,
-      staffNameById
+      staffNameById,
+      staffById
     )
 
     for (const staff of staffUsers.filter((user) => user.is_active !== false && includeStaffInPayroll(user))) {
@@ -1473,6 +1525,8 @@ export default function ReportsPage() {
         holidayHours: (finalisedTotals?.holidayHours || 0) + (previewTotals?.holidayHours || 0),
         breakHours: (finalisedTotals?.breakHours || 0) + (previewTotals?.breakHours || 0),
         paidHours: 0,
+        hourlyRate: hourlyRateForDate(staff, payrollRange.end),
+        wageSpend: (finalisedTotals?.wageSpend || 0) + (previewTotals?.wageSpend || 0),
         holidayAccruedHours: 0,
         carriedOverHours,
         autoCarriedOverHours: automaticCarryByStaff[staff.id] || 0,
@@ -1495,6 +1549,8 @@ export default function ReportsPage() {
         holidayHours: totals.holidayHours + (previewTotals?.holidayHours || 0),
         breakHours: totals.breakHours + (previewTotals?.breakHours || 0),
         paidHours: 0,
+        hourlyRate: hourlyRateForDate(staffById[staffId], payrollRange.end),
+        wageSpend: totals.wageSpend + (previewTotals?.wageSpend || 0),
         holidayAccruedHours: 0,
         carriedOverHours,
         autoCarriedOverHours: automaticCarryByStaff[staffId] || 0,
@@ -1516,6 +1572,8 @@ export default function ReportsPage() {
         holidayHours: totals.holidayHours,
         breakHours: totals.breakHours,
         paidHours: 0,
+        hourlyRate: hourlyRateForDate(staffById[staffId], payrollRange.end),
+        wageSpend: totals.wageSpend,
         holidayAccruedHours: 0,
         carriedOverHours,
         autoCarriedOverHours: automaticCarryByStaff[staffId] || 0,
@@ -1557,6 +1615,7 @@ export default function ReportsPage() {
           workHours: sum.workHours + row.workHours,
           breakHours: sum.breakHours + row.breakHours,
           paidHours: sum.paidHours + row.paidHours,
+          wageSpend: sum.wageSpend + row.wageSpend,
           holidayAccruedHours: sum.holidayAccruedHours + row.holidayAccruedHours,
           holidayHours: sum.holidayHours + row.holidayHours,
         }),
@@ -1564,6 +1623,7 @@ export default function ReportsPage() {
           workHours: 0,
           breakHours: 0,
           paidHours: 0,
+          wageSpend: 0,
           holidayAccruedHours: 0,
           holidayHours: 0,
         }
@@ -1585,7 +1645,8 @@ export default function ReportsPage() {
       type: 'work' | 'holiday',
       value: number,
       preview = false,
-      excluded = false
+      excluded = false,
+      wageSpend = 0
     ) => {
       if (value <= 0) return
       if (!segment.staffHours[staffId]) {
@@ -1594,6 +1655,7 @@ export default function ReportsPage() {
           workHours: 0,
           holidayHours: 0,
           excludedHours: 0,
+          wageSpend: 0,
           preview: false,
           excluded,
         }
@@ -1606,9 +1668,13 @@ export default function ReportsPage() {
       } else if (type === 'holiday') {
         segment.holidayHours += value
         segment.staffHours[staffId].holidayHours += value
+        segment.wageSpend += wageSpend
+        segment.staffHours[staffId].wageSpend += wageSpend
       } else {
         segment.workHours += value
         segment.staffHours[staffId].workHours += value
+        segment.wageSpend += wageSpend
+        segment.staffHours[staffId].wageSpend += wageSpend
       }
       if (preview) {
         segment.hasPreviewHours = true
@@ -1636,25 +1702,29 @@ export default function ReportsPage() {
 
           if (shift.type === 'holiday') {
             const staff = staffById[shift.staffId]
+            const paidHours = num(shift.paidHours ?? shift.hours)
             addHours(
               segment,
               shift.staffId,
               shift.staffName || staffNameById[shift.staffId] || 'Unknown',
               'holiday',
-              num(shift.paidHours ?? shift.hours),
+              paidHours,
               false,
-              !includeStaffInPayroll(staff)
+              !includeStaffInPayroll(staff),
+              paidHours * hourlyRateForDate(staff, shiftDate)
             )
           } else {
             const staff = staffById[shift.staffId]
+            const paidHours = num(shift.paidHours ?? shift.hours)
             addHours(
               segment,
               shift.staffId,
               shift.staffName || staffNameById[shift.staffId] || 'Unknown',
               'work',
-              num(shift.paidHours ?? shift.hours),
+              paidHours,
               false,
-              !includeStaffInPayroll(staff)
+              !includeStaffInPayroll(staff),
+              paidHours * hourlyRateForDate(staff, shiftDate)
             )
           }
         }
@@ -1691,16 +1761,17 @@ export default function ReportsPage() {
           for (const shift of shifts) {
             if (!shift.staffId || !staffMatches(shift.staffId)) continue
             const staff = staffById[shift.staffId]
-            const { paidHours } = rotaShiftHours(shift, staff)
-            addHours(
-              segment,
+          const { paidHours } = rotaShiftHours(shift, staff)
+          addHours(
+            segment,
               shift.staffId,
               staff?.name || staffNameById[shift.staffId] || 'Unknown',
-              shift.type,
-              paidHours,
-              true,
-              !includeStaffInPayroll(staff)
-            )
+            shift.type,
+            paidHours,
+            true,
+            !includeStaffInPayroll(staff),
+            paidHours * hourlyRateForDate(staff, date)
+          )
           }
         }
       }
@@ -1872,6 +1943,9 @@ export default function ReportsPage() {
                     </p>
                     <p className="mt-0.5 text-emerald-300">Work: {hours(row.workHours)}</p>
                     <p className="text-blue-300">Holiday: {hours(row.holidayHours)}</p>
+                    {row.wageSpend > 0 && (
+                      <p className="text-zinc-100">Wages: {money(row.wageSpend)}</p>
+                    )}
                     {row.excludedHours > 0 && (
                       <p className="text-yellow-300">Excluded: {hours(row.excludedHours)}</p>
                     )}
@@ -2474,7 +2548,7 @@ export default function ReportsPage() {
             </select>
           </div>
 
-          <div className="mb-4 grid gap-3 md:grid-cols-2">
+          <div className="mb-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
               <p className="text-xs font-bold uppercase text-zinc-500">Work hours</p>
               <p className="mt-1 text-3xl font-black">{hours(payrollSummary.workHours)}</p>
@@ -2482,6 +2556,10 @@ export default function ReportsPage() {
             <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
               <p className="text-xs font-bold uppercase text-zinc-500">Paid hours</p>
               <p className="mt-1 text-3xl font-black text-emerald-300">{hours(payrollSummary.paidHours)}</p>
+            </div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+              <p className="text-xs font-bold uppercase text-zinc-500">Wage spend</p>
+              <p className="mt-1 text-3xl font-black text-yellow-300">{money(payrollSummary.wageSpend)}</p>
             </div>
           </div>
 
@@ -2559,7 +2637,7 @@ export default function ReportsPage() {
                           <div
                             role="button"
                             tabIndex={0}
-                            aria-label={`${row.label}: Work ${hours(row.workHours)}, Holiday ${hours(row.holidayHours)}, Excluded ${hours(row.excludedHours)}${staffLabel ? `, Staff: ${staffLabel}` : ''}`}
+                            aria-label={`${row.label}: Work ${hours(row.workHours)}, Holiday ${hours(row.holidayHours)}, Wages ${money(row.wageSpend)}, Excluded ${hours(row.excludedHours)}${staffLabel ? `, Staff: ${staffLabel}` : ''}`}
                             onPointerEnter={(event) => queuePayrollTooltip(row.key, event.currentTarget)}
                             onPointerLeave={() => hidePayrollTooltip(row.key)}
                             onFocus={(event) => queuePayrollTooltip(row.key, event.currentTarget)}
@@ -2632,13 +2710,15 @@ export default function ReportsPage() {
           </div>
 
           <div className="overflow-x-auto rounded-2xl border border-zinc-800 bg-zinc-950">
-            <table className="min-w-[860px] w-full text-left text-sm">
+            <table className="min-w-[980px] w-full text-left text-sm">
               <thead className="bg-zinc-900 text-xs uppercase text-zinc-500">
                 <tr>
                   <th className="px-4 py-3">Staff</th>
                   <th className="px-4 py-3 text-right">Work</th>
                   <th className="px-4 py-3 text-right">Breaks</th>
                   <th className="px-4 py-3 text-right">Paid</th>
+                  <th className="px-4 py-3 text-right">Rate</th>
+                  <th className="px-4 py-3 text-right">Wages</th>
                   <th className="px-4 py-3 text-right">Holiday accrued</th>
                   {payrollViewMode === 'holiday_year' && (
                     <th className="px-4 py-3 text-right">Carried</th>
@@ -2651,7 +2731,7 @@ export default function ReportsPage() {
                 {payrollRows.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={payrollViewMode === 'holiday_year' ? 8 : 7}
+                      colSpan={payrollViewMode === 'holiday_year' ? 10 : 9}
                       className="px-4 py-8 text-center font-bold text-zinc-500"
                     >
                       No finalised rota weeks found for this payroll period.
@@ -2664,6 +2744,8 @@ export default function ReportsPage() {
                       <td className="px-4 py-3 text-right font-bold">{hours(row.workHours)}</td>
                       <td className="px-4 py-3 text-right font-bold text-red-300">{hours(row.breakHours)}</td>
                       <td className="px-4 py-3 text-right font-bold text-emerald-300">{hours(row.paidHours)}</td>
+                      <td className="px-4 py-3 text-right font-bold">{money(row.hourlyRate)}</td>
+                      <td className="px-4 py-3 text-right font-black text-yellow-300">{money(row.wageSpend)}</td>
                       <td className="px-4 py-3 text-right font-bold text-blue-300">{hours(row.holidayAccruedHours)}</td>
                       {payrollViewMode === 'holiday_year' && (
                         <td className="px-4 py-3 text-right font-bold">

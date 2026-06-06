@@ -38,6 +38,8 @@ type PayrollSettings = {
 
 type PayrollStaffSettings = {
   include_in_payroll?: boolean
+  hourly_rate?: number
+  pay_rate_history?: Array<{ effective_date: string; hourly_rate: number }>
   holiday_method?: HolidayMethod
   holiday_weeks?: number
   accrual_percent?: number
@@ -115,6 +117,8 @@ const defaultPayrollSettings: PayrollSettings = {
 
 const defaultPayrollStaffSettings: Required<PayrollStaffSettings> = {
   include_in_payroll: true,
+  hourly_rate: 0,
+  pay_rate_history: [],
   holiday_method: 'fixed_weeks',
   holiday_weeks: 5.6,
   accrual_percent: 12.07,
@@ -140,11 +144,31 @@ const monthOptions = [
 
 const monthDayOptions = Array.from({ length: 31 }, (_, index) => index + 1)
 
+function todayInputValue() {
+  const today = new Date()
+  const year = today.getFullYear()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const day = String(today.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function normalisePayrollStaffSettings(settings?: PayrollStaffSettings | null): Required<PayrollStaffSettings> {
+  const payRateHistory = Array.isArray(settings?.pay_rate_history)
+    ? settings.pay_rate_history
+        .map((entry) => ({
+          effective_date: String(entry?.effective_date || '').slice(0, 10),
+          hourly_rate: Number(entry?.hourly_rate ?? 0),
+        }))
+        .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry.effective_date))
+        .sort((a, b) => a.effective_date.localeCompare(b.effective_date))
+    : []
+
   return {
     ...defaultPayrollStaffSettings,
     ...(settings || {}),
     include_in_payroll: settings?.include_in_payroll !== false,
+    hourly_rate: Number(settings?.hourly_rate ?? 0),
+    pay_rate_history: payRateHistory,
     holiday_method:
       settings?.holiday_method === 'accrual_percent' ? 'accrual_percent' : 'fixed_weeks',
     holiday_weeks: Number(settings?.holiday_weeks ?? defaultPayrollStaffSettings.holiday_weeks),
@@ -948,6 +972,48 @@ export default function SettingsPage() {
       })
     )
     markPayrollDirty()
+  }
+
+  function updateStaffPayRate(id: string, nextRate: number) {
+    const effectiveDate = window.prompt(
+      'From what date should this pay rate apply? Use YYYY-MM-DD.',
+      todayInputValue(),
+    )
+
+    if (!effectiveDate) return
+
+    const trimmedDate = effectiveDate.trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+      setMessage('Pay rate date must be in YYYY-MM-DD format')
+      return
+    }
+
+    const user = staffUsers.find((staff) => staff.id === id)
+    const currentSettings = normalisePayrollStaffSettings(user?.payroll_settings)
+    const history = currentSettings.pay_rate_history.length > 0
+      ? currentSettings.pay_rate_history.filter((entry) => entry.effective_date !== trimmedDate)
+      : [
+          {
+            effective_date: '1900-01-01',
+            hourly_rate: currentSettings.hourly_rate,
+          },
+        ]
+
+    const withoutMatchingDate = history.filter(
+      (entry) => entry.effective_date !== trimmedDate,
+    )
+
+    withoutMatchingDate.push({
+      effective_date: trimmedDate,
+      hourly_rate: Number(nextRate || 0),
+    })
+
+    withoutMatchingDate.sort((a, b) => a.effective_date.localeCompare(b.effective_date))
+
+    updateStaffPayrollSettings(id, {
+      hourly_rate: Number(nextRate || 0),
+      pay_rate_history: withoutMatchingDate,
+    })
   }
 
   function updateStaffRole(id: string, role: string) {
@@ -1909,7 +1975,7 @@ export default function SettingsPage() {
                     return (
                       <div
                         key={user.id}
-                        className="grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4 xl:grid-cols-[1.2fr_170px_150px_140px_220px]"
+                        className="grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4 xl:grid-cols-[1.2fr_170px_130px_150px_140px_220px]"
                       >
                         <div>
                           <p className="text-sm font-black text-white">{user.name}</p>
@@ -1939,6 +2005,37 @@ export default function SettingsPage() {
                             Payroll & holiday figures
                           </p>
                         </div>
+
+                        <label>
+                          <span className="mb-1 block text-xs font-bold uppercase text-zinc-500">
+                            Pay rate
+                          </span>
+                          <div className="relative">
+                            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-zinc-500">
+                              £
+                            </span>
+                            <input
+                              key={`${user.id}-${staffPayroll.hourly_rate}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              defaultValue={staffPayroll.hourly_rate}
+                              onBlur={(event) => {
+                                const nextRate = Number(event.currentTarget.value)
+                                if (Number.isFinite(nextRate) && nextRate !== staffPayroll.hourly_rate) {
+                                  updateStaffPayRate(user.id, nextRate)
+                                }
+                              }}
+                              className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 pl-7 pr-2 text-xs font-black text-white"
+                            />
+                          </div>
+                          <p className="mt-1 text-[10px] font-bold text-zinc-500">
+                            Per paid hour
+                            {staffPayroll.pay_rate_history.length > 0
+                              ? ` · ${staffPayroll.pay_rate_history.length} rates`
+                              : ''}
+                          </p>
+                        </label>
 
                         <label>
                           <span className="mb-1 block text-xs font-bold uppercase text-zinc-500">
