@@ -540,8 +540,9 @@ type PayrollChartSegment = {
   labelBottom?: string
   workHours: number
   holidayHours: number
+  excludedHours: number
   staffNames: string[]
-  staffHours: Record<string, { staffName: string; workHours: number; holidayHours: number; preview: boolean }>
+  staffHours: Record<string, { staffName: string; workHours: number; holidayHours: number; excludedHours: number; preview: boolean; excluded: boolean }>
   hasPreviewHours: boolean
 }
 
@@ -561,6 +562,7 @@ function payrollChartSegments(
         labelBottom: String(start.getFullYear()),
         workHours: 0,
         holidayHours: 0,
+        excludedHours: 0,
         staffNames: [],
         staffHours: {},
         hasPreviewHours: false,
@@ -579,6 +581,7 @@ function payrollChartSegments(
       labelBottom: label.bottom,
       workHours: 0,
       holidayHours: 0,
+      excludedHours: 0,
       staffNames: [],
       staffHours: {},
       hasPreviewHours: false,
@@ -1574,22 +1577,33 @@ export default function ReportsPage() {
       segments.map((segment) => [segment.key, segment])
     )
     const staffMatches = (staffId: string) =>
-      (selectedPayrollStaffId === 'ALL' || staffId === selectedPayrollStaffId) &&
-      includeStaffInPayroll(staffById[staffId])
+      selectedPayrollStaffId === 'ALL' || staffId === selectedPayrollStaffId
     const addHours = (
       segment: PayrollChartSegment,
       staffId: string,
       staffName: string,
       type: 'work' | 'holiday',
       value: number,
-      preview = false
+      preview = false,
+      excluded = false
     ) => {
       if (value <= 0) return
       if (!segment.staffHours[staffId]) {
-        segment.staffHours[staffId] = { staffName, workHours: 0, holidayHours: 0, preview: false }
+        segment.staffHours[staffId] = {
+          staffName,
+          workHours: 0,
+          holidayHours: 0,
+          excludedHours: 0,
+          preview: false,
+          excluded,
+        }
       }
       if (!segment.staffNames.includes(staffName)) segment.staffNames.push(staffName)
-      if (type === 'holiday') {
+      segment.staffHours[staffId].excluded = segment.staffHours[staffId].excluded || excluded
+      if (excluded) {
+        segment.excludedHours += value
+        segment.staffHours[staffId].excludedHours += value
+      } else if (type === 'holiday') {
         segment.holidayHours += value
         segment.staffHours[staffId].holidayHours += value
       } else {
@@ -1621,20 +1635,26 @@ export default function ReportsPage() {
           if (!segment) continue
 
           if (shift.type === 'holiday') {
+            const staff = staffById[shift.staffId]
             addHours(
               segment,
               shift.staffId,
               shift.staffName || staffNameById[shift.staffId] || 'Unknown',
               'holiday',
-              num(shift.paidHours ?? shift.hours)
+              num(shift.paidHours ?? shift.hours),
+              false,
+              !includeStaffInPayroll(staff)
             )
           } else {
+            const staff = staffById[shift.staffId]
             addHours(
               segment,
               shift.staffId,
               shift.staffName || staffNameById[shift.staffId] || 'Unknown',
               'work',
-              num(shift.paidHours ?? shift.hours)
+              num(shift.paidHours ?? shift.hours),
+              false,
+              !includeStaffInPayroll(staff)
             )
           }
         }
@@ -1678,7 +1698,8 @@ export default function ReportsPage() {
               staff?.name || staffNameById[shift.staffId] || 'Unknown',
               shift.type,
               paidHours,
-              true
+              true,
+              !includeStaffInPayroll(staff)
             )
           }
         }
@@ -1714,7 +1735,7 @@ export default function ReportsPage() {
 
   const payrollChartMax = useMemo(() => {
     const maxValue = payrollChartRows.reduce(
-      (max, row) => Math.max(max, row.workHours + row.holidayHours),
+      (max, row) => Math.max(max, row.workHours + row.holidayHours + row.excludedHours),
       0
     )
     return maxValue <= 0 ? 10 : Math.ceil((maxValue + 0.01) / 10) * 10
@@ -1847,14 +1868,23 @@ export default function ReportsPage() {
                     <p className="font-black text-zinc-100">
                       {row.staffName}
                       {row.preview && <span className="ml-1 text-[10px] uppercase text-yellow-300">preview</span>}
+                      {row.excluded && <span className="ml-1 text-[10px] uppercase text-yellow-300">excluded</span>}
                     </p>
                     <p className="mt-0.5 text-emerald-300">Work: {hours(row.workHours)}</p>
                     <p className="text-blue-300">Holiday: {hours(row.holidayHours)}</p>
+                    {row.excludedHours > 0 && (
+                      <p className="text-yellow-300">Excluded: {hours(row.excludedHours)}</p>
+                    )}
                   </div>
                 ))}
               </div>
             ) : (
               <p className="mt-2 text-zinc-400">No staff hours for this section.</p>
+            )}
+            {activePayrollTooltipStaffRows.some((row) => row.excludedHours > 0) && (
+              <p className="mt-2 text-[10px] font-bold leading-snug text-yellow-300">
+                Excluded staff are shown on the chart only and are not included in payroll or holiday totals.
+              </p>
             )}
             {activePayrollTooltipRow.hasPreviewHours && (
               <p className="mt-2 text-[10px] font-bold leading-snug text-yellow-300">
@@ -2483,6 +2513,10 @@ export default function ReportsPage() {
                   <span className="h-3 w-3 rounded-sm bg-blue-500" />
                   Holiday
                 </span>
+                <span className="flex items-center gap-2 text-yellow-300">
+                  <span className="h-3 w-3 rounded-sm bg-yellow-400" />
+                  Excluded
+                </span>
               </div>
             </div>
 
@@ -2516,7 +2550,8 @@ export default function ReportsPage() {
                     {payrollChartRows.map((row) => {
                       const workHeight = Math.max(0, (row.workHours / payrollChartMax) * 100)
                       const holidayHeight = Math.max(0, (row.holidayHours / payrollChartMax) * 100)
-                      const hasHours = row.workHours + row.holidayHours > 0
+                      const excludedHeight = Math.max(0, (row.excludedHours / payrollChartMax) * 100)
+                      const hasHours = row.workHours + row.holidayHours + row.excludedHours > 0
                       const staffLabel = row.staffNames.join(' / ')
 
                       return (
@@ -2524,7 +2559,7 @@ export default function ReportsPage() {
                           <div
                             role="button"
                             tabIndex={0}
-                            aria-label={`${row.label}: Work ${hours(row.workHours)}, Holiday ${hours(row.holidayHours)}${staffLabel ? `, Staff: ${staffLabel}` : ''}`}
+                            aria-label={`${row.label}: Work ${hours(row.workHours)}, Holiday ${hours(row.holidayHours)}, Excluded ${hours(row.excludedHours)}${staffLabel ? `, Staff: ${staffLabel}` : ''}`}
                             onPointerEnter={(event) => queuePayrollTooltip(row.key, event.currentTarget)}
                             onPointerLeave={() => hidePayrollTooltip(row.key)}
                             onFocus={(event) => queuePayrollTooltip(row.key, event.currentTarget)}
@@ -2562,6 +2597,12 @@ export default function ReportsPage() {
                               <div
                                 className="w-full bg-emerald-500"
                                 style={{ height: `${Math.max(3, workHeight)}%` }}
+                              />
+                            )}
+                            {row.excludedHours > 0 && (
+                              <div
+                                className="w-full bg-yellow-400"
+                                style={{ height: `${Math.max(3, excludedHeight)}%` }}
                               />
                             )}
                             {!hasHours && <div className="h-[2px] w-full bg-zinc-800" />}
