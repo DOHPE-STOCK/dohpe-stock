@@ -990,14 +990,17 @@ export default function SettingsPage() {
 
     const user = staffUsers.find((staff) => staff.id === id)
     const currentSettings = normalisePayrollStaffSettings(user?.payroll_settings)
-    const history = currentSettings.pay_rate_history.length > 0
-      ? currentSettings.pay_rate_history.filter((entry) => entry.effective_date !== trimmedDate)
-      : [
-          {
-            effective_date: '1900-01-01',
-            hourly_rate: currentSettings.hourly_rate,
-          },
-        ]
+    const history =
+      currentSettings.pay_rate_history.length > 0
+        ? currentSettings.pay_rate_history.filter((entry) => entry.effective_date !== trimmedDate)
+        : currentSettings.hourly_rate > 0
+          ? [
+              {
+                effective_date: '1900-01-01',
+                hourly_rate: currentSettings.hourly_rate,
+              },
+            ]
+          : []
 
     const withoutMatchingDate = history.filter(
       (entry) => entry.effective_date !== trimmedDate,

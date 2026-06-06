@@ -67,12 +67,6 @@ const CHANNELS = [
     description: 'POS/payment reporting integration.',
   },
   {
-    key: 'loyverse',
-    name: 'Grailed',
-    src: 'https://www.google.com/s2/favicons?domain=grailed.com&sz=64',
-    description: 'Legacy Loyverse row shown as Grailed until the channel SQL has been run.',
-  },
-  {
     key: 'depop',
     name: 'Depop',
     src: 'https://www.google.com/s2/favicons?domain=depop.com&sz=64',
@@ -173,7 +167,7 @@ export default function IntegrationsSettingsPage() {
       return
     }
 
-    setIntegrations((data || []) as IntegrationSetting[])
+    setIntegrations(((data || []) as IntegrationSetting[]).filter((integration) => integration.channel !== 'loyverse'))
     setLoading(false)
   }
 

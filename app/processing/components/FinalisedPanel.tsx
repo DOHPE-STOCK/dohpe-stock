@@ -111,6 +111,11 @@ export default function FinalisedPanel({ embedded = false }: FinalisedPanelProps
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [publishingEbay, setPublishingEbay] = useState(false)
+  const [enabledIntegrationChannels, setEnabledIntegrationChannels] = useState<string[]>([])
+
+  const visibleChannelIcons = CHANNEL_ICONS.filter((channel) =>
+    enabledIntegrationChannels.includes(channel.key.replace(/_status$/, ''))
+  )
 
   useEffect(() => {
     fetchFinalisedItems()
@@ -120,21 +125,34 @@ export default function FinalisedPanel({ embedded = false }: FinalisedPanelProps
     setLoading(true)
     setMessage('')
 
-    const { data, error } = await supabase
-      .from('items')
-      .select('*')
-      .eq('status', 'finalised')
-      .order('created_at', { ascending: false })
+    const [itemsResult, integrationsResult] = await Promise.all([
+      supabase
+        .from('items')
+        .select('*')
+        .eq('status', 'finalised')
+        .order('created_at', { ascending: false }),
+
+      supabase
+        .from('integration_settings')
+        .select('channel, enabled')
+        .eq('enabled', true),
+    ])
 
     setLoading(false)
 
-    if (error) {
-      setMessage(error.message)
+    if (itemsResult.error) {
+      setMessage(itemsResult.error.message)
       return
     }
 
-    const finalisedItems = data || []
+    if (integrationsResult.error) {
+      setMessage(integrationsResult.error.message)
+      return
+    }
+
+    const finalisedItems = itemsResult.data || []
     setItems(finalisedItems)
+    setEnabledIntegrationChannels((integrationsResult.data || []).map((row: any) => String(row.channel || '').trim()))
     setSelectedItems([])
     fetchImages(finalisedItems)
   }
@@ -540,9 +558,9 @@ export default function FinalisedPanel({ embedded = false }: FinalisedPanelProps
                   </div>
 
                   <div className="flex flex-col gap-1 rounded-lg bg-zinc-950 p-1">
-                    {Array.from({ length: Math.ceil(CHANNEL_ICONS.length / 2) }, (_, index) => index * 2).map((start) => (
+                    {Array.from({ length: Math.ceil(visibleChannelIcons.length / 2) }, (_, index) => index * 2).map((start) => (
                       <div key={start} className="flex gap-1">
-                        {CHANNEL_ICONS.slice(start, start + 2).map((icon) => (
+                        {visibleChannelIcons.slice(start, start + 2).map((icon) => (
                           <img
                             key={icon.name}
                             src={icon.src}

@@ -205,7 +205,6 @@ export async function POST(request: Request) {
       grailed_status: 'not_listed',
       vestiaire_collective_status: 'not_listed',
       whatnot_status: 'not_listed',
-      loyverse_status: 'not_listed',
       vinted_status: 'not_listed',
       depop_status: 'not_listed',
       tiktok_shop_status: 'not_listed',

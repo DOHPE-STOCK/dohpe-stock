@@ -3,7 +3,8 @@
 -- - Moves the old Loyverse integration row to Grailed.
 -- - Adds Vestiaire Collective and Whatnot integration rows.
 -- - Adds item status columns for new marketplace export indicators.
--- - Leaves the legacy loyverse_status column in place so old code/data is not destructively changed.
+-- - Removes the legacy Loyverse integration row and status column after the app stops using them.
+-- - Removes zero-value previous pay-rate baseline entries from staff payroll settings.
 
 begin;
 
@@ -23,6 +24,9 @@ where channel = 'loyverse'
     from public.integration_settings existing
     where existing.channel = 'grailed'
   );
+
+delete from public.integration_settings
+where channel = 'loyverse';
 
 with channel_rows(channel, enabled, auto_sync, connection_status, settings, created_at, updated_at) as (
   values
@@ -53,5 +57,34 @@ where not exists (
   from public.integration_settings existing
   where existing.channel = channel_rows.channel
 );
+
+alter table public.items
+  drop column if exists loyverse_status;
+
+update public.staff_users
+set
+  payroll_settings = jsonb_set(
+    coalesce(payroll_settings, '{}'::jsonb),
+    '{pay_rate_history}',
+    coalesce(
+      (
+        select jsonb_agg(entry order by entry->>'effective_date')
+        from jsonb_array_elements(coalesce(payroll_settings->'pay_rate_history', '[]'::jsonb)) entry
+        where not (
+          entry->>'effective_date' = '1900-01-01'
+          and coalesce(nullif(entry->>'hourly_rate', '')::numeric, 0) = 0
+        )
+      ),
+      '[]'::jsonb
+    ),
+    true
+  )
+where payroll_settings ? 'pay_rate_history'
+  and exists (
+    select 1
+    from jsonb_array_elements(coalesce(payroll_settings->'pay_rate_history', '[]'::jsonb)) entry
+    where entry->>'effective_date' = '1900-01-01'
+      and coalesce(nullif(entry->>'hourly_rate', '')::numeric, 0) = 0
+  );
 
 commit;

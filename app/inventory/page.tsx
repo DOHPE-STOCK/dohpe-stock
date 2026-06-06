@@ -33,7 +33,6 @@ type InventoryItem = {
   grailed_status: string | null
   vestiaire_collective_status: string | null
   whatnot_status: string | null
-  loyverse_status: string | null
   vinted_status: string | null
   depop_status: string | null
   tiktok_shop_status: string | null
@@ -167,6 +166,7 @@ export default function InventoryPage() {
   const [exportChannel, setExportChannel] = useState('linnworks')
   const [exporting, setExporting] = useState(false)
   const [message, setMessage] = useState('')
+  const [enabledIntegrationChannels, setEnabledIntegrationChannels] = useState<string[]>([])
 
   useEffect(() => {
     fetchInventory()
@@ -176,7 +176,7 @@ export default function InventoryPage() {
     setLoading(true)
     setMessage('')
 
-    const [itemsResult, locationsResult, locationLabelsResult, transferItemsResult] = await Promise.all([
+    const [itemsResult, locationsResult, locationLabelsResult, transferItemsResult, integrationsResult] = await Promise.all([
       supabase
         .from('items')
         .select(`
@@ -206,7 +206,6 @@ export default function InventoryPage() {
           grailed_status,
           vestiaire_collective_status,
           whatnot_status,
-          loyverse_status,
           vinted_status,
           depop_status,
           tiktok_shop_status,
@@ -237,6 +236,11 @@ export default function InventoryPage() {
         .select('id, item_id, sku, source_bin, status, stock_transfers!inner(from_location, status)')
         .eq('status', 'in_transfer')
         .eq('stock_transfers.status', 'sent'),
+
+      supabase
+        .from('integration_settings')
+        .select('channel, enabled')
+        .eq('enabled', true),
     ])
 
     if (itemsResult.error) {
@@ -263,7 +267,14 @@ export default function InventoryPage() {
       return
     }
 
+    if (integrationsResult.error) {
+      setMessage(integrationsResult.error.message)
+      setLoading(false)
+      return
+    }
+
     setItems((itemsResult.data || []) as InventoryItem[])
+    setEnabledIntegrationChannels((integrationsResult.data || []).map((row: any) => text(row.channel)))
 
     const fetchedLocations = configuredLocationRows((locationLabelsResult.data || []) as LocationLabelRow[])
     const activeLocations =
@@ -748,7 +759,11 @@ export default function InventoryPage() {
   const tooltipLocationColumns =
     locationColumns.length > 0 ? locationColumns : [{ key: 'LOCATION-1', label: 'WAREHOUSE' }]
 
-  const tableGridTemplate = '28px 130px 105px 90px 90px minmax(190px,1fr) 68px 78px 190px 86px'
+  const visibleChannelIcons = CHANNEL_ICONS.filter((channel) =>
+    enabledIntegrationChannels.includes(channel.key.replace(/_status$/, ''))
+  )
+
+  const tableGridTemplate = '28px 130px 105px 90px 90px minmax(150px,0.9fr) 68px 78px minmax(80px,140px) 96px'
 
   return (
     <StaffPermissionGate permission="inventory">
@@ -952,8 +967,8 @@ export default function InventoryPage() {
             <div>Item</div>
             <div>Stock</div>
             <div>Price</div>
-            <div className="flex items-center gap-2">
-              {CHANNEL_ICONS.map((channel) => (
+            <div className="flex flex-wrap items-center gap-1">
+              {visibleChannelIcons.map((channel) => (
                 <img
                   key={channel.key}
                   src={channel.src}
@@ -963,7 +978,7 @@ export default function InventoryPage() {
                 />
               ))}
             </div>
-            <div>Actions</div>
+            <div className="text-right">Actions</div>
           </div>
 
           {loading ? (
@@ -1057,8 +1072,8 @@ export default function InventoryPage() {
                       {currency(item.selling_price)}
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      {CHANNEL_ICONS.map((channel) => {
+                    <div className="flex flex-wrap items-center gap-1">
+                      {visibleChannelIcons.map((channel) => {
                         const status = item[channel.key as ChannelKey]
 
                         return (
@@ -1073,7 +1088,7 @@ export default function InventoryPage() {
                       })}
                     </div>
 
-                    <div>
+                    <div className="text-right">
                       <Link
                         href={`/working/items/${item.id}`}
                         className="rounded-lg bg-white px-3 py-1 text-[11px] font-black text-black"

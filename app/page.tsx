@@ -43,7 +43,6 @@ type ScannedItem = {
   grailed_status?: string | null
   vestiaire_collective_status?: string | null
   whatnot_status?: string | null
-  loyverse_status?: string | null
   vinted_status?: string | null
   depop_status?: string | null
   tiktok_shop_status?: string | null
@@ -534,7 +533,6 @@ export default function SkuSearchPage() {
         grailed_status: 'not_listed',
         vestiaire_collective_status: 'not_listed',
         whatnot_status: 'not_listed',
-        loyverse_status: 'not_listed',
         vinted_status: 'not_listed',
         depop_status: 'not_listed',
         tiktok_shop_status: 'not_listed',
@@ -668,7 +666,6 @@ export default function SkuSearchPage() {
         grailed_status,
         vestiaire_collective_status,
         whatnot_status,
-        loyverse_status,
         vinted_status,
         depop_status,
         tiktok_shop_status,
@@ -732,7 +729,6 @@ export default function SkuSearchPage() {
             grailed_status,
             vestiaire_collective_status,
             whatnot_status,
-            loyverse_status,
             vinted_status,
             depop_status,
             tiktok_shop_status,
@@ -822,7 +818,6 @@ export default function SkuSearchPage() {
       grailed_status: itemData?.grailed_status || 'not_listed',
       vestiaire_collective_status: itemData?.vestiaire_collective_status || 'not_listed',
       whatnot_status: itemData?.whatnot_status || 'not_listed',
-      loyverse_status: itemData?.loyverse_status || 'not_listed',
       vinted_status: itemData?.vinted_status || 'not_listed',
       depop_status: itemData?.depop_status || 'not_listed',
       tiktok_shop_status: itemData?.tiktok_shop_status || 'not_listed',
@@ -1603,7 +1598,6 @@ export default function SkuSearchPage() {
           grailed_status: 'not_listed',
           vestiaire_collective_status: 'not_listed',
           whatnot_status: 'not_listed',
-          loyverse_status: 'not_listed',
           vinted_status: 'not_listed',
           depop_status: 'not_listed',
           tiktok_shop_status: 'not_listed',
