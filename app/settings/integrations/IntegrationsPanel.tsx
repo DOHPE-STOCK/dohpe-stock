@@ -41,6 +41,24 @@ const CHANNELS = [
     description: 'Vinted listing/export workflow.',
   },
   {
+    key: 'grailed',
+    name: 'Grailed',
+    src: 'https://www.google.com/s2/favicons?domain=grailed.com&sz=64',
+    description: 'Grailed menswear and streetwear listing workflow.',
+  },
+  {
+    key: 'vestiaire_collective',
+    name: 'Vestiaire Collective',
+    src: 'https://www.google.com/s2/favicons?domain=vestiairecollective.com&sz=64',
+    description: 'Vestiaire Collective luxury resale listing workflow.',
+  },
+  {
+    key: 'whatnot',
+    name: 'Whatnot',
+    src: 'https://www.google.com/s2/favicons?domain=whatnot.com&sz=64',
+    description: 'Whatnot live-selling and marketplace workflow.',
+  },
+  {
     key: 'square',
     name: 'Square',
     src: 'https://www.google.com/s2/favicons?domain=squareup.com&sz=64',
@@ -48,9 +66,9 @@ const CHANNELS = [
   },
   {
     key: 'loyverse',
-    name: 'Loyverse',
-    src: 'https://www.google.com/s2/favicons?domain=loyverse.com&sz=64',
-    description: 'Optional/legacy POS channel.',
+    name: 'Grailed',
+    src: 'https://www.google.com/s2/favicons?domain=grailed.com&sz=64',
+    description: 'Legacy Loyverse row shown as Grailed until the channel SQL has been run.',
   },
   {
     key: 'depop',

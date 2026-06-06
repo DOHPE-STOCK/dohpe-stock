@@ -10,7 +10,9 @@ const CHANNEL_ICONS = [
   { key: 'linnworks_status', name: 'Linnworks', src: 'https://www.google.com/s2/favicons?domain=linnworks.com&sz=64' },
   { key: 'shopify_status', name: 'Shopify', src: 'https://www.google.com/s2/favicons?domain=shopify.com&sz=64' },
   { key: 'square_status', name: 'Square', src: 'https://www.google.com/s2/favicons?domain=squareup.com&sz=64' },
-  { key: 'loyverse_status', name: 'Loyverse', src: 'https://www.google.com/s2/favicons?domain=loyverse.com&sz=64' },
+  { key: 'grailed_status', name: 'Grailed', src: 'https://www.google.com/s2/favicons?domain=grailed.com&sz=64' },
+  { key: 'vestiaire_collective_status', name: 'Vestiaire Collective', src: 'https://www.google.com/s2/favicons?domain=vestiairecollective.com&sz=64' },
+  { key: 'whatnot_status', name: 'Whatnot', src: 'https://www.google.com/s2/favicons?domain=whatnot.com&sz=64' },
   { key: 'vinted_status', name: 'Vinted', src: 'https://www.google.com/s2/favicons?domain=vinted.co.uk&sz=64' },
   { key: 'depop_status', name: 'Depop', src: 'https://www.google.com/s2/favicons?domain=depop.com&sz=64' },
   { key: 'tiktok_shop_status', name: 'TikTok Shop', src: 'https://www.google.com/s2/favicons?domain=tiktok.com&sz=64' },
@@ -538,7 +540,7 @@ export default function FinalisedPanel({ embedded = false }: FinalisedPanelProps
                   </div>
 
                   <div className="flex flex-col gap-1 rounded-lg bg-zinc-950 p-1">
-                    {[0, 2, 4, 6].map((start) => (
+                    {Array.from({ length: Math.ceil(CHANNEL_ICONS.length / 2) }, (_, index) => index * 2).map((start) => (
                       <div key={start} className="flex gap-1">
                         {CHANNEL_ICONS.slice(start, start + 2).map((icon) => (
                           <img

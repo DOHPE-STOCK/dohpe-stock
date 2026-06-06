@@ -30,6 +30,9 @@ type InventoryItem = {
   ebay_status: string | null
   shopify_status: string | null
   square_status: string | null
+  grailed_status: string | null
+  vestiaire_collective_status: string | null
+  whatnot_status: string | null
   loyverse_status: string | null
   vinted_status: string | null
   depop_status: string | null
@@ -68,9 +71,11 @@ const CHANNEL_ICONS = [
   { key: 'ebay_status', name: 'eBay', src: 'https://www.google.com/s2/favicons?domain=ebay.co.uk&sz=64' },
   { key: 'vinted_status', name: 'Vinted', src: 'https://www.google.com/s2/favicons?domain=vinted.co.uk&sz=64' },
   { key: 'depop_status', name: 'Depop', src: 'https://www.google.com/s2/favicons?domain=depop.com&sz=64' },
+  { key: 'grailed_status', name: 'Grailed', src: 'https://www.google.com/s2/favicons?domain=grailed.com&sz=64' },
+  { key: 'vestiaire_collective_status', name: 'Vestiaire Collective', src: 'https://www.google.com/s2/favicons?domain=vestiairecollective.com&sz=64' },
+  { key: 'whatnot_status', name: 'Whatnot', src: 'https://www.google.com/s2/favicons?domain=whatnot.com&sz=64' },
   { key: 'shopify_status', name: 'Shopify', src: 'https://www.google.com/s2/favicons?domain=shopify.com&sz=64' },
   { key: 'square_status', name: 'Square', src: 'https://www.google.com/s2/favicons?domain=squareup.com&sz=64' },
-  { key: 'loyverse_status', name: 'Loyverse', src: 'https://www.google.com/s2/favicons?domain=loyverse.com&sz=64' },
   { key: 'tiktok_shop_status', name: 'TikTok Shop', src: 'https://www.google.com/s2/favicons?domain=tiktok.com&sz=64' },
 ] as const
 
@@ -198,6 +203,9 @@ export default function InventoryPage() {
           ebay_status,
           shopify_status,
           square_status,
+          grailed_status,
+          vestiaire_collective_status,
+          whatnot_status,
           loyverse_status,
           vinted_status,
           depop_status,

@@ -40,6 +40,9 @@ type ScannedItem = {
   linnworks_status?: string | null
   shopify_status?: string | null
   square_status?: string | null
+  grailed_status?: string | null
+  vestiaire_collective_status?: string | null
+  whatnot_status?: string | null
   loyverse_status?: string | null
   vinted_status?: string | null
   depop_status?: string | null
@@ -112,7 +115,9 @@ const CHANNEL_ICONS = [
   { key: 'linnworks_status', name: 'Linnworks', src: 'https://www.linnworks.com/favicon.ico' },
   { key: 'shopify_status', name: 'Shopify', src: 'https://www.shopify.com/favicon.ico' },
   { key: 'square_status', name: 'Square', src: 'https://squareup.com/favicon.ico' },
-  { key: 'loyverse_status', name: 'Loyverse', src: 'https://loyverse.com/favicon.ico' },
+  { key: 'grailed_status', name: 'Grailed', src: 'https://www.google.com/s2/favicons?domain=grailed.com&sz=64' },
+  { key: 'vestiaire_collective_status', name: 'Vestiaire Collective', src: 'https://www.google.com/s2/favicons?domain=vestiairecollective.com&sz=64' },
+  { key: 'whatnot_status', name: 'Whatnot', src: 'https://www.google.com/s2/favicons?domain=whatnot.com&sz=64' },
   { key: 'vinted_status', name: 'Vinted', src: 'https://www.vinted.co.uk/favicon.ico' },
   { key: 'depop_status', name: 'Depop', src: 'https://www.depop.com/favicon.ico' },
   { key: 'tiktok_shop_status', name: 'TikTok Shop', src: 'https://shop.tiktok.com/favicon.ico' },
@@ -526,6 +531,9 @@ export default function SkuSearchPage() {
         linnworks_status: 'not_synced',
         shopify_status: 'not_listed',
         square_status: 'not_listed',
+        grailed_status: 'not_listed',
+        vestiaire_collective_status: 'not_listed',
+        whatnot_status: 'not_listed',
         loyverse_status: 'not_listed',
         vinted_status: 'not_listed',
         depop_status: 'not_listed',
@@ -657,6 +665,9 @@ export default function SkuSearchPage() {
         linnworks_status,
         shopify_status,
         square_status,
+        grailed_status,
+        vestiaire_collective_status,
+        whatnot_status,
         loyverse_status,
         vinted_status,
         depop_status,
@@ -718,6 +729,9 @@ export default function SkuSearchPage() {
             linnworks_status,
             shopify_status,
             square_status,
+            grailed_status,
+            vestiaire_collective_status,
+            whatnot_status,
             loyverse_status,
             vinted_status,
             depop_status,
@@ -805,6 +819,9 @@ export default function SkuSearchPage() {
       linnworks_status: itemData?.linnworks_status || 'not_synced',
       shopify_status: itemData?.shopify_status || 'not_listed',
       square_status: itemData?.square_status || 'not_listed',
+      grailed_status: itemData?.grailed_status || 'not_listed',
+      vestiaire_collective_status: itemData?.vestiaire_collective_status || 'not_listed',
+      whatnot_status: itemData?.whatnot_status || 'not_listed',
       loyverse_status: itemData?.loyverse_status || 'not_listed',
       vinted_status: itemData?.vinted_status || 'not_listed',
       depop_status: itemData?.depop_status || 'not_listed',
@@ -1583,6 +1600,9 @@ export default function SkuSearchPage() {
           linnworks_status: 'not_synced',
           shopify_status: 'not_listed',
           square_status: 'not_listed',
+          grailed_status: 'not_listed',
+          vestiaire_collective_status: 'not_listed',
+          whatnot_status: 'not_listed',
           loyverse_status: 'not_listed',
           vinted_status: 'not_listed',
           depop_status: 'not_listed',

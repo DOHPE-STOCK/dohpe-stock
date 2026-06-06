@@ -1314,7 +1314,7 @@ export default function SettingsPage() {
           <SectionHeader
             section="integrations"
             title="Channel Integrations"
-            description="Manage Linnworks, eBay, Shopify, Vinted, Square, Loyverse, Depop and TikTok Shop sync settings."
+            description="Manage Linnworks, eBay, Shopify, Vinted, Square, Grailed, Vestiaire Collective, Whatnot, Depop and TikTok Shop sync settings."
             colour="blue"
           />
 
@@ -1971,6 +1971,18 @@ export default function SettingsPage() {
                 <div className="space-y-3">
                   {staffUsers.filter((user) => user.is_active !== false).map((user) => {
                     const staffPayroll = normalisePayrollStaffSettings(user.payroll_settings)
+                    const payRateHistoryTitle =
+                      staffPayroll.pay_rate_history.length > 0
+                        ? staffPayroll.pay_rate_history
+                            .map((entry) => {
+                              const dateLabel =
+                                entry.effective_date === '1900-01-01'
+                                  ? 'Previous rate'
+                                  : `From ${entry.effective_date}`
+                              return `${dateLabel}: GBP ${Number(entry.hourly_rate || 0).toFixed(2)}`
+                            })
+                            .join('\n')
+                        : 'No pay changes recorded yet.'
 
                     return (
                       <div
@@ -2031,10 +2043,39 @@ export default function SettingsPage() {
                           </div>
                           <p className="mt-1 text-[10px] font-bold text-zinc-500">
                             Per paid hour
-                            {staffPayroll.pay_rate_history.length > 0
+                            {false && staffPayroll.pay_rate_history.length > 0
                               ? ` · ${staffPayroll.pay_rate_history.length} rates`
                               : ''}
                           </p>
+                          {staffPayroll.pay_rate_history.length > 0 && (
+                            <div className="group relative mt-1 w-fit">
+                              <p
+                                className="text-[10px] font-bold text-zinc-500 underline decoration-dotted underline-offset-2"
+                                title={payRateHistoryTitle}
+                              >
+                                Pay changes
+                              </p>
+                              <div className="pointer-events-none absolute left-0 top-full z-30 mt-2 hidden min-w-56 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-[11px] font-bold text-zinc-200 shadow-2xl group-hover:block">
+                                <p className="mb-2 text-[10px] font-black uppercase text-zinc-500">
+                                  Pay changes
+                                </p>
+                                <div className="space-y-1">
+                                  {staffPayroll.pay_rate_history.map((entry) => (
+                                    <p key={`${entry.effective_date}-${entry.hourly_rate}`}>
+                                      <span className="text-zinc-400">
+                                        {entry.effective_date === '1900-01-01'
+                                          ? 'Previous rate'
+                                          : `From ${entry.effective_date}`}
+                                      </span>
+                                      <span className="ml-2 text-white">
+                                        GBP {Number(entry.hourly_rate || 0).toFixed(2)}
+                                      </span>
+                                    </p>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </label>
 
                         <label>
