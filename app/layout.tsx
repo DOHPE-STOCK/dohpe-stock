@@ -4,8 +4,8 @@ import { StaffProvider } from '@/app/context/StaffContext'
 import ThemeProvider from '@/app/components/ThemeProvider'
 
 export const metadata: Metadata = {
-  title: 'Dohpe Stock',
-  description: 'Dohpe stock management app',
+  title: 'Loopbase',
+  description: 'Loopbase retail operations platform',
 }
 
 export default function RootLayout({

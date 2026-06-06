@@ -373,7 +373,7 @@ export default function IntegrationsPanel() {
 
                   <Link
                     href={`/settings/integrations/${integration.channel}`}
-                    className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-800"
+                    className="rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2 text-sm font-black text-white hover:bg-neutral-800"
                   >
                     Configure
                   </Link>

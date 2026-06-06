@@ -1226,12 +1226,18 @@ export default function SettingsPage() {
                     onClick={() => changeSettingsSection(item.section)}
                     className={`w-full rounded-xl border p-3 text-left transition ${
                       selected
-                        ? 'border-emerald-500 bg-emerald-950 text-white'
+                        ? 'border-emerald-400 bg-emerald-700 text-white shadow-sm'
                         : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-600'
                     }`}
                   >
                     <span className="block text-sm font-black">{item.title}</span>
-                    <span className="mt-1 block text-xs font-bold text-zinc-500">{item.description}</span>
+                    <span
+                      className={`mt-1 block text-xs font-bold ${
+                        selected ? 'text-emerald-50' : 'text-zinc-500'
+                      }`}
+                    >
+                      {item.description}
+                    </span>
                   </button>
                 )
               })}
