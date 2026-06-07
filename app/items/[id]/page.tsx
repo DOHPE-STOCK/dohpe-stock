@@ -141,6 +141,32 @@ const allMeasurementFields = [
   'hem_width_in',
 ]
 
+const CHANNEL_UPDATE_REGISTRY = [
+  {
+    key: 'linnworks',
+    label: 'Linnworks',
+    statusField: 'linnworks_status',
+    updateHandler: 'linnworks',
+    liveStatuses: ['synced', 'active'],
+    isLive: (item: any) => item?.linnworks_managed === true || String(item?.linnworks_status || '').toLowerCase() === 'synced',
+  },
+  {
+    key: 'ebay',
+    label: 'eBay',
+    statusField: 'ebay_status',
+    updateHandler: 'ebay',
+    liveStatuses: ['listed', 'active'],
+  },
+  { key: 'shopify', label: 'Shopify', statusField: 'shopify_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'square', label: 'Square', statusField: 'square_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'grailed', label: 'Grailed', statusField: 'grailed_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'vestiaire_collective', label: 'Vestiaire Collective', statusField: 'vestiaire_collective_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'whatnot', label: 'Whatnot', statusField: 'whatnot_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'vinted', label: 'Vinted', statusField: 'vinted_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'depop', label: 'Depop', statusField: 'depop_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'tiktok_shop', label: 'TikTok Shop', statusField: 'tiktok_shop_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+] as const
+
 const measurementMap: Record<string, string[]> = {
   'T-Shirt': sleevedTopMeasurements,
   'Long Sleeve T-Shirt': sleevedTopMeasurements,
@@ -1187,11 +1213,132 @@ export default function ItemPage() {
     }
   }
 
-  async function saveItem() {
+  function exportedChannelsForItem(source: any) {
+    return CHANNEL_UPDATE_REGISTRY.filter((channel) => {
+      if ('isLive' in channel && channel.isLive?.(source)) return true
+      const status = text(source?.[channel.statusField]).toLowerCase()
+      return channel.liveStatuses.includes(status as any)
+    }).map((channel) => ({
+      key: channel.key,
+      label: channel.label,
+      supported: Boolean(channel.updateHandler),
+      updateHandler: channel.updateHandler,
+    }))
+  }
+
+  async function exportItemToEbay(itemToExport: any) {
+    setMessage(`Updating ${itemToExport.sku} on eBay...`)
+
+    await supabase
+      .from('items')
+      .update({
+        ebay_status: 'pending',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+
+    const readinessResponse = await fetch(
+      `/api/integrations/ebay/listing-readiness?sku=${encodeURIComponent(itemToExport.sku)}`
+    )
+    const readiness = await readinessResponse.json()
+    if (!readinessResponse.ok || !readiness?.ok) {
+      throw new Error(readiness?.message || 'eBay readiness check failed.')
+    }
+
+    const draftResponse = await fetch('/api/integrations/ebay/shadow-draft', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ readiness }),
+    })
+    const draft = await draftResponse.json()
+    if (!draftResponse.ok || !draft?.ok) {
+      throw new Error(draft?.message || 'Could not save eBay draft.')
+    }
+
+    const publishResponse = await fetch('/api/integrations/ebay/publish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sku: itemToExport.sku }),
+    })
+    const published = await publishResponse.json()
+    if (!publishResponse.ok || !published?.ok) {
+      throw new Error(published?.message || 'Could not update eBay listing.')
+    }
+
+    const exportedItem = {
+      ...itemToExport,
+      ebay_status: 'listed',
+      updated_at: new Date().toISOString(),
+    }
+
+    setEbayReadiness(readiness)
+    return exportedItem
+  }
+
+  async function offerExportUpdatesAfterFinalisedSave(savedItem: any, previouslyExportedChannels: ReturnType<typeof exportedChannelsForItem>) {
+    const supportedChannels = previouslyExportedChannels.filter((channel) => channel.supported)
+
+    if (supportedChannels.length === 0) return savedItem
+
+    const supportedText = supportedChannels.map((channel) => channel.label).join(', ')
+    const promptLines = [
+      `Saved ${savedItem.sku}.`,
+      '',
+      `Export updated details to: ${supportedText}?`,
+    ]
+
+    if (!window.confirm(promptLines.join('\n'))) {
+      return savedItem
+    }
+
+    let nextItem = savedItem
+    const results: string[] = []
+
+    for (const channel of supportedChannels) {
+      try {
+        if (channel.updateHandler === 'linnworks') {
+          nextItem = await exportItemToLinnworks(nextItem)
+        }
+
+        if (channel.updateHandler === 'ebay') {
+          nextItem = await exportItemToEbay(nextItem)
+        }
+
+        results.push(`${channel.label}: complete`)
+      } catch (error: any) {
+        if (channel.updateHandler === 'ebay') {
+          await supabase
+            .from('items')
+            .update({
+              ebay_status: 'failed',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', id)
+        }
+
+        results.push(`${channel.label}: failed - ${error.message || 'Unknown error'}`)
+      }
+    }
+
+    setItem(nextItem)
+    originalItemRef.current = nextItem
+    setHasUnsavedChanges(false)
+    window.alert(`Channel update export finished:\n\n${results.join('\n')}`)
+    setMessage(`Channel update export finished. ${results.join(' - ')}`)
+
+    return nextItem
+  }
+
+  async function saveItem(options: { promptChannelExport?: boolean } = {}) {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
       return null
     }
+
+    const previouslyExportedChannels =
+      options.promptChannelExport && text(originalItemRef.current?.status).toLowerCase() === 'finalised'
+        ? exportedChannelsForItem(originalItemRef.current)
+        : []
 
     const oldStockLevel = cleanNumber(originalItemRef.current?.stock_level)
     const newStockLevel = cleanNumber(item.stock_level)
@@ -1310,6 +1457,10 @@ export default function ItemPage() {
           ? `Saved by ${staff.name}. Linnworks stock sync queued.`
           : `Saved by ${staff.name}`
       )
+    }
+
+    if (options.promptChannelExport && previouslyExportedChannels.length > 0) {
+      return offerExportUpdatesAfterFinalisedSave(savedItem, previouslyExportedChannels)
     }
 
     return savedItem
@@ -1637,7 +1788,7 @@ export default function ItemPage() {
             </button>
 
             <button
-              onClick={saveItem}
+              onClick={() => saveItem({ promptChannelExport: true })}
               disabled={!staff || processingImages || exportingLinnworks}
               className="rounded-xl bg-green-600 px-5 py-2 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
             >
