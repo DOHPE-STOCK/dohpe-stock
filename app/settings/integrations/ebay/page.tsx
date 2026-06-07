@@ -28,6 +28,37 @@ type EbayPolicyOption = {
   name: string
 }
 
+type EbayInventoryLocationOption = {
+  merchantLocationKey: string
+  name?: string
+  merchantLocationStatus?: string
+  location?: {
+    address?: {
+      country?: string
+      postalCode?: string
+    }
+  }
+}
+
+function settingsFromInventoryLocation(
+  current: EbaySettings,
+  locations: EbayInventoryLocationOption[]
+): EbaySettings {
+  const selected =
+    locations.find((location) => location.merchantLocationKey === current.merchant_location_key) ||
+    locations[0]
+
+  if (!selected) return current
+
+  return {
+    ...current,
+    merchant_location_key: selected.merchantLocationKey || current.merchant_location_key,
+    merchant_location_name: selected.name || current.merchant_location_name,
+    merchant_location_country: selected.location?.address?.country || current.merchant_location_country,
+    merchant_location_postal_code: selected.location?.address?.postalCode || current.merchant_location_postal_code,
+  }
+}
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -244,11 +275,20 @@ export default function EbayIntegrationPage() {
       fulfillment: policyOptions(data, 'fulfillmentPolicies'),
       returns: policyOptions(data, 'returnPolicies'),
     }
-    const nextSettings = {
+    let nextSettings = {
       ...settings,
       payment_policy_id: pickPolicyId(nextPolicies.payment, settings.payment_policy_id),
       fulfillment_policy_id: pickPolicyId(nextPolicies.fulfillment, settings.fulfillment_policy_id),
       return_policy_id: pickPolicyId(nextPolicies.returns, settings.return_policy_id),
+    }
+
+    let locationCount = 0
+    const locationsResponse = await fetch('/api/integrations/ebay/inventory-location?list=1')
+    const locationsData = await locationsResponse.json()
+    if (locationsResponse.ok && locationsData.ok) {
+      const locations = Array.isArray(locationsData.locations) ? locationsData.locations : []
+      locationCount = locations.length
+      nextSettings = settingsFromInventoryLocation(nextSettings, locations)
     }
 
     setPolicies(nextPolicies)
@@ -269,7 +309,67 @@ export default function EbayIntegrationPage() {
       }
     }
 
-    setMessage('eBay business policies loaded and saved')
+    setMessage(
+      locationCount
+        ? `eBay business policies and ${locationCount} inventory location(s) loaded and saved.`
+        : 'eBay business policies loaded and saved. No eBay inventory locations were found.'
+    )
+  }
+
+  async function saveEbaySettingsForAction(nextSettings = settings) {
+    if (!integration) throw new Error('eBay integration settings are still loading.')
+
+    const { error } = await supabase
+      .from('integration_settings')
+      .update({
+        enabled,
+        auto_sync: autoSync,
+        settings: nextSettings,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', integration.id)
+
+    if (error) throw new Error(error.message)
+  }
+
+  async function checkInventoryLocation() {
+    try {
+      setMessage('Checking eBay inventory location...')
+      await saveEbaySettingsForAction()
+
+      const response = await fetch('/api/integrations/ebay/inventory-location')
+      const data = await response.json()
+
+      if (!response.ok || !data.ok) {
+        setMessage(data.message || 'Could not check eBay inventory location.')
+        return
+      }
+
+      setMessage(`eBay inventory location "${data.merchant_location_key}" exists and is ready.`)
+      fetchIntegration()
+    } catch (error: any) {
+      setMessage(error.message || 'Could not check eBay inventory location.')
+    }
+  }
+
+  async function createInventoryLocation() {
+    try {
+      setMessage('Creating/updating eBay inventory location...')
+      await saveEbaySettingsForAction()
+
+      const response = await fetch('/api/integrations/ebay/inventory-location', { method: 'POST' })
+      const data = await response.json()
+
+      if (!response.ok || !data.ok) {
+        setMessage(data.message || 'Could not create eBay inventory location.')
+        return
+      }
+
+      setMessage(data.message || `eBay inventory location "${data.merchant_location_key}" is ready.`)
+      fetchIntegration()
+    } catch (error: any) {
+      setMessage(error.message || 'Could not create eBay inventory location.')
+    }
   }
 
   async function pullCategoryMetadata(mapping: EbayCategoryMapping) {
@@ -705,18 +805,87 @@ export default function EbayIntegrationPage() {
             })}
 
             <label className="mt-4 block">
-              <span className="mb-1 block text-sm font-bold text-neutral-300">Merchant location key</span>
+              <span className="mb-1 block text-sm font-bold text-neutral-300">eBay location key</span>
               <input
                 value={settings.merchant_location_key}
                 onChange={(event) => updateSetting('merchant_location_key', event.target.value as any)}
-                placeholder="default"
+                placeholder="Pulled from eBay"
                 className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
               />
               <span className="mt-2 block text-xs font-bold leading-5 text-neutral-500">
-                This must match an eBay Inventory API merchant location key, for example default. It is not the same
-                as your app warehouse/shop location display name.
+                Use Pull from eBay to fill this from the connected seller account. Only type here when creating a new
+                eBay Inventory API location.
               </span>
             </label>
+
+            <label className="mt-4 block">
+              <span className="mb-1 block text-sm font-bold text-neutral-300">eBay location name</span>
+              <input
+                value={settings.merchant_location_name}
+                onChange={(event) => updateSetting('merchant_location_name', event.target.value as any)}
+                placeholder="Pulled from eBay"
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              />
+              <span className="mt-2 block text-xs font-bold leading-5 text-neutral-500">
+                Use Pull from eBay to fill this from the connected seller account, or enter a name when creating a new
+                dispatch location.
+              </span>
+            </label>
+
+            <div className="mt-5 rounded-xl border border-neutral-800 bg-neutral-950 p-4">
+              <h3 className="text-sm font-black uppercase tracking-wide text-neutral-300">Dispatch Location</h3>
+              <p className="mt-1 text-xs font-bold leading-5 text-neutral-500">
+                This should be the seller's dispatch location for the connected eBay account. For a warehouse location,
+                eBay requires country and postcode before live offers can be published.
+              </p>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr]">
+                <label>
+                  <span className="mb-1 block text-sm font-bold text-neutral-300">Dispatch country</span>
+                  <select
+                    value={settings.merchant_location_country}
+                    onChange={(event) => updateSetting('merchant_location_country', event.target.value as any)}
+                    className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                  >
+                    <option value="GB">United Kingdom (GB)</option>
+                    <option value="IE">Ireland (IE)</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-1 block text-sm font-bold text-neutral-300">Dispatch postcode</span>
+                  <input
+                    value={settings.merchant_location_postal_code}
+                    onChange={(event) => updateSetting('merchant_location_postal_code', event.target.value as any)}
+                    placeholder="AB12 3CD"
+                    className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={checkInventoryLocation}
+                className="rounded-lg border border-neutral-700 px-3 py-2 text-xs font-black text-white hover:border-neutral-500"
+              >
+                Check location
+              </button>
+
+              <button
+                type="button"
+                onClick={createInventoryLocation}
+                className="rounded-lg bg-green-600 px-3 py-2 text-xs font-black text-white hover:bg-green-500"
+              >
+                Create/update eBay location
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs font-bold leading-5 text-neutral-500">
+              Pull from eBay loads business policies and existing eBay inventory locations. Live publish uses the saved
+              eBay location key; if no location exists yet, enter a key, name, country, and postcode, then create it.
+            </p>
           </section>
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">

@@ -186,7 +186,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const merchantLocationKey = text(config.settings.merchant_location_key) || 'default'
+    const merchantLocationKey = text(config.settings.merchant_location_key)
+    if (!merchantLocationKey) {
+      throw new Error('Choose an eBay inventory location in eBay settings before sandbox publish.')
+    }
     const quantity = Math.max(1, number(draft.quantity))
     const price = number(draft.price)
     const imageUrls = Array.isArray(draft.image_urls) ? draft.image_urls.map(text).filter(Boolean) : []

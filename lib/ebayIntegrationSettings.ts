@@ -29,6 +29,9 @@ export type EbaySettings = {
   inventory_location_key: string
   listing_format: 'FIXED_PRICE' | 'AUCTION'
   merchant_location_key: string
+  merchant_location_name: string
+  merchant_location_country: string
+  merchant_location_postal_code: string
   payment_policy_id: string
   fulfillment_policy_id: string
   return_policy_id: string
@@ -169,7 +172,10 @@ export const DEFAULT_EBAY_SETTINGS: EbaySettings = {
   order_mode: 'linnworks_live_shadow_direct',
   inventory_location_key: 'LOCATION-1',
   listing_format: 'FIXED_PRICE',
-  merchant_location_key: 'default',
+  merchant_location_key: '',
+  merchant_location_name: '',
+  merchant_location_country: 'GB',
+  merchant_location_postal_code: '',
   payment_policy_id: '',
   fulfillment_policy_id: '',
   return_policy_id: '',

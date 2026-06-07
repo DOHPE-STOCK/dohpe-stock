@@ -191,7 +191,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const merchantLocationKey = text(config.settings.merchant_location_key) || 'default'
+    const merchantLocationKey = text(config.settings.merchant_location_key)
+    if (!merchantLocationKey) {
+      throw new Error('Choose an eBay inventory location in eBay settings before live publish.')
+    }
     const quantity = Math.max(1, number(draft.quantity))
     const price = number(draft.price)
     const imageUrls = Array.isArray(draft.image_urls) ? draft.image_urls.map(text).filter(Boolean) : []
@@ -313,10 +316,6 @@ export async function POST(request: NextRequest) {
       .from('items')
       .update({
         ebay_status: 'listed',
-        ebay_listing_id: listingId,
-        ebay_offer_id: offerId,
-        ebay_synced_at: new Date().toISOString(),
-        ebay_sync_error: null,
         updated_at: new Date().toISOString(),
       })
       .eq('sku', sku)

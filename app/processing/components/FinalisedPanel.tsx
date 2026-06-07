@@ -415,7 +415,6 @@ export default function FinalisedPanel({ embedded = false }: FinalisedPanelProps
           .from('items')
           .update({
             ebay_status: 'failed',
-            ebay_sync_error: error.message || 'Unknown eBay publish error.',
             updated_at: new Date().toISOString(),
           })
           .eq('id', item.id)
