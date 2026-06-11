@@ -15,6 +15,20 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -121,8 +135,13 @@ async function ensureInventoryLocation(settings: any, merchantLocationKey: strin
   }
 }
 
-async function saveDraftError(supabase: any, draftId: string, error: string) {
-  await supabase
+async function saveDraftError(
+  supabase: any,
+  draftId: string,
+  error: string,
+  companyId?: string | null
+) {
+  let query = supabase
     .from('ebay_listing_drafts')
     .update({
       status: 'publish_failed',
@@ -130,6 +149,12 @@ async function saveDraftError(supabase: any, draftId: string, error: string) {
       updated_at: new Date().toISOString(),
     })
     .eq('id', draftId)
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  await query
 }
 
 function withPublishResult(readiness: any, publish: any, offerId: string, environment: string) {
@@ -149,6 +174,7 @@ function withPublishResult(readiness: any, publish: any, offerId: string, enviro
 export async function POST(request: NextRequest) {
   const supabase = getSupabaseAdmin()
   let draftId = ''
+  let companyId: string | null = null
 
   try {
     const body = await request.json().catch(() => ({}))
@@ -158,7 +184,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, message: 'Missing sku.' }, { status: 400 })
     }
 
-    const config = await getEbayIntegrationConfig(supabase)
+    companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
 
     if (config.settings.listing_mode !== 'direct_publish') {
       return NextResponse.json(
@@ -167,12 +194,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { data: draft, error } = await supabase
+    let draftQuery = supabase
       .from('ebay_listing_drafts')
       .select('*')
       .eq('sku', sku)
       .eq('marketplace_id', config.settings.marketplace_id)
-      .maybeSingle()
+
+    if (companyId) {
+      draftQuery = draftQuery.eq('company_id', companyId)
+    }
+
+    const { data: draft, error } = await draftQuery.maybeSingle()
 
     if (error) throw new Error(error.message)
     if (!draft) {
@@ -282,7 +314,7 @@ export async function POST(request: NextRequest) {
 
     if (!offerId) throw new Error('eBay did not return an offerId.')
 
-    await supabase
+    let offerUpdateQuery = supabase
       .from('ebay_listing_drafts')
       .update({
         status: 'offer_created',
@@ -292,6 +324,12 @@ export async function POST(request: NextRequest) {
       })
       .eq('id', draft.id)
 
+    if (companyId) {
+      offerUpdateQuery = offerUpdateQuery.eq('company_id', companyId)
+    }
+
+    await offerUpdateQuery
+
     const publish = await ebayRequest(
       config.settings,
       `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`,
@@ -300,7 +338,7 @@ export async function POST(request: NextRequest) {
 
     const listingId = text(publish?.listingId) || null
 
-    await supabase
+    let publishUpdateQuery = supabase
       .from('ebay_listing_drafts')
       .update({
         status: config.settings.environment === 'sandbox' ? 'sandbox_published' : 'published',
@@ -312,13 +350,25 @@ export async function POST(request: NextRequest) {
       })
       .eq('id', draft.id)
 
-    await supabase
+    if (companyId) {
+      publishUpdateQuery = publishUpdateQuery.eq('company_id', companyId)
+    }
+
+    await publishUpdateQuery
+
+    let itemUpdateQuery = supabase
       .from('items')
       .update({
         ebay_status: 'listed',
         updated_at: new Date().toISOString(),
       })
       .eq('sku', sku)
+
+    if (companyId) {
+      itemUpdateQuery = itemUpdateQuery.eq('company_id', companyId)
+    }
+
+    await itemUpdateQuery
 
     return NextResponse.json({
       ok: true,
@@ -330,7 +380,7 @@ export async function POST(request: NextRequest) {
     })
   } catch (error: any) {
     const message = error.message || 'Could not publish eBay listing.'
-    if (draftId) await saveDraftError(supabase, draftId, message)
+    if (draftId) await saveDraftError(supabase, draftId, message, companyId)
 
     return NextResponse.json({ ok: false, message }, { status: 500 })
   }

@@ -101,12 +101,15 @@ export function mergeLinnworksSettings(settings: any): LinnworksSettings {
   }
 }
 
-export async function getLinnworksIntegrationConfig(supabase: any): Promise<LinnworksIntegrationConfig> {
-  const { data, error } = await supabase
+export async function getLinnworksIntegrationConfig(supabase: any, companyId?: string | null): Promise<LinnworksIntegrationConfig> {
+  let query = supabase
     .from('integration_settings')
     .select('id, enabled, auto_sync, connection_status, settings')
     .eq('channel', 'linnworks')
-    .maybeSingle()
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) throw new Error(error.message)
 

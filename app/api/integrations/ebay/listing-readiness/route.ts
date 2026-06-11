@@ -22,6 +22,20 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -138,8 +152,9 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
-    const { data: item, error } = await supabase
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
+    let itemQuery = supabase
       .from('items')
       .select(
         `id, sku, barcode_number, status, brand, reporting_category, sub_category, sub_type, item_type, gender,
@@ -150,7 +165,12 @@ export async function GET(request: NextRequest) {
         item_images(id, original_url, processed_url, image_order)`
       )
       .eq('sku', sku)
-      .maybeSingle()
+
+    if (companyId) {
+      itemQuery = itemQuery.eq('company_id', companyId)
+    }
+
+    const { data: item, error } = await itemQuery.maybeSingle()
 
     if (error) throw new Error(error.message)
     if (!item) return NextResponse.json({ ok: false, message: `No item found for SKU ${sku}.` }, { status: 404 })

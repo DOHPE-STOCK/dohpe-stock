@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 import { useStaff } from '@/app/context/StaffContext'
 import {
   findBestEbayCategoryMapping,
@@ -529,6 +530,7 @@ export default function ItemPage() {
   const params = useParams()
   const id = params.id as string
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [item, setItem] = useState<any>(null)
   const [message, setMessage] = useState('')
@@ -550,7 +552,7 @@ export default function ItemPage() {
 
   useEffect(() => {
     fetchItem()
-  }, [id])
+  }, [id, activeCompanyId, schemaReady])
 
   useEffect(() => {
     fetchSubCategoryOptions(item?.reporting_category)
@@ -572,11 +574,14 @@ export default function ItemPage() {
   }, [item?.sku])
 
   async function fetchItem() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('*')
       .eq('id', id)
-      .single()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.single()
 
     if (error) {
       setMessage(error.message)
@@ -596,12 +601,16 @@ export default function ItemPage() {
       return
     }
 
-    const { data } = await supabase
+    let query = supabase
       .from('items')
       .select('sub_category')
       .eq('reporting_category', selectedCategory)
       .not('sub_category', 'is', null)
       .limit(500)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data } = await query
 
     setSubCategoryOptions(
       Array.from(new Set((data || []).map((row: any) => text(row.sub_category)).filter(Boolean))).sort()
@@ -763,11 +772,14 @@ export default function ItemPage() {
   async function fetchMappedEbayCategory(source: any = item) {
     if (text(source?.ebay_category_id)) return null
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('integration_settings')
       .select('settings')
       .eq('channel', 'ebay')
-      .maybeSingle()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) throw new Error(error.message)
 
@@ -917,6 +929,7 @@ export default function ItemPage() {
         bin_code: binCode,
         stock_level: stockLevel,
         source: 'item_edit_stock_level',
+        company_id: schemaReady ? activeCompanyId : null,
       }),
     })
 
@@ -1155,6 +1168,7 @@ export default function ItemPage() {
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)
+        .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
       const response = await fetch('/api/integrations/linnworks/export-item', {
         method: 'POST',
@@ -1191,6 +1205,7 @@ export default function ItemPage() {
           updated_at: exportedItem.updated_at,
         })
         .eq('id', id)
+        .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
       if (updateError) {
         throw new Error(updateError.message)
@@ -1206,6 +1221,7 @@ export default function ItemPage() {
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)
+        .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
       throw error
     } finally {
@@ -1236,6 +1252,7 @@ export default function ItemPage() {
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
+      .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
     const readinessResponse = await fetch(
       `/api/integrations/ebay/listing-readiness?sku=${encodeURIComponent(itemToExport.sku)}`
@@ -1314,6 +1331,7 @@ export default function ItemPage() {
               updated_at: new Date().toISOString(),
             })
             .eq('id', id)
+            .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
         }
 
         results.push(`${channel.label}: failed - ${error.message || 'Unknown error'}`)
@@ -1397,6 +1415,7 @@ export default function ItemPage() {
       .from('items')
       .update(cleanedItem)
       .eq('id', id)
+      .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
     if (error) {
       setMessage(error.message)
@@ -1523,6 +1542,7 @@ export default function ItemPage() {
       .from('items')
       .update(updatedItem)
       .eq('id', id)
+      .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
     if (error) {
       setMessage(error.message)
@@ -1584,6 +1604,7 @@ export default function ItemPage() {
           .from('items')
           .update(updatedItem)
           .eq('id', id)
+          .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
         if (error) {
           setMessage(error.message)
@@ -1645,6 +1666,7 @@ export default function ItemPage() {
         .from('items')
         .update(updatedItem)
         .eq('id', id)
+        .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
 
       if (error) {
         setMessage(error.message)

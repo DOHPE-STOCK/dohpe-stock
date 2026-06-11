@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type ImportImage = {
   id: string
@@ -31,6 +32,7 @@ export default function PhotoImportGroupPage() {
   const params = useParams()
   const router = useRouter()
   const id = params.id as string
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [group, setGroup] = useState<ImportGroup | null>(null)
   const [images, setImages] = useState<ImportImage[]>([])
@@ -41,7 +43,7 @@ export default function PhotoImportGroupPage() {
 
   useEffect(() => {
     fetchGroup()
-  }, [id])
+  }, [id, activeCompanyId, schemaReady])
 
   const selectedImages = useMemo(
     () => images.filter((img) => selectedIds.includes(img.id)),
@@ -61,7 +63,7 @@ export default function PhotoImportGroupPage() {
     setBusy(true)
     setMessage('')
 
-    const { data: groupData, error: groupError } = await supabase
+    let groupQuery = supabase
       .from('photo_import_groups')
       .select(`
         id,
@@ -73,7 +75,10 @@ export default function PhotoImportGroupPage() {
         approved_at
       `)
       .eq('id', id)
-      .single()
+
+    if (schemaReady) groupQuery = groupQuery.eq('company_id', activeCompanyId)
+
+    const { data: groupData, error: groupError } = await groupQuery.single()
 
     if (groupError) {
       setBusy(false)
@@ -142,11 +147,14 @@ export default function PhotoImportGroupPage() {
   }
 
   async function findItemBySku(sku: string) {
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('id, sku')
       .eq('sku', sku)
-      .maybeSingle()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) {
       throw new Error(error.message)
@@ -171,6 +179,7 @@ export default function PhotoImportGroupPage() {
     const { data: createdItem, error: createError } = await supabase
       .from('items')
       .insert({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         sku,
         status: 'working',
         stock_level: 1,
@@ -203,14 +212,17 @@ export default function PhotoImportGroupPage() {
 
     const existingItem = await findItemBySku(sku)
 
-    const { data: existingGroup, error: existingGroupError } = await supabase
+    let existingGroupQuery = supabase
       .from('photo_import_groups')
       .select('id, sku, item_id, status')
       .eq('sku', sku)
       .eq('status', 'pending')
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle()
+
+    if (schemaReady) existingGroupQuery = existingGroupQuery.eq('company_id', activeCompanyId)
+
+    const { data: existingGroup, error: existingGroupError } = await existingGroupQuery.maybeSingle()
 
     if (existingGroupError) {
       throw new Error(existingGroupError.message)
@@ -223,6 +235,7 @@ export default function PhotoImportGroupPage() {
     const { data: createdGroup, error: createGroupError } = await supabase
       .from('photo_import_groups')
       .insert({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         batch_id: group.batch_id,
         sku,
         item_id: existingItem?.id || null,
@@ -288,13 +301,17 @@ export default function PhotoImportGroupPage() {
       for (let index = 0; index < sortedSelected.length; index++) {
         const image = sortedSelected[index]
 
-        const { error: updateError } = await supabase
+        let updateQuery = supabase
           .from('photo_import_images')
           .update({
             group_id: targetGroup.id,
             sort_order: startingOrder + index,
           })
           .eq('id', image.id)
+
+        if (schemaReady) updateQuery = updateQuery.eq('company_id', activeCompanyId)
+
+        const { error: updateError } = await updateQuery
 
         if (updateError) {
           throw new Error(updateError.message)
@@ -352,6 +369,7 @@ export default function PhotoImportGroupPage() {
         .filter((img) => !img.is_barcode_frame)
         .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
         .map((img, index) => ({
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           item_id: item.id,
           original_url: img.file_url,
           processed_url: img.file_url,
@@ -372,7 +390,7 @@ export default function PhotoImportGroupPage() {
 
       const approvedAt = new Date().toISOString()
 
-      const { error: groupError } = await supabase
+      let groupUpdateQuery = supabase
         .from('photo_import_groups')
         .update({
           item_id: item.id,
@@ -380,6 +398,10 @@ export default function PhotoImportGroupPage() {
           approved_at: approvedAt,
         })
         .eq('id', group.id)
+
+      if (schemaReady) groupUpdateQuery = groupUpdateQuery.eq('company_id', activeCompanyId)
+
+      const { error: groupError } = await groupUpdateQuery
 
       if (groupError) {
         throw new Error(groupError.message)
@@ -406,10 +428,14 @@ export default function PhotoImportGroupPage() {
     setBusy(true)
     setMessage('Rejecting group...')
 
-    const { error } = await supabase
+    let rejectQuery = supabase
       .from('photo_import_groups')
       .update({ status: 'rejected' })
       .eq('id', group.id)
+
+    if (schemaReady) rejectQuery = rejectQuery.eq('company_id', activeCompanyId)
+
+    const { error } = await rejectQuery
 
     setBusy(false)
 

@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
 
 const DEFAULT_BIN = 'Default'
 type ReceiveChoice = {
@@ -168,6 +169,7 @@ export default function TransferDetailPage() {
   const params = useParams()
   const id = params.id as string
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [transfer, setTransfer] = useState<Transfer | null>(null)
   const [locationConfigs, setLocationConfigs] = useState<LocationConfig[]>([])
@@ -179,7 +181,7 @@ export default function TransferDetailPage() {
   useEffect(() => {
     fetchTransfer()
     fetchLocationConfigs()
-  }, [id])
+  }, [id, activeCompanyId, schemaReady])
 
   useEffect(() => {
     if (!transfer || receiveLocation) return
@@ -187,10 +189,14 @@ export default function TransferDetailPage() {
   }, [transfer, locationConfigs, receiveLocation])
 
   async function fetchLocationConfigs() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('locations')
       .select('name, label, is_active, bin_mode, basic_bins')
       .eq('is_active', true)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (!error) {
       setLocationConfigs(configuredLocationRows((data || []) as LocationConfig[]))
@@ -352,7 +358,7 @@ export default function TransferDetailPage() {
     setLoading(true)
     setMessage('')
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('stock_transfers')
       .select(`
         id,
@@ -391,7 +397,10 @@ export default function TransferDetailPage() {
         )
       `)
       .eq('id', id)
-      .single()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.single()
 
     setLoading(false)
 
@@ -421,10 +430,14 @@ export default function TransferDetailPage() {
 
     if (uniqueSkus.length === 0) return new Map<string, StockItemRow>()
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('id, sku, sku_type, current_location, current_bin')
       .in('sku', uniqueSkus)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) throw new Error(error.message)
 
@@ -457,6 +470,7 @@ export default function TransferDetailPage() {
         delta: params.delta,
         allow_missing_source: params.allowMissingSource,
         source: 'app_transfer',
+        company_id: schemaReady ? activeCompanyId : null,
       }),
     })
 
@@ -516,6 +530,7 @@ export default function TransferDetailPage() {
 
       queueRows.push(
         {
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           item_id: item.id,
           sku,
           action: 'adjust_stock',
@@ -535,6 +550,7 @@ export default function TransferDetailPage() {
           status: 'pending',
         },
         {
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           item_id: item.id,
           sku,
           action: 'adjust_stock',
@@ -613,7 +629,7 @@ export default function TransferDetailPage() {
         destinationLocation: receiveChoice.location,
       })
 
-      const { error: transferItemsError } = await supabase
+      let transferItemsQuery = supabase
         .from('stock_transfer_items')
         .update({
           status: 'received',
@@ -621,10 +637,14 @@ export default function TransferDetailPage() {
         })
         .in('id', transferItemIds)
 
+      if (schemaReady) transferItemsQuery = transferItemsQuery.eq('company_id', activeCompanyId)
+
+      const { error: transferItemsError } = await transferItemsQuery
+
       if (transferItemsError) throw new Error(transferItemsError.message)
 
       if (singleUseItemIds.length > 0) {
-        const { error: itemsError } = await supabase
+        let itemsQuery = supabase
           .from('items')
           .update({
             location_status: 'received',
@@ -636,11 +656,16 @@ export default function TransferDetailPage() {
           })
           .in('id', singleUseItemIds)
 
+        if (schemaReady) itemsQuery = itemsQuery.eq('company_id', activeCompanyId)
+
+        const { error: itemsError } = await itemsQuery
+
         if (itemsError) throw new Error(itemsError.message)
 
         const queueRows = receivableItems
           .filter((item) => item.item_id && !reusableSkus.has(text(item.sku).toUpperCase()))
           .map((item) => ({
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             item_id: item.item_id,
             sku: item.sku,
             action: 'update_location',
@@ -666,7 +691,7 @@ export default function TransferDetailPage() {
         }
       }
 
-      const { error: transferError } = await supabase
+      let transferQuery = supabase
         .from('stock_transfers')
         .update({
           status: 'received',
@@ -675,6 +700,10 @@ export default function TransferDetailPage() {
           to_location: receiveChoice.location,
         })
         .eq('id', transfer.id)
+
+      if (schemaReady) transferQuery = transferQuery.eq('company_id', activeCompanyId)
+
+      const { error: transferError } = await transferQuery
 
       if (transferError) throw new Error(transferError.message)
 

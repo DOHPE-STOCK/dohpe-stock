@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 import { useStaff } from '@/app/context/StaffContext'
 import FinalisedPanel from '@/app/processing/components/FinalisedPanel'
 import InboundPanel from '@/app/processing/components/InboundPanel'
@@ -68,6 +69,7 @@ function text(value: any) {
 
 export default function ProcessingPage() {
   const { can } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
   const [activeStage, setActiveStage] = useState<ProcessingStage>('inbound')
   const [items, setItems] = useState<ProcessingItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -76,7 +78,7 @@ export default function ProcessingPage() {
 
   useEffect(() => {
     fetchProcessingItems()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
     function refreshOnFocus() {
@@ -104,7 +106,7 @@ export default function ProcessingPage() {
     setLoading(true)
     setMessage('')
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select(
         `id, sku, brand, reporting_category, sub_category, item_type, status, stock_level,
@@ -112,6 +114,10 @@ export default function ProcessingPage() {
       )
       .in('status', ['working', 'review', 'finalised'])
       .order('updated_at', { ascending: false })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -144,6 +150,8 @@ export default function ProcessingPage() {
     if (activeStage === 'inbound') {
       return (
         <InboundPanel
+          activeCompanyId={activeCompanyId}
+          schemaReady={schemaReady}
           onOpenReceiving={(batchId) => {
             setReceivingBatchId(batchId)
             setActiveStage('receiving')
@@ -153,12 +161,37 @@ export default function ProcessingPage() {
     }
 
     if (activeStage === 'receiving') {
-      return <ReceivingPanel selectedBatchId={receivingBatchId} onChanged={fetchProcessingItems} />
+      return (
+        <ReceivingPanel
+          activeCompanyId={activeCompanyId}
+          schemaReady={schemaReady}
+          selectedBatchId={receivingBatchId}
+          onChanged={fetchProcessingItems}
+        />
+      )
     }
 
-    if (activeStage === 'working') return <WorkingPanel embedded onChanged={fetchProcessingItems} />
-    if (activeStage === 'review') return <ReviewPanel embedded onChanged={fetchProcessingItems} />
-    return <FinalisedPanel embedded />
+    if (activeStage === 'working') {
+      return (
+        <WorkingPanel
+          activeCompanyId={activeCompanyId}
+          schemaReady={schemaReady}
+          embedded
+          onChanged={fetchProcessingItems}
+        />
+      )
+    }
+    if (activeStage === 'review') {
+      return (
+        <ReviewPanel
+          activeCompanyId={activeCompanyId}
+          schemaReady={schemaReady}
+          embedded
+          onChanged={fetchProcessingItems}
+        />
+      )
+    }
+    return <FinalisedPanel activeCompanyId={activeCompanyId} schemaReady={schemaReady} embedded />
   }
 
   return (
@@ -176,21 +209,11 @@ export default function ProcessingPage() {
             <AppNav current="processing" />
           </div>
 
-          <div className="flex items-center gap-3">
-            {message && (
-              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-                {message}
-              </span>
-            )}
-
-            <button
-              type="button"
-              onClick={fetchProcessingItems}
-              className="rounded-xl bg-white px-5 py-2 text-sm font-black text-black hover:bg-zinc-200"
-            >
-              Refresh
-            </button>
-          </div>
+          {message && (
+            <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+              {message}
+            </span>
+          )}
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[260px_1fr]">

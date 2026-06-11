@@ -19,6 +19,20 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -145,10 +159,11 @@ function fulfilmentPolicyBody(settings: any, name: string) {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const settings = config.settings
 
     if (settings.environment !== 'sandbox') {

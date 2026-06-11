@@ -4,9 +4,15 @@ import { useEffect, useRef, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
+import { supabase } from '@/lib/supabase'
 
-const shopLocations = ['SHOP-1', 'SHOP-2', 'SHOP-3']
 const sourceBins = ['STOCK', 'FLOOR']
+
+type ShopLocationOption = {
+  value: string
+  label: string
+}
 
 function clean(value: any) {
   if (value === null || value === undefined) return ''
@@ -16,8 +22,14 @@ function clean(value: any) {
 export default function OnlinePickScannerPage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
-  const [fromLocation, setFromLocation] = useState('SHOP-1')
+  const [shopLocations, setShopLocations] = useState<ShopLocationOption[]>([
+    { value: 'LOCATION-2', label: 'SHOP-1' },
+    { value: 'LOCATION-3', label: 'SHOP-2' },
+    { value: 'LOCATION-4', label: 'SHOP-3' },
+  ])
+  const [fromLocation, setFromLocation] = useState('LOCATION-2')
   const [sourceBin, setSourceBin] = useState('STOCK')
   const [sku, setSku] = useState('')
   const [message, setMessage] = useState('')
@@ -27,6 +39,41 @@ export default function OnlinePickScannerPage() {
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    loadShopLocations()
+  }, [activeCompanyId, schemaReady])
+
+  async function loadShopLocations() {
+    let query = supabase
+      .from('locations')
+      .select('name, label, is_active')
+      .eq('is_active', true)
+      .neq('name', 'LOCATION-1')
+      .order('name', { ascending: true })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
+
+    if (error) return
+
+    const nextLocations = (data || [])
+      .map((row: any) => ({
+        value: clean(row.name).toUpperCase(),
+        label: clean(row.label) || clean(row.name).toUpperCase(),
+      }))
+      .filter((row) => row.value)
+
+    if (nextLocations.length === 0) return
+
+    setShopLocations(nextLocations)
+    setFromLocation((current) =>
+      nextLocations.some((location) => location.value === current)
+        ? current
+        : nextLocations[0].value
+    )
+  }
 
   async function markPicked(rawSku?: string) {
     const cleanSku = clean(rawSku || sku).toUpperCase()
@@ -100,8 +147,8 @@ export default function OnlinePickScannerPage() {
                 className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-xl font-black outline-none"
               >
                 {shopLocations.map((location) => (
-                  <option key={location} value={location}>
-                    {location}
+                  <option key={location.value} value={location.value}>
+                    {location.label}
                   </option>
                 ))}
               </select>

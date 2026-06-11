@@ -74,9 +74,24 @@ function getActiveStaffFromRequest(request: Request) {
   }
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 async function requireCheckoutPermission(
   request: Request,
-  supabase: any
+  supabase: any,
+  companyId?: string | null
 ): Promise<AccessResult> {
   const staffCookie = getActiveStaffFromRequest(request)
 
@@ -84,11 +99,16 @@ async function requireCheckoutPermission(
     return { ok: false, status: 401, message: 'Staff PIN required.' }
   }
 
-  const { data: staff, error } = await supabase
+  let staffQuery = supabase
     .from('staff_users')
     .select('id, name, role, permissions, is_active')
     .eq('id', staffCookie.id)
-    .maybeSingle()
+
+  if (companyId) {
+    staffQuery = staffQuery.eq('company_id', companyId)
+  }
+
+  const { data: staff, error } = await staffQuery.maybeSingle()
 
   if (error) throw new Error(error.message)
 
@@ -108,12 +128,13 @@ async function requireCheckoutPermission(
 
 async function requirePosAccess(
   request: Request,
-  supabase: any
+  supabase: any,
+  companyId?: string | null
 ): Promise<AccessResult> {
   const login = await requireAppLogin()
   if (!login.ok) return login
 
-  const staffAccess = await requireCheckoutPermission(request, supabase)
+  const staffAccess = await requireCheckoutPermission(request, supabase, companyId)
   if (!staffAccess.ok) return staffAccess
 
   return { ok: true, user: login.user, staff: staffAccess.staff }
@@ -144,12 +165,17 @@ function canonical(value: any) {
   return text(value).toUpperCase()
 }
 
-async function loadLocationMappings(supabase: any): Promise<LocationMappings> {
-  const { data, error } = await supabase
+async function loadLocationMappings(supabase: any, companyId?: string | null): Promise<LocationMappings> {
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('channel', 'linnworks')
-    .maybeSingle()
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) return DEFAULT_LOCATION_MAPPINGS
 
@@ -198,13 +224,17 @@ function mapIncomingLocationToAppLocation(
   return displayMatch?.[0] || key
 }
 
-async function existingSaleCheck(supabase: any, sale: any) {
+async function existingSaleCheck(supabase: any, sale: any, companyId?: string | null) {
   const saleId = text(sale?.id)
   const saleNumber = text(sale?.sale_number)
 
   if (!saleId && !saleNumber) return null
 
   let query = supabase.from('pos_sales').select('id, sale_number').limit(1)
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
 
   if (saleId && saleNumber) {
     query = query.or(`id.eq.${saleId},sale_number.eq.${saleNumber}`)
@@ -221,14 +251,20 @@ async function existingSaleCheck(supabase: any, sale: any) {
   return data
 }
 
-async function recalcItemTotalStock(supabase: any, sku: string) {
+async function recalcItemTotalStock(supabase: any, sku: string, companyId?: string | null) {
   const cleanSku = text(sku).toUpperCase()
   if (!cleanSku) return
 
-  const { data: stockRows, error: stockError } = await supabase
+  let stockQuery = supabase
     .from('item_stock_locations')
     .select('stock_level')
     .eq('sku', cleanSku)
+
+  if (companyId) {
+    stockQuery = stockQuery.eq('company_id', companyId)
+  }
+
+  const { data: stockRows, error: stockError } = await stockQuery
 
   if (stockError) {
     throw new Error(`stock total read failed for ${cleanSku}: ${stockError.message}`)
@@ -239,7 +275,7 @@ async function recalcItemTotalStock(supabase: any, sku: string) {
     0
   )
 
-  const { error: itemError } = await supabase
+  let itemQuery = supabase
     .from('items')
     .update({
       stock_level: totalStock,
@@ -247,12 +283,22 @@ async function recalcItemTotalStock(supabase: any, sku: string) {
     })
     .eq('sku', cleanSku)
 
+  if (companyId) {
+    itemQuery = itemQuery.eq('company_id', companyId)
+  }
+
+  const { error: itemError } = await itemQuery
+
   if (itemError) {
     throw new Error(`item stock total update failed for ${cleanSku}: ${itemError.message}`)
   }
 }
 
-async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) {
+async function applyLocalFirstStockAdjustments(
+  supabase: any,
+  queueRows: any[],
+  companyId?: string | null
+) {
   const warnings: string[] = []
 
   const localRows = queueRows.filter((queueRow) => {
@@ -271,7 +317,7 @@ async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) 
     return { adjusted: 0, warnings }
   }
 
-  const mappings = await loadLocationMappings(supabase)
+  const mappings = await loadLocationMappings(supabase, companyId)
   const touchedSkus = new Set<string>()
   let adjusted = 0
 
@@ -291,13 +337,18 @@ async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) 
       const targetLocation = requestedLocation || 'LOCATION-1'
       const targetBin = targetLocation === 'LOCATION-1' ? 'Default' : 'FLOOR'
 
-      const { data: existingRow, error: readError } = await supabase
+      let readQuery = supabase
         .from('item_stock_locations')
         .select('id, stock_level')
         .eq('sku', sku)
         .eq('location_name', targetLocation)
         .eq('bin_code', targetBin)
-        .maybeSingle()
+
+      if (companyId) {
+        readQuery = readQuery.eq('company_id', companyId)
+      }
+
+      const { data: existingRow, error: readError } = await readQuery.maybeSingle()
 
       if (readError) {
         warnings.push(`${sku}: local positive stock read failed: ${readError.message}`)
@@ -319,11 +370,16 @@ async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) 
           continue
         }
       } else {
-        const { data: item, error: itemError } = await supabase
+        let itemQuery = supabase
           .from('items')
           .select('id')
           .eq('sku', sku)
-          .maybeSingle()
+
+        if (companyId) {
+          itemQuery = itemQuery.eq('company_id', companyId)
+        }
+
+        const { data: item, error: itemError } = await itemQuery.maybeSingle()
 
         if (itemError || !item?.id) {
           warnings.push(`${sku}: item lookup failed for local positive stock.`)
@@ -333,6 +389,7 @@ async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) 
         const { error: insertError } = await supabase
           .from('item_stock_locations')
           .insert({
+            ...(companyId ? { company_id: companyId } : {}),
             item_id: item.id,
             sku,
             location_name: targetLocation,
@@ -369,13 +426,18 @@ async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) 
     for (const candidate of candidateLocations) {
       if (remainingToDeduct <= 0) break
 
-      const { data: stockRow, error: readError } = await supabase
+      let stockQuery = supabase
         .from('item_stock_locations')
         .select('id, stock_level')
         .eq('sku', sku)
         .eq('location_name', candidate.location_name)
         .eq('bin_code', candidate.bin_code)
-        .maybeSingle()
+
+      if (companyId) {
+        stockQuery = stockQuery.eq('company_id', companyId)
+      }
+
+      const { data: stockRow, error: readError } = await stockQuery.maybeSingle()
 
       if (readError) {
         warnings.push(`${sku}: stock read failed at ${candidate.location_name}/${candidate.bin_code}: ${readError.message}`)
@@ -417,7 +479,7 @@ async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) 
 
   for (const sku of touchedSkus) {
     try {
-      await recalcItemTotalStock(supabase, sku)
+      await recalcItemTotalStock(supabase, sku, companyId)
     } catch (error: any) {
       warnings.push(`${sku}: total stock recalc failed: ${error.message}`)
     }
@@ -426,7 +488,11 @@ async function applyLocalFirstStockAdjustments(supabase: any, queueRows: any[]) 
   return { adjusted, warnings }
 }
 
-async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
+async function insertQueueRowsIdempotently(
+  supabase: any,
+  queueRows: any[],
+  companyId?: string | null
+) {
   let inserted = 0
   let skipped = 0
 
@@ -444,7 +510,7 @@ async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
       continue
     }
 
-    const { data: existing, error: existingError } = await supabase
+    let existingQuery = supabase
       .from('linnworks_sync_queue')
       .select('id')
       .eq('sku', sku)
@@ -453,6 +519,12 @@ async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
       .eq('payload->>reason', reason)
       .eq('payload->>delta', delta)
       .limit(1)
+
+    if (companyId) {
+      existingQuery = existingQuery.eq('company_id', companyId)
+    }
+
+    const { data: existing, error: existingError } = await existingQuery
 
     if (existingError) {
       throw new Error(`queue duplicate check failed: ${existingError.message}`)
@@ -477,7 +549,7 @@ async function insertQueueRowsIdempotently(supabase: any, queueRows: any[]) {
   return { inserted, skipped }
 }
 
-async function validateRefundLines(supabase: any, lines: any[]) {
+async function validateRefundLines(supabase: any, lines: any[], companyId?: string | null) {
   const refundLines = lines.filter((line: any) => text(line.original_line_id))
   if (refundLines.length === 0) return
 
@@ -502,10 +574,16 @@ async function validateRefundLines(supabase: any, lines: any[]) {
   const originalLineIds = Array.from(refundByOriginalLineId.keys())
   if (originalLineIds.length === 0) return
 
-  const { data: originalLines, error } = await supabase
+  let originalLinesQuery = supabase
     .from('pos_sale_lines')
     .select('id, quantity, refunded_quantity, max_refundable_quantity, sku')
     .in('id', originalLineIds)
+
+  if (companyId) {
+    originalLinesQuery = originalLinesQuery.eq('company_id', companyId)
+  }
+
+  const { data: originalLines, error } = await originalLinesQuery
 
   if (error) throw new Error(`refund validation read failed: ${error.message}`)
 
@@ -542,7 +620,7 @@ async function validateRefundLines(supabase: any, lines: any[]) {
   }
 }
 
-async function updateRefundQuantitiesSafely(supabase: any, lines: any[]) {
+async function updateRefundQuantitiesSafely(supabase: any, lines: any[], companyId?: string | null) {
   const refundLines = lines.filter((line: any) => text(line.original_line_id))
   if (refundLines.length === 0) return
 
@@ -561,11 +639,16 @@ async function updateRefundQuantitiesSafely(supabase: any, lines: any[]) {
   }
 
   for (const [originalLineId, qty] of refundByOriginalLineId.entries()) {
-    const { data: originalLine, error: readError } = await supabase
+    let originalLineQuery = supabase
       .from('pos_sale_lines')
       .select('id, quantity, refunded_quantity, max_refundable_quantity, sku')
       .eq('id', originalLineId)
-      .maybeSingle()
+
+    if (companyId) {
+      originalLineQuery = originalLineQuery.eq('company_id', companyId)
+    }
+
+    const { data: originalLine, error: readError } = await originalLineQuery.maybeSingle()
 
     if (readError) throw new Error(`refund read failed: ${readError.message}`)
 
@@ -590,11 +673,17 @@ async function updateRefundQuantitiesSafely(supabase: any, lines: any[]) {
       )
     }
 
-    const { error: updateError } = await supabase
+    let updateQuery = supabase
       .from('pos_sale_lines')
       .update({ refunded_quantity: nextRefundedQty })
       .eq('id', originalLineId)
       .lte('refunded_quantity', allowedTotalRefunded - qty)
+
+    if (companyId) {
+      updateQuery = updateQuery.eq('company_id', companyId)
+    }
+
+    const { error: updateError } = await updateQuery
 
     if (updateError) {
       throw new Error(`refund quantity update failed: ${updateError.message}`)
@@ -605,12 +694,18 @@ async function updateRefundQuantitiesSafely(supabase: any, lines: any[]) {
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
+    const requestCompanyId = getActiveCompanyIdFromRequest(request)
 
-    const access = await requirePosAccess(request, supabase)
+    const access = await requirePosAccess(request, supabase, requestCompanyId)
     if (!access.ok) return accessDeniedResponse(access)
 
     const tx = await request.json()
     const { lines, queueRows, ...sale } = tx
+    const activeCompanyId = requestCompanyId || sale.company_id
+
+    if (activeCompanyId) {
+      sale.company_id = activeCompanyId
+    }
 
     if (!sale?.id || !sale?.sale_number) {
       return NextResponse.json(
@@ -619,8 +714,14 @@ export async function POST(request: Request) {
       )
     }
 
-    const safeLines = Array.isArray(lines) ? lines : []
-    const safeQueueRows = Array.isArray(queueRows) ? queueRows : []
+    const safeLines = (Array.isArray(lines) ? lines : []).map((line) => ({
+      ...(activeCompanyId ? { company_id: activeCompanyId } : {}),
+      ...line,
+    }))
+    const safeQueueRows = (Array.isArray(queueRows) ? queueRows : []).map((queueRow) => ({
+      ...(activeCompanyId ? { company_id: activeCompanyId } : {}),
+      ...queueRow,
+    }))
 
     if (numberValue(sale.total) > 0 && safeLines.length === 0) {
       return NextResponse.json(
@@ -633,7 +734,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const existingSale = await existingSaleCheck(supabase, sale)
+    const existingSale = await existingSaleCheck(supabase, sale, activeCompanyId)
 
     if (existingSale) {
       return NextResponse.json({
@@ -650,7 +751,7 @@ export async function POST(request: Request) {
       })
     }
 
-    await validateRefundLines(supabase, safeLines)
+    await validateRefundLines(supabase, safeLines, activeCompanyId)
 
     const { error: saleError } = await supabase.from('pos_sales').insert(sale)
     if (saleError) throw new Error(`pos_sales insert failed: ${saleError.message}`)
@@ -666,16 +767,17 @@ export async function POST(request: Request) {
       }
     }
 
-    await updateRefundQuantitiesSafely(supabase, safeLines)
+    await updateRefundQuantitiesSafely(supabase, safeLines, activeCompanyId)
 
     const localStockResult = await applyLocalFirstStockAdjustments(
       supabase,
-      safeQueueRows
+      safeQueueRows,
+      activeCompanyId
     )
 
     const queueResult =
       safeQueueRows.length > 0
-        ? await insertQueueRowsIdempotently(supabase, safeQueueRows)
+        ? await insertQueueRowsIdempotently(supabase, safeQueueRows, activeCompanyId)
         : { inserted: 0, skipped: 0 }
 
     return NextResponse.json({

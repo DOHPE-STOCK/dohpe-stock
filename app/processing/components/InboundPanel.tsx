@@ -25,6 +25,8 @@ type InboundBatch = {
 }
 
 type InboundPanelProps = {
+  activeCompanyId?: string
+  schemaReady?: boolean
   onOpenReceiving?: (batchId: string) => void
 }
 
@@ -93,7 +95,11 @@ const linkedCategoryOptions = [
   'Other',
 ]
 
-export default function InboundPanel({ onOpenReceiving }: InboundPanelProps) {
+export default function InboundPanel({
+  activeCompanyId = '',
+  schemaReady = false,
+  onOpenReceiving,
+}: InboundPanelProps) {
   const { staff } = useStaff()
   const [batches, setBatches] = useState<InboundBatch[]>([])
   const [categoryOptions, setCategoryOptions] = useState<string[]>([])
@@ -122,7 +128,7 @@ export default function InboundPanel({ onOpenReceiving }: InboundPanelProps) {
   useEffect(() => {
     fetchBatches()
     fetchCategoryOptions()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   const costSummary = useMemo(() => {
     const expectedQuantity = Number(form.expected_quantity) || 0
@@ -159,10 +165,14 @@ export default function InboundPanel({ onOpenReceiving }: InboundPanelProps) {
   }, [form.default_reporting_category, subCategoryRows])
 
   async function fetchCategoryOptions() {
-    const { data } = await supabase
+    let query = supabase
       .from('items')
       .select('reporting_category, sub_category, item_type')
       .limit(3000)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data } = await query
 
     const rows = data || []
     setCategoryOptions(
@@ -183,11 +193,15 @@ export default function InboundPanel({ onOpenReceiving }: InboundPanelProps) {
 
   async function fetchBatches() {
     setMessage('')
-    const { data, error } = await supabase
+    let query = supabase
       .from('inbound_batches')
       .select('*')
       .order('created_at', { ascending: false })
       .limit(30)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -233,6 +247,7 @@ export default function InboundPanel({ onOpenReceiving }: InboundPanelProps) {
     const { data, error } = await supabase
       .from('inbound_batches')
       .insert({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         batch_code: makeBatchCode(),
         supplier_name: text(form.supplier_name) || null,
         order_reference: text(form.order_reference) || null,

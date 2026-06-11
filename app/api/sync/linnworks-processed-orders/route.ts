@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
+import { getEnabledIntegrationCompanies } from '@/lib/tenantCronCompanies'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,6 +26,7 @@ let activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
 
 type TrackedSale = {
   id: string
+  company_id?: string | null
   linnworks_order_id: string | null
   sku: string | null
   current_status: string | null
@@ -43,11 +45,15 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
-async function loadLocationMappings(supabase: any) {
-  const { data, error } = await supabase
+async function loadLocationMappings(supabase: any, companyId?: string) {
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('channel', 'linnworks')
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
     .maybeSingle()
 
   if (error) return DEFAULT_LOCATION_MAPPINGS
@@ -378,14 +384,18 @@ function orderLooksProcessed(order: any) {
 
 async function getTrackedOpenSales(
   supabase: any,
-  limit: number
+  limit: number,
+  companyId?: string
 ): Promise<TrackedSale[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from('linnworks_processed_sales')
-    .select('id, linnworks_order_id, sku, current_status, stock_deducted, stock_deductions')
+    .select('id, company_id, linnworks_order_id, sku, current_status, stock_deducted, stock_deductions')
     .eq('stock_deducted', true)
     .not('current_status', 'in', '(processed,cancelled)')
-    .limit(limit)
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query.limit(limit)
 
   if (error) throw new Error(error.message)
 
@@ -465,18 +475,22 @@ async function restoreAppStockLocation(params: {
   locationName: string
   binCode: string
   quantity: number
+  companyId?: string
 }) {
   const locationName = appStorageLocation(params.locationName)
   const binCode = normaliseText(params.binCode) || WAREHOUSE_BIN
   const now = new Date().toISOString()
 
-  const { data, error } = await params.supabase
+  let existingQuery = params.supabase
     .from('item_stock_locations')
     .select('id, stock_level')
     .eq('item_id', params.itemId)
     .eq('location_name', locationName)
     .eq('bin_code', binCode)
-    .limit(1)
+
+  if (params.companyId) existingQuery = existingQuery.eq('company_id', params.companyId)
+
+  const { data, error } = await existingQuery.limit(1)
 
   if (error) throw new Error(error.message)
 
@@ -484,7 +498,7 @@ async function restoreAppStockLocation(params: {
   const nextStock = Number(existing?.stock_level || 0) + params.quantity
 
   if (existing) {
-    const { error: updateError } = await params.supabase
+    let updateQuery = params.supabase
       .from('item_stock_locations')
       .update({
         stock_level: nextStock,
@@ -493,6 +507,10 @@ async function restoreAppStockLocation(params: {
       })
       .eq('id', existing.id)
 
+    if (params.companyId) updateQuery = updateQuery.eq('company_id', params.companyId)
+
+    const { error: updateError } = await updateQuery
+
     if (updateError) throw new Error(updateError.message)
     return
   }
@@ -500,6 +518,7 @@ async function restoreAppStockLocation(params: {
   const { error: insertError } = await params.supabase
     .from('item_stock_locations')
     .insert({
+      ...(params.companyId ? { company_id: params.companyId } : {}),
       item_id: params.itemId,
       sku: params.sku,
       location_name: locationName,
@@ -514,11 +533,15 @@ async function restoreAppStockLocation(params: {
   if (insertError) throw new Error(insertError.message)
 }
 
-async function updateItemSummary(supabase: any, itemId: string) {
-  const { data, error } = await supabase
+async function updateItemSummary(supabase: any, itemId: string, companyId?: string) {
+  let stockQuery = supabase
     .from('item_stock_locations')
     .select('location_name, bin_code, stock_level')
     .eq('item_id', itemId)
+
+  if (companyId) stockQuery = stockQuery.eq('company_id', companyId)
+
+  const { data, error } = await stockQuery
 
   if (error) throw new Error(error.message)
 
@@ -540,7 +563,7 @@ async function updateItemSummary(supabase: any, itemId: string) {
       .filter((row: any) => Number(row.stock_level || 0) > 0)
       .sort((a: any, b: any) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0] || null
 
-  const { error: updateError } = await supabase
+  let updateQuery = supabase
     .from('items')
     .update({
       stock_level: stockLevel,
@@ -552,16 +575,24 @@ async function updateItemSummary(supabase: any, itemId: string) {
     })
     .eq('id', itemId)
 
+  if (companyId) updateQuery = updateQuery.eq('company_id', companyId)
+
+  const { error: updateError } = await updateQuery
+
   if (updateError) throw new Error(updateError.message)
 
   return { stockLevel, warehouseStock, shopFloorStock }
 }
 
-async function updateTransferStatusAfterCancellation(supabase: any, transferId: string) {
-  const { data, error } = await supabase
+async function updateTransferStatusAfterCancellation(supabase: any, transferId: string, companyId?: string) {
+  let itemsQuery = supabase
     .from('stock_transfer_items')
     .select('id, status')
     .eq('transfer_id', transferId)
+
+  if (companyId) itemsQuery = itemsQuery.eq('company_id', companyId)
+
+  const { data, error } = await itemsQuery
 
   if (error) throw new Error(error.message)
 
@@ -575,12 +606,16 @@ async function updateTransferStatusAfterCancellation(supabase: any, transferId: 
 
   if (rowsStillPartOfTransfer.length > 0) return { updated: false }
 
-  const { error: updateError } = await supabase
+  let updateQuery = supabase
     .from('stock_transfers')
     .update({ status: 'cancelled' })
     .eq('id', transferId)
     .eq('status', 'pending_pick')
     .eq('reason', TRANSFER_REASON)
+
+  if (companyId) updateQuery = updateQuery.eq('company_id', companyId)
+
+  const { error: updateError } = await updateQuery
 
   if (updateError) throw new Error(updateError.message)
 
@@ -601,8 +636,9 @@ async function releaseCancelledShopTransferItems(params: {
   supabase: any
   orderId: string
   sku: string
+  companyId?: string
 }) {
-  const { data, error } = await params.supabase
+  let transferItemsQuery = params.supabase
     .from('stock_transfer_items')
     .select(`
       id,
@@ -628,6 +664,10 @@ async function releaseCancelledShopTransferItems(params: {
     `)
     .eq('source_order_id', params.orderId)
     .eq('sku', params.sku)
+
+  if (params.companyId) transferItemsQuery = transferItemsQuery.eq('company_id', params.companyId)
+
+  const { data, error } = await transferItemsQuery
 
   if (error) throw new Error(error.message)
 
@@ -657,16 +697,21 @@ async function releaseCancelledShopTransferItems(params: {
         locationName: fromLocation,
         binCode: sourceBin,
         quantity: 1,
+        companyId: params.companyId,
       })
 
-      const { error: updateError } = await params.supabase
+      let updateQuery = params.supabase
         .from('stock_transfer_items')
         .update({ status: 'cancelled' })
         .eq('id', row.id)
 
+      if (params.companyId) updateQuery = updateQuery.eq('company_id', params.companyId)
+
+      const { error: updateError } = await updateQuery
+
       if (updateError) throw new Error(updateError.message)
 
-      await updateItemSummary(params.supabase, row.item_id)
+      await updateItemSummary(params.supabase, row.item_id, params.companyId)
       affectedTransferIds.add(transfer.id)
 
       const displayFromLocation = canonicalLocation(fromLocation)
@@ -720,7 +765,7 @@ Action: remove item from transfer batch and allocate back to ${displayFromLocati
 
   const transferStatusUpdates: any[] = []
   for (const transferId of affectedTransferIds) {
-    transferStatusUpdates.push(await updateTransferStatusAfterCancellation(params.supabase, transferId))
+    transferStatusUpdates.push(await updateTransferStatusAfterCancellation(params.supabase, transferId, params.companyId))
   }
 
   return { released, left_alone: leftAlone, telegram: telegramResults, transfer_status_updates: transferStatusUpdates }
@@ -730,6 +775,7 @@ async function restoreNonShopStockDeductions(params: {
   supabase: any
   sale: TrackedSale
   sku: string
+  companyId?: string
 }) {
   const deductions = Array.isArray(params.sale.stock_deductions)
     ? params.sale.stock_deductions
@@ -743,11 +789,14 @@ async function restoreNonShopStockDeductions(params: {
     }
   }
 
-  const { data: item, error: itemError } = await params.supabase
+  let itemQuery = params.supabase
     .from('items')
     .select('id, sku')
     .eq('sku', params.sku)
-    .maybeSingle()
+
+  if (params.companyId) itemQuery = itemQuery.eq('company_id', params.companyId)
+
+  const { data: item, error: itemError } = await itemQuery.maybeSingle()
 
   if (itemError) throw new Error(itemError.message)
   if (!item?.id) {
@@ -784,6 +833,7 @@ async function restoreNonShopStockDeductions(params: {
       locationName,
       binCode,
       quantity,
+      companyId: params.companyId,
     })
 
     restored.push({
@@ -793,17 +843,17 @@ async function restoreNonShopStockDeductions(params: {
     })
   }
 
-  await updateItemSummary(params.supabase, item.id)
+  await updateItemSummary(params.supabase, item.id, params.companyId)
 
   return { restored, skipped }
 }
 
-async function processProcessedOrders(request: Request) {
+async function processProcessedOrders(request: Request, companyId?: string) {
   const startedAt = new Date().toISOString()
 
   try {
     const supabase = getSupabaseAdmin()
-    const integrationConfig = await getLinnworksIntegrationConfig(supabase)
+    const integrationConfig = await getLinnworksIntegrationConfig(supabase, companyId)
     const integrationGate = shouldRunLinnworksRoute({
       config: integrationConfig,
       route: 'processed_orders',
@@ -815,15 +865,16 @@ async function processProcessedOrders(request: Request) {
         ok: true,
         skipped: true,
         message: integrationGate.reason,
+        company_id: companyId || null,
         started_at: startedAt,
         finished_at: new Date().toISOString(),
       })
     }
-    activeLocationMappings = await loadLocationMappings(supabase)
+    activeLocationMappings = await loadLocationMappings(supabase, companyId)
     const url = new URL(request.url)
     const debug = url.searchParams.get('debug') === 'true'
 
-    const trackedSales = await getTrackedOpenSales(supabase, 200)
+    const trackedSales = await getTrackedOpenSales(supabase, 200, companyId)
     const { server, token } = await authoriseLinnworks()
 
     const orderIds = trackedSales
@@ -868,15 +919,17 @@ async function processProcessedOrders(request: Request) {
           supabase,
           orderId,
           sku,
+          companyId,
         })
 
         const savedDeductionRestoreResult = await restoreNonShopStockDeductions({
           supabase,
           sale,
           sku,
+          companyId,
         })
 
-        const { error: saleError } = await supabase
+        let saleUpdateQuery = supabase
           .from('linnworks_processed_sales')
           .update({
             current_status: 'cancelled',
@@ -884,6 +937,10 @@ async function processProcessedOrders(request: Request) {
             updated_at: new Date().toISOString(),
           })
           .eq('id', sale.id)
+
+        if (companyId) saleUpdateQuery = saleUpdateQuery.eq('company_id', companyId)
+
+        const { error: saleError } = await saleUpdateQuery
 
         if (saleError) throw new Error(saleError.message)
 
@@ -923,7 +980,7 @@ async function processProcessedOrders(request: Request) {
       const shippingVendor = getShippingVendor(order)
       const shippingMethod = getShippingMethod(order)
 
-      const { error: saleError } = await supabase
+      let saleUpdateQuery = supabase
         .from('linnworks_processed_sales')
         .update({
           current_status: 'processed',
@@ -935,15 +992,23 @@ async function processProcessedOrders(request: Request) {
         })
         .eq('id', sale.id)
 
+      if (companyId) saleUpdateQuery = saleUpdateQuery.eq('company_id', companyId)
+
+      const { error: saleError } = await saleUpdateQuery
+
       if (saleError) throw new Error(saleError.message)
 
-      const { error: itemError } = await supabase
+      let itemUpdateQuery = supabase
         .from('items')
         .update({
           status: 'processed',
           updated_at: new Date().toISOString(),
         })
         .eq('sku', sku)
+
+      if (companyId) itemUpdateQuery = itemUpdateQuery.eq('company_id', companyId)
+
+      const { error: itemError } = await itemUpdateQuery
 
       if (itemError) throw new Error(itemError.message)
 
@@ -963,6 +1028,7 @@ async function processProcessedOrders(request: Request) {
     return NextResponse.json({
       ok: true,
       message: 'Linnworks processed orders checked.',
+      company_id: companyId || null,
       started_at: startedAt,
       tracked_sale_count: trackedSales.length,
       processed: results.filter((x: any) => x.ok && !x.skipped && x.current_status === 'processed').length,
@@ -985,6 +1051,46 @@ async function processProcessedOrders(request: Request) {
   }
 }
 
+async function processProcessedOrdersForAllCompanies(request: Request) {
+  const startedAt = new Date().toISOString()
+  const supabase = getSupabaseAdmin()
+  const manual = new URL(request.url).searchParams.get('manual') === 'true'
+  const companies = await getEnabledIntegrationCompanies(supabase, 'linnworks', manual)
+
+  if (companies.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      message: 'No active companies have Linnworks processed-order sync enabled.',
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      results: [],
+    })
+  }
+
+  const results: any[] = []
+
+  for (const company of companies) {
+    const response = await processProcessedOrders(request.clone(), company.id)
+    const payload = await response.json().catch(() => null)
+    results.push({
+      company_id: company.id,
+      company_name: company.name,
+      status: response.status,
+      payload,
+    })
+  }
+
+  return NextResponse.json({
+    ok: results.every((row) => row.status < 400 && row.payload?.ok !== false),
+    message: 'Linnworks processed orders checked for active companies.',
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    company_count: companies.length,
+    results,
+  })
+}
+
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET
@@ -993,7 +1099,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
   }
 
-  return processProcessedOrders(request)
+  return processProcessedOrdersForAllCompanies(request)
 }
 
 export async function POST(request: Request) {
@@ -1004,5 +1110,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
   }
 
-  return processProcessedOrders(request)
+  return processProcessedOrdersForAllCompanies(request)
 }

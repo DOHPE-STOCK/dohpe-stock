@@ -14,10 +14,25 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
-export async function GET() {
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
+export async function GET(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const categoryTreeId = await getDefaultCategoryTreeId(config.settings)
 
     let fulfillmentPolicyCount = 0
@@ -42,7 +57,7 @@ export async function GET() {
       policyWarning = policyError?.message || 'Could not pull eBay business policies.'
     }
 
-    await supabase
+    let updateQuery = supabase
       .from('integration_settings')
       .update({
         connection_status: 'connected',
@@ -57,6 +72,12 @@ export async function GET() {
         },
       })
       .eq('channel', 'ebay')
+
+    if (companyId) {
+      updateQuery = updateQuery.eq('company_id', companyId)
+    }
+
+    await updateQuery
 
     return NextResponse.json({
       ok: true,

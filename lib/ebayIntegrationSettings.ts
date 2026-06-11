@@ -334,12 +334,15 @@ export function mergeEbaySettings(settings: any): EbaySettings {
   }
 }
 
-export async function getEbayIntegrationConfig(supabase: any): Promise<EbayIntegrationConfig> {
-  const { data, error } = await supabase
+export async function getEbayIntegrationConfig(supabase: any, companyId?: string | null): Promise<EbayIntegrationConfig> {
+  let query = supabase
     .from('integration_settings')
     .select('id, enabled, auto_sync, connection_status, settings')
     .eq('channel', 'ebay')
-    .maybeSingle()
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) throw new Error(error.message)
 

@@ -54,10 +54,11 @@ function randomSequenceNumber() {
   return Math.floor(Math.random() * 10000000)
 }
 
-async function generateSkus(supabase: any, quantity: number) {
+async function generateSkus(supabase: any, quantity: number, companyId?: string | null) {
   const yearPrefix = getYearPrefix()
   const skus: string[] = []
   const rowsToInsert: Array<{
+    company_id?: string
     sku: string
     year_prefix: string
     sequence_number: number
@@ -75,20 +76,26 @@ async function generateSkus(supabase: any, quantity: number) {
 
     if (skus.includes(sku)) continue
 
-    const { data: existingItem, error: itemCheckError } = await supabase
+    let itemCheckQuery = supabase
       .from('items')
       .select('sku')
       .eq('sku', sku)
-      .maybeSingle()
+
+    if (companyId) itemCheckQuery = itemCheckQuery.eq('company_id', companyId)
+
+    const { data: existingItem, error: itemCheckError } = await itemCheckQuery.maybeSingle()
 
     if (itemCheckError) throw new Error(`Item SKU check failed: ${itemCheckError.message}`)
     if (existingItem) continue
 
-    const { data: existingGenerated, error: generatedCheckError } = await supabase
+    let generatedCheckQuery = supabase
       .from('generated_skus')
       .select('sku')
       .eq('sku', sku)
-      .maybeSingle()
+
+    if (companyId) generatedCheckQuery = generatedCheckQuery.eq('company_id', companyId)
+
+    const { data: existingGenerated, error: generatedCheckError } = await generatedCheckQuery.maybeSingle()
 
     if (generatedCheckError) {
       throw new Error(`Generated SKU check failed: ${generatedCheckError.message}`)
@@ -98,6 +105,7 @@ async function generateSkus(supabase: any, quantity: number) {
 
     skus.push(sku)
     rowsToInsert.push({
+      ...(companyId ? { company_id: companyId } : {}),
       sku,
       year_prefix: yearPrefix,
       sequence_number: sequenceNumber,
@@ -120,6 +128,7 @@ export async function POST(request: Request) {
     const body = await request.json()
     const batchId = text(body.batch_id || body.batchId)
     const staffId = text(body.staff_id || body.staffId)
+    const requestCompanyId = text(body.company_id || body.companyId)
     const actualQuantity = Number(body.actual_quantity ?? body.actualQuantity ?? 0)
     const useRfid = Boolean(body.use_rfid ?? body.useRfid ?? true)
     const tids = Array.from(
@@ -147,11 +156,14 @@ export async function POST(request: Request) {
     }
 
     const supabase = getSupabaseAdmin()
-    const { data: batch, error: batchError } = await supabase
+    let batchQuery = supabase
       .from('inbound_batches')
       .select('*')
       .eq('id', batchId)
-      .maybeSingle()
+
+    if (requestCompanyId) batchQuery = batchQuery.eq('company_id', requestCompanyId)
+
+    const { data: batch, error: batchError } = await batchQuery.maybeSingle()
 
     if (batchError) throw new Error(batchError.message)
     if (!batch) {
@@ -188,8 +200,10 @@ export async function POST(request: Request) {
       }
     }
 
-    const skus = await generateSkus(supabase, actualQuantity)
+    const companyId = text(batch.company_id) || requestCompanyId || null
+    const skus = await generateSkus(supabase, actualQuantity, companyId)
     const itemRows = skus.map((sku, index) => ({
+      ...(companyId ? { company_id: companyId } : {}),
       sku,
       status: 'working',
       stock_level: 1,
@@ -228,6 +242,7 @@ export async function POST(request: Request) {
     if (itemInsertError) throw new Error(itemInsertError.message)
 
     const stockRows = (createdItems || []).map((item: any) => ({
+      ...(companyId ? { company_id: companyId } : {}),
       item_id: item.id,
       sku: item.sku,
       location_name: WAREHOUSE_LOCATION,
@@ -246,6 +261,7 @@ export async function POST(request: Request) {
 
     const identifierRows = (createdItems || []).flatMap((item: any) => {
       const rows = [{
+        ...(companyId ? { company_id: companyId } : {}),
         item_id: item.id,
         sku: item.sku,
         identifier_type: 'sku',
@@ -257,6 +273,7 @@ export async function POST(request: Request) {
 
       if (useRfid && item.rfid_tid) {
         rows.push({
+        ...(companyId ? { company_id: companyId } : {}),
         item_id: item.id,
         sku: item.sku,
         identifier_type: 'rfid',
@@ -278,6 +295,7 @@ export async function POST(request: Request) {
 
     if (useRfid) {
       const rfidRows = (createdItems || []).map((item: any) => ({
+        ...(companyId ? { company_id: companyId } : {}),
         batch_id: batch.id,
         tid: item.rfid_tid,
         tid_normalized: normalizeIdentifier(item.rfid_tid),

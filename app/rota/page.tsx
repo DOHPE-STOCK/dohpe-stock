@@ -14,8 +14,9 @@ import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { MobileTimePicker } from "@mui/x-date-pickers/MobileTimePicker";
 import { supabase } from "@/lib/supabase";
 import AppNav from "@/app/components/AppNav";
+import { useCompany } from "@/app/context/CompanyContext";
 
-type CompanyKey = "dohpe" | "dlretail";
+type CompanyKey = string;
 type ShiftType = "work" | "holiday";
 
 type StaffMember = { id: string; name: string; hourlyRate: number };
@@ -116,7 +117,6 @@ type TimePickerFieldHandle = {
 
 const ROTA_SETTINGS_TABLE = "rota_settings";
 const ROTA_USER_KEY_FALLBACK = "rota:default";
-const LEGACY_ROTA_GLOBAL_KEY = "dohpe_global_rota";
 const LOCAL_ROTA_KEY = "dohpe_rota_global_settings_v1";
 const LOCAL_CALENDAR_KEY = "dohpe_rota_calendar_settings_v1";
 
@@ -643,6 +643,56 @@ function emptyDefault(): DefaultRota {
   return { dohpe: {}, dlretail: {} };
 }
 
+function fallbackOpeningTimesForCompany(companyKey: CompanyKey) {
+  return defaultOpeningTimes[companyKey] || defaultOpeningTimes.dohpe;
+}
+
+function companyFromPayload(saved: any, companyKey: CompanyKey, activeCompany?: { name?: string | null }) {
+  const savedCompany = Array.isArray(saved?.companies)
+    ? saved.companies.find((company: Company) => company.key === companyKey)
+    : null;
+
+  return {
+    key: companyKey,
+    name: activeCompany?.name || savedCompany?.name || companyKey,
+    telegramGroup: savedCompany?.telegramGroup || `${activeCompany?.name || companyKey} rota group`,
+    logoUrl: savedCompany?.logoUrl || "",
+  } as Company;
+}
+
+function scopeRotaPayloadToCompany(
+  saved: any,
+  companyKey: CompanyKey,
+  activeCompany?: { name?: string | null },
+) {
+  if (!saved) return saved;
+
+  return {
+    ...saved,
+    companies: [companyFromPayload(saved, companyKey, activeCompany)],
+    openingTimes: {
+      [companyKey]:
+        saved.openingTimes?.[companyKey] ||
+        fallbackOpeningTimesForCompany(companyKey),
+    },
+    rota: {
+      [companyKey]: saved.rota?.[companyKey] || {},
+    },
+    defaultRota: {
+      [companyKey]: saved.defaultRota?.[companyKey] || {},
+    },
+    editedWeeks: {
+      [companyKey]: saved.editedWeeks?.[companyKey] || {},
+    },
+    closedDays: {
+      [companyKey]: saved.closedDays?.[companyKey] || {},
+    },
+    weeklyReports: Array.isArray(saved.weeklyReports)
+      ? saved.weeklyReports.filter((report: WeeklyReport) => report.company === companyKey)
+      : [],
+  };
+}
+
 function normaliseShiftForCompare(shift: Shift) {
   return {
     staffId: shift.staffId,
@@ -711,6 +761,7 @@ function CompanyLogo({ company }: { company: Company }) {
 }
 
 export default function RotaPage() {
+  const { activeCompanyId, activeCompany, schemaReady } = useCompany();
   const saveTimerRef = useRef<number | null>(null);
   const calendarSaveTimerRef = useRef<number | null>(null);
   const statusTimerRef = useRef<number | null>(null);
@@ -718,7 +769,6 @@ export default function RotaPage() {
 
   const [rotaUserKey, setRotaUserKey] = useState(ROTA_USER_KEY_FALLBACK);
   const [companies, setCompanies] = useState<Company[]>(defaultCompanies);
-  const [mobileCompany, setMobileCompany] = useState<CompanyKey>("dohpe");
   const [staff, setStaff] = useState<StaffMember[]>(defaultStaff);
   const [openingTimes, setOpeningTimes] =
     useState<OpeningTimes>(defaultOpeningTimes);
@@ -759,6 +809,47 @@ export default function RotaPage() {
     Record<string, boolean>
   >({});
 
+  const activeCompanyKey = useMemo(() => {
+    const slug = String(activeCompany?.slug || activeCompany?.name || "dohpe")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+    if (slug.includes("dl") && slug.includes("retail")) return "dlretail";
+    if (slug.includes("dohpe")) return "dohpe";
+    return slug || "dohpe";
+  }, [activeCompany?.slug, activeCompany?.name]);
+
+  const activeRotaCompany = useMemo<Company>(
+    () => ({
+      key: activeCompanyKey,
+      name: activeCompany?.name || "Current company",
+      telegramGroup: `${activeCompany?.name || "Company"} rota group`,
+      logoUrl: defaultCompanies.find((company) => company.key === activeCompanyKey)?.logoUrl || "",
+    }),
+    [activeCompany?.name, activeCompanyKey],
+  );
+
+  useEffect(() => {
+    setCompanies((current) => [
+      {
+        ...activeRotaCompany,
+        logoUrl:
+          current.find((company) => company.key === activeRotaCompany.key)?.logoUrl ||
+          activeRotaCompany.logoUrl,
+      },
+    ]);
+    setOpeningTimes((current) => ({
+      ...current,
+      [activeRotaCompany.key]:
+        current[activeRotaCompany.key] ||
+        fallbackOpeningTimesForCompany(activeRotaCompany.key),
+    }));
+    setRota((current) => ({ ...current, [activeRotaCompany.key]: current[activeRotaCompany.key] || {} }));
+    setEditedWeeks((current) => ({ ...current, [activeRotaCompany.key]: current[activeRotaCompany.key] || {} }));
+    setClosedDays((current) => ({ ...current, [activeRotaCompany.key]: current[activeRotaCompany.key] || {} }));
+  }, [activeRotaCompany]);
+
   const currentWeekStart = useMemo(
     () => getOperationalWeekStart(today, openingTimes),
     [today, openingTimes],
@@ -771,10 +862,6 @@ export default function RotaPage() {
   const previousWeekStart = useMemo(
     () => addWeeks(currentWeekStart, -1),
     [currentWeekStart],
-  );
-
-  const mobileCompanyList = companies.filter(
-    (company) => company.key === mobileCompany,
   );
 
   useEffect(() => {
@@ -836,10 +923,12 @@ export default function RotaPage() {
       );
       if (!hasAnyFinalisedCompany) continue;
 
-      grouped.set(weekId, {
-        dohpe: reportById.get(`dohpe-${weekId}`),
-        dlretail: reportById.get(`dlretail-${weekId}`),
-      });
+      grouped.set(
+        weekId,
+        Object.fromEntries(
+          companies.map((company) => [company.key, reportById.get(`${company.key}-${weekId}`)])
+        ) as Record<CompanyKey, WeeklyReport | undefined>,
+      );
     }
 
     return Array.from(grouped.entries())
@@ -866,16 +955,14 @@ export default function RotaPage() {
           showStatus("Log in to sync rota settings across devices.");
         }
 
-        const key = userId ? `rota:${userId}` : ROTA_USER_KEY_FALLBACK;
+        const key = userId ? `rota:${userId}:${activeCompanyId}` : `${ROTA_USER_KEY_FALLBACK}:${activeCompanyId}`;
         setRotaUserKey(key);
 
         const scopedLocalKey = `${LOCAL_ROTA_KEY}:${key}`;
-        const local =
-          localStorage.getItem(scopedLocalKey) ||
-          localStorage.getItem(LOCAL_ROTA_KEY);
+        const local = localStorage.getItem(scopedLocalKey);
 
         if (local) {
-          applyRotaPayload(JSON.parse(local), {
+          applyRotaPayload(scopeRotaPayloadToCompany(JSON.parse(local), activeCompanyKey, activeCompany || undefined), {
             setCompanies,
             setLegacyStaff,
             setOpeningTimes,
@@ -887,41 +974,21 @@ export default function RotaPage() {
           });
         }
 
-        const { data, error } = await supabase
+        let rotaSettingsQuery = supabase
           .from(ROTA_SETTINGS_TABLE)
           .select("data")
           .eq("user_key", key)
-          .maybeSingle();
+
+        if (schemaReady) rotaSettingsQuery = rotaSettingsQuery.eq("company_id", activeCompanyId);
+
+        const { data, error } = await rotaSettingsQuery.maybeSingle();
 
         if (error) throw error;
 
-        let saved = data?.data || null;
-
-        if (!saved && userId) {
-          const { data: legacyData, error: legacyError } = await supabase
-            .from(ROTA_SETTINGS_TABLE)
-            .select("data")
-            .eq("user_key", LEGACY_ROTA_GLOBAL_KEY)
-            .maybeSingle();
-
-          if (legacyError) throw legacyError;
-
-          if (legacyData?.data) {
-            saved = legacyData.data;
-
-            await supabase.from(ROTA_SETTINGS_TABLE).upsert(
-              {
-                user_key: key,
-                data: saved,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "user_key" },
-            );
-          }
-        }
+        const saved = data?.data || null;
 
         if (saved) {
-          applyRotaPayload(saved, {
+          applyRotaPayload(scopeRotaPayloadToCompany(saved, activeCompanyKey, activeCompany || undefined), {
             setCompanies,
             setLegacyStaff,
             setOpeningTimes,
@@ -941,14 +1008,18 @@ export default function RotaPage() {
     }
 
     loadCloudRota();
-  }, []);
+  }, [activeCompanyId, schemaReady]);
 
   useEffect(() => {
     async function loadFinalisedWeeks() {
-      const { data, error } = await supabase
+      let query = supabase
         .from("rota_week_finalisations")
-        .select("company_key, week_id, status")
+        .select("company_key, week_id, status, totals, finalised_at")
         .eq("status", "finalised");
+
+      if (schemaReady) query = query.eq("company_id", activeCompanyId);
+
+      const { data, error } = await query;
 
       if (error) return;
 
@@ -957,17 +1028,54 @@ export default function RotaPage() {
           (data || []).map((row: any) => [`${row.company_key}-${row.week_id}`, true]),
         ),
       );
+
+      const reportsFromFinalisations = (data || []).map((row: any) => {
+        const staffTotals: WeeklyReport["staffTotals"] = {};
+        const rawStaffTotals = row.totals?.staffTotals || {};
+
+        for (const [staffId, total] of Object.entries(rawStaffTotals) as Array<[string, any]>) {
+          staffTotals[staffId] = {
+            name: total.name || staff.find((person) => person.id === staffId)?.name || "Unknown staff",
+            workHours: Number(total.workHours || 0),
+            holidayHours: Number(total.holidayHours || 0),
+            breakHours: Number(total.breakHours || 0),
+            workWage: Number(total.workWage || 0),
+            holidayWage: Number(total.holidayWage || 0),
+          };
+        }
+
+        return {
+          id: `${row.company_key}-${row.week_id}`,
+          company: row.company_key,
+          weekId: row.week_id,
+          companyName: getCompanyName(row.company_key),
+          staffTotals,
+          createdAt: row.finalised_at || new Date().toISOString(),
+        } as WeeklyReport;
+      });
+
+      setWeeklyReports((current) => {
+        const merged = new Map(current.map((report) => [report.id, report]));
+        for (const report of reportsFromFinalisations) {
+          merged.set(report.id, report);
+        }
+        return Array.from(merged.values()).sort((a, b) => b.weekId.localeCompare(a.weekId)).slice(0, 250);
+      });
     }
 
     loadFinalisedWeeks();
-  }, []);
+  }, [activeCompanyId, schemaReady]);
 
   useEffect(() => {
     async function loadStaffPayrollSettings() {
-      const { data, error } = await supabase
+      let query = supabase
         .from("staff_users")
         .select("id, name, is_active, payroll_settings")
         .eq("is_active", true);
+
+      if (schemaReady) query = query.eq("company_id", activeCompanyId);
+
+      const { data, error } = await query;
 
       if (error) {
         console.error("ROTA_PAYROLL_SETTINGS_LOAD_ERROR", error);
@@ -980,7 +1088,7 @@ export default function RotaPage() {
     }
 
     loadStaffPayrollSettings();
-  }, []);
+  }, [activeCompanyId, schemaReady]);
 
   useEffect(() => {
     if (!cloudLoaded || staffPayrollRows.length === 0) return;
@@ -1096,6 +1204,7 @@ export default function RotaPage() {
       try {
         const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert(
           {
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             user_key: rotaUserKey,
             data: payload,
             updated_at: new Date().toISOString(),
@@ -1125,6 +1234,8 @@ export default function RotaPage() {
     editedWeeks,
     closedDays,
     weeklyReports,
+    activeCompanyId,
+    schemaReady,
   ]);
 
   useEffect(() => {
@@ -1147,6 +1258,7 @@ export default function RotaPage() {
       try {
         const { error } = await supabase.from(ROTA_SETTINGS_TABLE).upsert(
           {
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             user_key: calendarUserKey,
             data: payload,
             updated_at: new Date().toISOString(),
@@ -1801,6 +1913,7 @@ export default function RotaPage() {
     try {
       const { error } = await supabase.from("rota_week_finalisations").upsert(
         {
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           company_key: company,
           week_id: weekId,
           status: "finalised",
@@ -2492,7 +2605,7 @@ export default function RotaPage() {
                   event.stopPropagation();
                   openExistingShift(company, week, dayIndex, shift);
                 }}
-                className={`relative flex min-h-9 cursor-pointer flex-col justify-center rounded-lg px-1.5 py-1 pr-4 text-[10px] font-black leading-tight ${
+                className={`relative flex min-h-10 cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 pr-6 leading-tight ${
                   shift.type === "holiday"
                     ? "bg-amber-100 text-amber-700"
                     : "bg-white text-neutral-800"
@@ -2508,8 +2621,10 @@ export default function RotaPage() {
                 >
                   ×
                 </button>
-                <span className="truncate pr-1">{person?.name || "Staff"}</span>
-                <span className="truncate text-[9px] opacity-80">
+                <span className="min-w-0 truncate pr-1 text-sm font-black">
+                  {person?.name || "Staff"}
+                </span>
+                <span className="shrink-0 truncate text-[10px] font-black opacity-75">
                   {shiftTimeLabel(shift, opening, closed)}
                 </span>
               </div>
@@ -2657,7 +2772,7 @@ export default function RotaPage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(150px,1fr))]">
             {staff.map((person) => {
               const row = staffTotals[person.id] || {
                 workHours: 0,
@@ -2705,45 +2820,25 @@ export default function RotaPage() {
 
   function PreviousWeekFinaliseGroup() {
     return (
-      <>
-        <div className="hidden grid-cols-1 gap-5 xl:grid xl:grid-cols-2">
-          {companies.map((company) => (
-            <PreviousWeekFinaliseCard key={`${company.key}-previous-finalise`} company={company} />
-          ))}
-        </div>
-
-        <div className="grid grid-cols-1 gap-5 xl:hidden">
-          {mobileCompanyList.map((company) => (
-            <PreviousWeekFinaliseCard key={`${company.key}-previous-finalise-mobile`} company={company} />
-          ))}
-        </div>
-      </>
+      <div className="grid grid-cols-1 gap-5">
+        {companies.map((company) => (
+          <PreviousWeekFinaliseCard key={`${company.key}-previous-finalise`} company={company} />
+        ))}
+      </div>
     );
   }
 
   function WeekGroup({ week }: { week: Date }) {
     return (
-      <>
-        <div className="hidden grid-cols-1 gap-5 xl:grid xl:grid-cols-2">
-          {companies.map((company) => (
-            <WeekPlanner
-              key={`${company.key}-${dateKey(week)}`}
-              company={company}
-              week={week}
-            />
-          ))}
-        </div>
-
-        <div className="grid grid-cols-1 gap-5 xl:hidden">
-          {mobileCompanyList.map((company) => (
-            <WeekPlanner
-              key={`${company.key}-${dateKey(week)}-mobile`}
-              company={company}
-              week={week}
-            />
-          ))}
-        </div>
-      </>
+      <div className="grid grid-cols-1 gap-5">
+        {companies.map((company) => (
+          <WeekPlanner
+            key={`${company.key}-${dateKey(week)}`}
+            company={company}
+            week={week}
+          />
+        ))}
+      </div>
     );
   }
 
@@ -2884,7 +2979,7 @@ export default function RotaPage() {
               </p>
             </div>
 
-            <div className="grid w-full grid-cols-4 gap-2 sm:w-auto sm:flex sm:flex-wrap sm:justify-end">
+            <div className="hidden">
               <button
                 type="button"
                 onClick={() => setHistoryOpen((value) => !value)}
@@ -2929,30 +3024,62 @@ export default function RotaPage() {
             <AppNav current="rota" />
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2 xl:hidden">
-            {companies.map((company, index) => (
-              <button
-                key={company.key}
-                type="button"
-                onClick={() => setMobileCompany(company.key)}
-                className={`flex min-w-0 items-center justify-center gap-2 rounded-2xl px-3 py-3 text-sm font-black ${
-                  mobileCompany === company.key
-                    ? "bg-emerald-600 text-white"
-                    : "bg-white/10 text-white"
-                }`}
-              >
-                <CompanyLogo company={company} />
-                <span className="truncate">Company {index + 1}</span>
-              </button>
-            ))}
-          </div>
-
           {statusMessage && (
             <div className="mt-4 rounded-2xl bg-white/10 p-3 text-sm font-bold">
               {statusMessage}
             </div>
           )}
         </header>
+
+        <section className="mb-4 rounded-3xl border border-neutral-200 bg-white p-3 shadow-sm">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((value) => !value)}
+              className={`flex items-center justify-center rounded-2xl px-4 py-3 text-xs font-black sm:text-sm ${
+                historyOpen
+                  ? "bg-black text-white"
+                  : "border border-neutral-200 bg-neutral-50 text-black hover:bg-neutral-100"
+              }`}
+            >
+              History
+            </button>
+
+            <button
+              type="button"
+              onClick={openMonthlyCalendar}
+              className="flex items-center justify-center gap-2 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs font-black text-black hover:bg-neutral-100 sm:text-sm"
+            >
+              <GoogleCalendarLogo />
+              Calendar
+            </button>
+
+            <button
+              type="button"
+              onClick={syncGoogleCalendar}
+              className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-xs font-black sm:text-sm ${
+                googleCalendarSynced
+                  ? "bg-emerald-600 text-white"
+                  : "bg-blue-500 text-white"
+              }`}
+            >
+              <GoogleCalendarLogo />
+              {googleCalendarSynced ? "✓" : "Sync"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsOpen((value) => !value)}
+              className={`flex items-center justify-center rounded-2xl px-4 py-3 text-xs font-black sm:text-sm ${
+                settingsOpen
+                  ? "bg-black text-white"
+                  : "bg-emerald-600 text-white hover:bg-emerald-500"
+              }`}
+            >
+              Settings
+            </button>
+          </div>
+        </section>
 
         {historyOpen && (
           <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
@@ -2999,11 +3126,11 @@ export default function RotaPage() {
                         }}
                         className="rounded-2xl border border-neutral-300 bg-white px-4 py-2 text-sm font-black text-black shadow-sm"
                       >
-                        Edit both companies
+                        Edit week
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3">
                       {companies.map((company) => (
                         <HistoryCompanyCard
                           key={`${weekId}-${company.key}`}

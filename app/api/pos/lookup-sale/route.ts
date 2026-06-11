@@ -64,18 +64,41 @@ function getActiveStaffFromRequest(request: Request) {
   }
 }
 
-async function requireCheckoutPermission(request: Request, supabase: any): Promise<AccessResult> {
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
+async function requireCheckoutPermission(
+  request: Request,
+  supabase: any,
+  companyId?: string | null
+): Promise<AccessResult> {
   const staffCookie = getActiveStaffFromRequest(request)
 
   if (!staffCookie?.id) {
     return { ok: false, status: 401, message: 'Staff PIN required.' }
   }
 
-  const { data: staff, error } = await supabase
+  let staffQuery = supabase
     .from('staff_users')
     .select('id, name, role, permissions, is_active')
     .eq('id', staffCookie.id)
-    .maybeSingle()
+
+  if (companyId) {
+    staffQuery = staffQuery.eq('company_id', companyId)
+  }
+
+  const { data: staff, error } = await staffQuery.maybeSingle()
 
   if (error) {
     throw new Error(error.message)
@@ -107,8 +130,9 @@ export async function GET(request: Request) {
     }
 
     const supabase = getSupabaseAdmin()
+    const activeCompanyId = getActiveCompanyIdFromRequest(request)
 
-    const access = await requireCheckoutPermission(request, supabase)
+    const access = await requireCheckoutPermission(request, supabase, activeCompanyId)
 
     if (!access.ok) {
       return NextResponse.json(
@@ -124,11 +148,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ ok: false, message: 'Missing sale_number.' }, { status: 400 })
     }
 
-    const { data: sale, error: saleError } = await supabase
+    let saleQuery = supabase
       .from('pos_sales')
       .select('*')
       .eq('sale_number', saleNumber)
-      .maybeSingle()
+
+    if (activeCompanyId) {
+      saleQuery = saleQuery.eq('company_id', activeCompanyId)
+    }
+
+    const { data: sale, error: saleError } = await saleQuery.maybeSingle()
 
     if (saleError) throw new Error(saleError.message)
 
@@ -139,11 +168,17 @@ export async function GET(request: Request) {
       )
     }
 
-    const { data: lines, error: linesError } = await supabase
+    let linesQuery = supabase
       .from('pos_sale_lines')
       .select('*')
       .eq('sale_id', sale.id)
       .order('created_at', { ascending: true })
+
+    if (activeCompanyId) {
+      linesQuery = linesQuery.eq('company_id', activeCompanyId)
+    }
+
+    const { data: lines, error: linesError } = await linesQuery
 
     if (linesError) throw new Error(linesError.message)
 

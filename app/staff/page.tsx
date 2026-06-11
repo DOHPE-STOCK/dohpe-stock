@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
 import type { StaffPermissions, StaffUser } from '@/app/context/StaffContext'
 
 type StaffRow = {
@@ -32,6 +33,7 @@ function StaffPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { setStaff, clearStaff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const nextUrl = cleanNextUrl(searchParams.get('next'))
 
@@ -46,14 +48,18 @@ function StaffPageContent() {
 
   useEffect(() => {
     fetchStaff()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   async function fetchStaff() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('staff_users')
       .select('id, name, pin_code, is_active, must_change_pin, role, permissions')
       .eq('is_active', true)
       .order('name', { ascending: true })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)

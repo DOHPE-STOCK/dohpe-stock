@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type TransferItem = {
   id: string
@@ -27,7 +28,7 @@ type Transfer = {
   stock_transfer_items?: TransferItem[]
 }
 
-type TimePeriod = '7days' | 'month' | 'year'
+type TimePeriod = '7days' | '14days' | 'month'
 
 type LocationConfig = {
   name: string
@@ -114,24 +115,30 @@ function groupBySkuAndSourceBin(items: TransferItem[]) {
 
 export default function TransfersPage() {
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [locationConfigs, setLocationConfigs] = useState<LocationConfig[]>([])
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('month')
+  const [transferSearch, setTransferSearch] = useState('')
   const [receiveModal, setReceiveModal] = useState<ReceiveModalState | null>(null)
 
   useEffect(() => {
-    fetchTransfers(timePeriod)
+    fetchTransfers(timePeriod, transferSearch)
     fetchLocationConfigs()
-  }, [timePeriod])
+  }, [timePeriod, transferSearch, activeCompanyId, schemaReady])
 
   async function fetchLocationConfigs() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('locations')
       .select('name, label, is_active, bin_mode, basic_bins')
       .eq('is_active', true)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setLocationConfigs(FALLBACK_LOCATIONS)
@@ -222,23 +229,26 @@ export default function TransfersPage() {
     const date = new Date()
 
     if (period === '7days') date.setDate(date.getDate() - 7)
+    if (period === '14days') date.setDate(date.getDate() - 14)
     if (period === 'month') date.setMonth(date.getMonth() - 1)
-    if (period === 'year') date.setFullYear(date.getFullYear() - 1)
 
     return date.toISOString()
   }
 
   function getPeriodLabel(period: TimePeriod) {
     if (period === '7days') return 'last 7 days'
+    if (period === '14days') return 'last 14 days'
     if (period === 'month') return 'last month'
-    return 'last year'
+    return 'last month'
   }
 
-  async function fetchTransfers(period: TimePeriod = timePeriod) {
+  async function fetchTransfers(period: TimePeriod = timePeriod, searchValue: string = transferSearch) {
     setLoading(true)
     setMessage('')
+    const search = text(searchValue)
+    const searchNumber = Number(search.replace(/^0+/, '') || search)
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('stock_transfers')
       .select(`
         id,
@@ -257,8 +267,21 @@ export default function TransfersPage() {
           status
         )
       `)
-      .gte('created_at', getStartDate(period))
       .order('created_at', { ascending: false })
+
+    if (search) {
+      if (/^\d+$/.test(search) && Number.isFinite(searchNumber)) {
+        query = query.eq('transfer_number', searchNumber)
+      } else {
+        query = query.eq('id', search)
+      }
+    } else {
+      query = query.gte('created_at', getStartDate(period))
+    }
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     setLoading(false)
 
@@ -309,10 +332,14 @@ export default function TransfersPage() {
 
     if (uniqueSkus.length === 0) return new Map<string, StockItemRow>()
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('id, sku, sku_type, current_location, current_bin')
       .in('sku', uniqueSkus)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) throw new Error(error.message)
 
@@ -342,6 +369,7 @@ export default function TransfersPage() {
         delta: params.delta,
         allow_missing_source: params.allowMissingSource,
         source: 'app_transfer',
+        company_id: schemaReady ? activeCompanyId : null,
       }),
     })
 
@@ -401,6 +429,7 @@ export default function TransfersPage() {
 
       queueRows.push(
         {
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           item_id: item.id,
           sku,
           action: 'adjust_stock',
@@ -420,6 +449,7 @@ export default function TransfersPage() {
           status: 'pending',
         },
         {
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           item_id: item.id,
           sku,
           action: 'adjust_stock',
@@ -564,7 +594,7 @@ export default function TransfersPage() {
         destinationLocation,
       })
 
-      const { error: transferItemsError } = await supabase
+      let transferItemsQuery = supabase
         .from('stock_transfer_items')
         .update({
           status: 'received',
@@ -573,10 +603,14 @@ export default function TransfersPage() {
         .in('id', transferItemIds)
         .eq('status', 'in_transfer')
 
+      if (schemaReady) transferItemsQuery = transferItemsQuery.eq('company_id', activeCompanyId)
+
+      const { error: transferItemsError } = await transferItemsQuery
+
       if (transferItemsError) throw new Error(transferItemsError.message)
 
       if (singleUseItemIds.length > 0) {
-        const { error: itemsError } = await supabase
+        let itemsQuery = supabase
           .from('items')
           .update({
             location_status: 'received',
@@ -588,11 +622,16 @@ export default function TransfersPage() {
           })
           .in('id', singleUseItemIds)
 
+        if (schemaReady) itemsQuery = itemsQuery.eq('company_id', activeCompanyId)
+
+        const { error: itemsError } = await itemsQuery
+
         if (itemsError) throw new Error(itemsError.message)
 
         const queueRows = receivableItems
           .filter((item) => item.item_id && !reusableSkus.has(text(item.sku).toUpperCase()))
           .map((item) => ({
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             item_id: item.item_id,
             sku: item.sku,
             action: 'update_location',
@@ -618,7 +657,7 @@ export default function TransfersPage() {
         }
       }
 
-      const { error: transferError } = await supabase
+      let transferQuery = supabase
         .from('stock_transfers')
         .update({
           status: 'received',
@@ -628,6 +667,10 @@ export default function TransfersPage() {
         })
         .eq('id', transfer.id)
         .neq('status', 'received')
+
+      if (schemaReady) transferQuery = transferQuery.eq('company_id', activeCompanyId)
+
+      const { error: transferError } = await transferQuery
 
       if (transferError) throw new Error(transferError.message)
 
@@ -673,32 +716,59 @@ export default function TransfersPage() {
                 {message}
               </span>
             )}
-
-            <select
-              value={timePeriod}
-              onChange={(e) => setTimePeriod(e.target.value as TimePeriod)}
-              className="rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-white"
-            >
-              <option value="7days">Last 7 days</option>
-              <option value="month">Last month</option>
-              <option value="year">Last year</option>
-            </select>
-
-            <button
-              onClick={() => fetchTransfers()}
-              disabled={loading}
-              className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
-            >
-              {loading ? 'Refreshing...' : 'Refresh'}
-            </button>
           </div>
         </div>
 
         <section className="mb-5 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="text-lg font-semibold">Transfer History</h2>
-          <p className="text-sm text-neutral-400">
-            Showing transfers from the {getPeriodLabel(timePeriod)}.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Transfer History</h2>
+              <p className="text-sm text-neutral-400">
+                Showing transfers from the {getPeriodLabel(timePeriod)}.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex rounded-xl border border-neutral-300 bg-white p-1">
+                {[
+                  ['7days', '7 days'],
+                  ['14days', '14 days'],
+                  ['month', 'Month'],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setTimePeriod(value as TimePeriod)}
+                    disabled={Boolean(transferSearch.trim())}
+                    className={`rounded-lg px-3 py-2 text-xs font-black disabled:opacity-40 ${
+                      timePeriod === value
+                        ? 'bg-black text-white'
+                        : 'keep-dark-text bg-white text-black hover:bg-neutral-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                value={transferSearch}
+                onChange={(event) => setTransferSearch(event.target.value)}
+                placeholder="Search transfer ID"
+                className="keep-dark-text h-10 w-44 rounded-xl border border-neutral-300 bg-white px-3 text-sm font-bold text-black outline-none focus:border-black"
+              />
+
+              {transferSearch.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setTransferSearch('')}
+                  className="keep-dark-text h-10 rounded-xl border border-neutral-300 bg-white px-3 text-xs font-black text-black hover:bg-neutral-100"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
         </section>
 
         {transfers.length === 0 ? (

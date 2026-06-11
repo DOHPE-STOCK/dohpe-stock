@@ -29,12 +29,16 @@ function canonicalBinCode(value: any) {
   return text(value) || 'Default'
 }
 
-async function resolveLocation(supabase: any, rawLocation: any) {
+async function resolveLocation(supabase: any, rawLocation: any, companyId: string) {
   const raw = text(rawLocation)
   const key = canonicalLocationKey(raw)
-  const { data, error } = await supabase
+  let query = supabase
     .from('locations')
     .select('name, label')
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -65,6 +69,7 @@ export async function POST(request: Request) {
     const body = await request.json()
     const itemId = text(body.item_id || body.itemId)
     const sku = text(body.sku).toUpperCase()
+    const companyId = text(body.company_id || body.companyId)
     const rawLocationName = body.location_name || body.locationName
     const binCode = canonicalBinCode(body.bin_code || body.binCode)
     const stockLevel = Number(body.stock_level ?? body.stockLevel ?? 0)
@@ -84,17 +89,21 @@ export async function POST(request: Request) {
     }
 
     const supabase = getSupabaseAdmin()
-    const resolvedLocation = await resolveLocation(supabase, rawLocationName)
+    const resolvedLocation = await resolveLocation(supabase, rawLocationName, companyId)
     const locationName = resolvedLocation.name
     const aliases = resolvedLocation.aliases
 
-    const { data: existingRows, error: existingError } = await supabase
+    let existingRowsQuery = supabase
       .from('item_stock_locations')
       .select('id, location_name')
       .eq('item_id', itemId)
       .in('location_name', aliases)
       .ilike('bin_code', binCode)
       .limit(20)
+
+    if (companyId) existingRowsQuery = existingRowsQuery.eq('company_id', companyId)
+
+    const { data: existingRows, error: existingError } = await existingRowsQuery
 
     if (existingError) throw new Error(existingError.message)
 
@@ -106,6 +115,7 @@ export async function POST(request: Request) {
       const { data, error } = await supabase
         .from('item_stock_locations')
         .update({
+          ...(companyId ? { company_id: companyId } : {}),
           sku,
           location_name: locationName,
           bin_code: binCode,
@@ -125,6 +135,7 @@ export async function POST(request: Request) {
     const { data, error } = await supabase
       .from('item_stock_locations')
       .upsert({
+        ...(companyId ? { company_id: companyId } : {}),
         item_id: itemId,
         sku,
         location_name: locationName,
@@ -134,7 +145,9 @@ export async function POST(request: Request) {
         source,
         updated_at: now,
       }, {
-        onConflict: 'item_id,location_name,bin_code',
+        onConflict: companyId
+          ? 'company_id,item_id,location_name,bin_code'
+          : 'item_id,location_name,bin_code',
       })
       .select('id, item_id, sku, location_name, bin_code, stock_level')
       .single()

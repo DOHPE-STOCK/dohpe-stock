@@ -6,6 +6,9 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { setStoredTheme } from '@/app/components/ThemeProvider'
+import { useCompany } from '@/app/context/CompanyContext'
+import CompanySettingsPanel from '@/app/settings/company/CompanySettingsPanel'
+import BillingSettingsPanel from '@/app/settings/company/billing/BillingSettingsPanel'
 import IntegrationsPanel from '@/app/settings/integrations/IntegrationsPanel'
 
 type StaffUser = {
@@ -69,6 +72,8 @@ type FixedCost = {
 }
 
 type OpenSection =
+  | 'company'
+  | 'billing'
   | 'integrations'
   | 'processing'
   | 'locations'
@@ -102,6 +107,11 @@ const defaultLocationSettings: LocationSetting[] = [
   { name: 'LOCATION-4', label: 'SHOP-3', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
   { name: 'LOCATION-5', label: 'SHOP-4', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
 ]
+
+const newCompanyDefaultLocationSettings: LocationSetting[] = defaultLocationSettings.map((location) => ({
+  ...location,
+  label: 'Default',
+}))
 
 const defaultPayrollSettings: PayrollSettings = {
   id: 'default',
@@ -285,7 +295,17 @@ function hasAnyPermission(permissions?: Record<string, boolean>) {
   return permissionOptions.some((option) => Boolean(permissions?.[option.key]))
 }
 
+function formatLimit(value: any) {
+  return value === null || value === undefined ? 'Unlimited' : String(value)
+}
+
+function limitReached(used: number, limit: any) {
+  if (limit === null || limit === undefined) return false
+  return used >= Number(limit || 0)
+}
+
 export default function SettingsPage() {
+  const { activeCompany, activeCompanyId, schemaReady } = useCompany()
   const [settings, setSettings] = useState<any>(null)
   const [staffUsers, setStaffUsers] = useState<StaffUser[]>([])
   const [locations, setLocations] = useState<LocationSetting[]>(defaultLocationSettings)
@@ -298,19 +318,30 @@ export default function SettingsPage() {
   const [newStaffRole, setNewStaffRole] = useState('')
   const [newStaffPermissions, setNewStaffPermissions] = useState<Record<string, boolean>>(emptyPermissions())
   const [savingStaffId, setSavingStaffId] = useState('')
-  const [openSection, setOpenSection] = useState<OpenSection>('integrations')
+  const [openSection, setOpenSection] = useState<OpenSection>(() => {
+    if (typeof window === 'undefined') return 'integrations'
+    const section = new URLSearchParams(window.location.search).get('section') as OpenSection | null
+    return section || 'integrations'
+  })
   const [payrollDirty, setPayrollDirty] = useState(false)
   const [holidayStartPickerOpen, setHolidayStartPickerOpen] = useState(false)
+  const [planLimits, setPlanLimits] = useState<Record<string, any>>({})
 
   const activeAdminCount = useMemo(() => {
     return staffUsers.filter((user) => user.is_active && user.role === 'admin').length
   }, [staffUsers])
 
+  const activeStaffCount = staffUsers.filter((user) => user.is_active !== false).length
+  const effectiveStaffLimit =
+    activeCompany?.billing_exempt || activeCompany?.internal_account ? null : planLimits.staff_limit
+  const staffLimitReached = limitReached(activeStaffCount, effectiveStaffLimit)
+
   const canAddNewStaff =
     newStaffName.trim().length > 0 &&
     newStaffPin.trim().length >= 4 &&
     newStaffRole.trim().length > 0 &&
-    hasAnyPermission(newStaffPermissions)
+    hasAnyPermission(newStaffPermissions) &&
+    !staffLimitReached
 
   useEffect(() => {
     fetchSettings()
@@ -318,7 +349,8 @@ export default function SettingsPage() {
     fetchLocations()
     fetchFixedCosts()
     fetchPayrollSettings()
-  }, [])
+    fetchPlanLimits()
+  }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
     if (!message) return
@@ -329,6 +361,29 @@ export default function SettingsPage() {
 
     return () => window.clearTimeout(timer)
   }, [message])
+
+  useEffect(() => {
+    const section = new URLSearchParams(window.location.search).get('section') as OpenSection | null
+    if (
+      section &&
+      [
+        'integrations',
+        'company',
+        'billing',
+        'processing',
+        'locations',
+        'users',
+        'payroll',
+        'appearance',
+        'fixed_costs',
+        'photo',
+        'export',
+        'copy',
+      ].includes(section)
+    ) {
+      setOpenSection(section)
+    }
+  }, [])
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent) {
@@ -369,26 +424,57 @@ export default function SettingsPage() {
   }
 
   async function fetchSettings() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('app_settings')
       .select('*')
-      .eq('id', 'default')
-      .single()
+      .limit(1)
+
+    query = schemaReady
+      ? query.eq('company_id', activeCompanyId)
+      : query.eq('id', 'default')
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) {
       setMessage(error.message)
       return
     }
 
-    setSettings(data)
-    setStoredTheme(data.ui_theme || 'dark')
+    setSettings(data || {})
+    setStoredTheme(data?.ui_theme || 'dark')
+  }
+
+  async function fetchPlanLimits() {
+    if (!schemaReady || !activeCompanyId) {
+      setPlanLimits({})
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('company_subscriptions')
+      .select('limits')
+      .eq('company_id', activeCompanyId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    setPlanLimits(data?.limits || {})
   }
 
   async function fetchStaffUsers() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('staff_users')
       .select('*')
       .order('name', { ascending: true })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -411,11 +497,16 @@ export default function SettingsPage() {
   }
 
   async function fetchPayrollSettings() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('payroll_settings')
       .select('*')
-      .eq('id', 'default')
-      .maybeSingle()
+      .limit(1)
+
+    query = schemaReady
+      ? query.eq('company_id', activeCompanyId)
+      : query.eq('id', 'default')
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) {
       setMessage(error.message)
@@ -432,7 +523,8 @@ export default function SettingsPage() {
 
   async function savePayrollSettings() {
     const payload = {
-      id: 'default',
+      id: schemaReady ? `default-${activeCompanyId.slice(0, 8)}` : 'default',
+      ...(schemaReady ? { company_id: activeCompanyId } : {}),
       payroll_period: payrollSettings.payroll_period,
       payroll_start_day: Number(payrollSettings.payroll_start_day || 1),
       payroll_start_date: null,
@@ -474,14 +566,28 @@ export default function SettingsPage() {
   }
 
   async function fetchLocations() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('locations')
       .select('id, code, name, label, is_active, bin_mode, basic_bins')
       .in('name', defaultLocationSettings.map((location) => location.name))
       .order('name', { ascending: true })
 
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
+
     if (error) {
       setMessage(error.message)
+      return
+    }
+
+    if (schemaReady && (!data || data.length === 0)) {
+      setLocations(newCompanyDefaultLocationSettings)
+      setOriginalLocationModes(
+        Object.fromEntries(
+          newCompanyDefaultLocationSettings.map((location) => [location.name, location.bin_mode])
+        )
+      )
       return
     }
 
@@ -507,12 +613,16 @@ export default function SettingsPage() {
   }
 
   async function getLocationStockSummary(locationName: string) {
-    const { data, error } = await supabase
+    let query = supabase
       .from('item_stock_locations')
       .select('sku, bin_code, stock_level')
       .eq('location_name', locationName)
       .gt('stock_level', 0)
       .limit(25)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) throw new Error(error.message)
 
@@ -592,6 +702,7 @@ export default function SettingsPage() {
               .slice(0, 3),
           })
           .eq('id', location.id)
+          .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : location.id)
 
         if (error) {
           setMessage(error.message)
@@ -601,6 +712,7 @@ export default function SettingsPage() {
         const { error } = await supabase
           .from('locations')
           .insert({
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             code: cleanName,
             name: cleanName,
             label: cleanLabel,
@@ -624,10 +736,14 @@ export default function SettingsPage() {
   }
 
   async function fetchFixedCosts() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('fixed_costs')
       .select('id, name, amount, cadence, category, location_name, is_active')
       .order('name', { ascending: true })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -678,6 +794,7 @@ export default function SettingsPage() {
 
     for (const row of rows) {
       const payload = {
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         name: row.name,
         amount: row.amount,
         cadence: row.cadence,
@@ -726,21 +843,24 @@ export default function SettingsPage() {
   }
 
   async function saveSettings() {
+    const payload = {
+      id: schemaReady ? `default-${activeCompanyId.slice(0, 8)}` : 'default',
+      ...(schemaReady ? { company_id: activeCompanyId } : {}),
+      photo_reference_url: settings.photo_reference_url,
+      photo_reference_urls: settings.photo_reference_urls,
+      photo_ai_rules: settings.photo_ai_rules,
+      photo_background_colour: settings.photo_background_colour,
+      image_export_size: Number(settings.image_export_size),
+      image_export_quality: Number(settings.image_export_quality),
+      ai_copy_rules: settings.ai_copy_rules,
+      ui_theme: settings.ui_theme || 'dark',
+      enable_rfid_receiving: Boolean(settings.enable_rfid_receiving),
+      updated_at: new Date().toISOString(),
+    }
+
     const { error } = await supabase
       .from('app_settings')
-      .update({
-        photo_reference_url: settings.photo_reference_url,
-        photo_reference_urls: settings.photo_reference_urls,
-        photo_ai_rules: settings.photo_ai_rules,
-        photo_background_colour: settings.photo_background_colour,
-        image_export_size: Number(settings.image_export_size),
-        image_export_quality: Number(settings.image_export_quality),
-        ai_copy_rules: settings.ai_copy_rules,
-        ui_theme: settings.ui_theme || 'dark',
-        enable_rfid_receiving: Boolean(settings.enable_rfid_receiving),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', 'default')
+      .upsert(payload, { onConflict: 'id' })
 
     if (error) {
       setMessage(error.message)
@@ -792,7 +912,13 @@ export default function SettingsPage() {
       return
     }
 
+    if (staffLimitReached) {
+      setMessage('This plan has reached its active staff user limit.')
+      return
+    }
+
     const { error } = await supabase.from('staff_users').insert({
+      ...(schemaReady ? { company_id: activeCompanyId } : {}),
       name,
       pin_code: pin,
       is_active: true,
@@ -1193,7 +1319,18 @@ export default function SettingsPage() {
     section: Exclude<OpenSection, null>
     title: string
     description: string
+    href?: string
   }[] = [
+    {
+      section: 'company',
+      title: 'Company / Departments',
+      description: 'Companies, members, billing, departments and devices.',
+    },
+    {
+      section: 'billing',
+      title: 'Subscriptions / Billing / Invoices',
+      description: 'Plans, pricing and invoice history.',
+    },
     {
       section: 'integrations',
       title: 'Channel Integrations',
@@ -1262,20 +1399,11 @@ export default function SettingsPage() {
             <AppNav current="settings" />
           </div>
 
-          <div className="flex items-center gap-3">
-            {message && (
-              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-                {message}
-              </span>
-            )}
-
-            <button
-              onClick={saveSettings}
-              className="rounded-lg bg-green-600 px-5 py-2 text-sm font-black text-white hover:bg-green-500"
-            >
-              Save Settings
-            </button>
-          </div>
+          {message && (
+            <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+              {message}
+            </span>
+          )}
         </div>
 
         <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
@@ -1287,6 +1415,21 @@ export default function SettingsPage() {
             <div className="space-y-2">
               {settingsMenu.map((item) => {
                 const selected = openSection === item.section
+
+                if (item.href) {
+                  return (
+                    <Link
+                      key={item.section}
+                      href={item.href}
+                      className="block w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-left text-zinc-300 transition hover:border-zinc-600"
+                    >
+                      <span className="block text-sm font-black">{item.title}</span>
+                      <span className="mt-1 block text-xs font-bold text-zinc-500">
+                        {item.description}
+                      </span>
+                    </Link>
+                  )
+                }
 
                 return (
                   <button
@@ -1314,6 +1457,28 @@ export default function SettingsPage() {
           </aside>
 
           <div className="min-w-0 space-y-4">
+          <SectionHeader
+            section="company"
+            title="Company / Departments"
+            description="Companies, members, billing, departments and devices."
+            colour="emerald"
+          />
+
+          {openSection === 'company' && (
+            <CompanySettingsPanel embedded onOpenBilling={() => setOpenSection('billing')} />
+          )}
+
+          <SectionHeader
+            section="billing"
+            title="Subscriptions / Billing / Invoices"
+            description="View plan options, billing status and invoice history."
+            colour="emerald"
+          />
+
+          {openSection === 'billing' && (
+            <BillingSettingsPanel />
+          )}
+
           <SectionHeader
             section="integrations"
             title="Channel Integrations"
@@ -1368,6 +1533,14 @@ export default function SettingsPage() {
                     ? 'Receiving will show the RFID table bridge, live TID count and TID-linked batch creation.'
                     : 'Receiving will create normal working batches without requiring the RFID table bridge.'}
                 </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={saveSettings}
+                className="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500"
+              >
+                Save Processing Settings
               </button>
             </section>
           )}
@@ -1518,6 +1691,9 @@ export default function SettingsPage() {
                   <p className="mt-1 text-sm text-zinc-500">
                     Email login controls device/app access. Staff PIN controls who is using the app and what they can access.
                   </p>
+                  <p className="mt-2 text-xs font-bold text-zinc-500">
+                    Active staff: {activeStaffCount} / {formatLimit(effectiveStaffLimit)}
+                  </p>
                 </div>
 
                 <button
@@ -1572,6 +1748,12 @@ export default function SettingsPage() {
                     Add User
                   </button>
                 </div>
+
+                {staffLimitReached && (
+                  <p className="mt-3 text-xs font-bold text-yellow-300">
+                    This company has reached its active staff limit for the current plan.
+                  </p>
+                )}
 
                 <div className="mt-4">
                   <p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-500">
@@ -2014,10 +2196,10 @@ export default function SettingsPage() {
                                 : 'bg-zinc-800 text-zinc-400'
                             }`}
                           >
-                            {staffPayroll.include_in_payroll ? 'Included' : 'Excluded'}
+                            {staffPayroll.include_in_payroll ? 'Included' : 'Director hours'}
                           </button>
                           <p className="mt-1 text-[10px] font-bold text-zinc-500">
-                            Payroll & holiday figures
+                            Payroll & holiday totals
                           </p>
                         </div>
 
@@ -2225,6 +2407,14 @@ export default function SettingsPage() {
                   )
                 })}
               </div>
+
+              <button
+                type="button"
+                onClick={saveSettings}
+                className="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500"
+              >
+                Save Appearance
+              </button>
             </section>
           )}
 
@@ -2367,6 +2557,14 @@ export default function SettingsPage() {
                   </button>
                 </div>
               </div>
+
+              <button
+                type="button"
+                onClick={saveSettings}
+                className="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500"
+              >
+                Save Photo Settings
+              </button>
             </section>
           )}
 
@@ -2400,6 +2598,14 @@ export default function SettingsPage() {
                   className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm"
                 />
               </div>
+
+              <button
+                type="button"
+                onClick={saveSettings}
+                className="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500"
+              >
+                Save Export Settings
+              </button>
             </section>
           )}
 
@@ -2421,6 +2627,14 @@ export default function SettingsPage() {
                 onChange={(e) => updateField('ai_copy_rules', e.target.value)}
                 className="h-56 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm"
               />
+
+              <button
+                type="button"
+                onClick={saveSettings}
+                className="mt-4 rounded-lg bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500"
+              >
+                Save Copy Rules
+              </button>
             </section>
           )}
           </div>

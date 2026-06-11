@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
 import { supabase } from '@/lib/supabase'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type GeneratorMode = 'word' | 'range'
 
@@ -184,13 +185,19 @@ function openBinLabelPreview(location: string, bins: string[]) {
   window.open('/labels/preview', '_blank')
 }
 
-async function loadLocationOptions() {
+async function loadLocationOptions(companyId?: string | null) {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('locations')
       .select('name, label, is_active')
       .eq('is_active', true)
       .order('name', { ascending: true })
+
+    if (companyId) {
+      query = query.eq('company_id', companyId)
+    }
+
+    const { data, error } = await query
 
     if (error || !data || data.length === 0) return FALLBACK_LOCATIONS
 
@@ -208,6 +215,7 @@ async function loadLocationOptions() {
 }
 
 export default function CreateBinPage() {
+  const { activeCompanyId, schemaReady } = useCompany()
   const [locations, setLocations] = useState<LocationOption[]>(FALLBACK_LOCATIONS)
   const [location, setLocation] = useState('LOCATION-1')
   const [customLocation, setCustomLocation] = useState('')
@@ -231,14 +239,14 @@ export default function CreateBinPage() {
   const activeLocation = location === '__CUSTOM__' ? cleanLocation(customLocation) : location
 
   useEffect(() => {
-    loadLocationOptions().then((rows) => {
+    loadLocationOptions(schemaReady ? activeCompanyId : null).then((rows) => {
       setLocations(rows)
 
       if (rows.length > 0 && !rows.some((row) => row.name === location)) {
         setLocation(rows[0].name)
       }
     })
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
     setZones((prev) =>
@@ -343,11 +351,17 @@ export default function CreateBinPage() {
       throw new Error('Choose or enter a location first.')
     }
 
-    const { data, error } = await supabase
+    let existingQuery = supabase
       .from('warehouse_bins')
       .select('bin_code, location_name')
       .eq('location_name', locationName)
       .in('bin_code', bins)
+
+    if (schemaReady && activeCompanyId) {
+      existingQuery = existingQuery.eq('company_id', activeCompanyId)
+    }
+
+    const { data, error } = await existingQuery
 
     if (error) {
       throw new Error(error.message)
@@ -359,6 +373,7 @@ export default function CreateBinPage() {
 
     if (missingBins.length > 0) {
       const rows = missingBins.map((bin) => ({
+        ...(schemaReady && activeCompanyId ? { company_id: activeCompanyId } : {}),
         bin_code: bin,
         label: bin,
         location_name: locationName,
@@ -368,7 +383,9 @@ export default function CreateBinPage() {
       const { error: upsertError } = await supabase
         .from('warehouse_bins')
         .upsert(rows, {
-          onConflict: 'bin_code,location_name',
+          onConflict: schemaReady && activeCompanyId
+            ? 'company_id,bin_code,location_name'
+            : 'bin_code,location_name',
           ignoreDuplicates: true,
         })
 

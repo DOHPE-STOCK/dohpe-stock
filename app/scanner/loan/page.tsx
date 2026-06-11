@@ -1,9 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
+import { supabase } from '@/lib/supabase'
 
 type StockChoice = {
   id: string
@@ -171,8 +174,10 @@ function validItemScan(item: LoanItem, scanned: string) {
 }
 
 export default function LoanPage() {
+  const router = useRouter()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [scanValue, setScanValue] = useState('')
   const [loanItems, setLoanItems] = useState<LoanItem[]>([])
@@ -181,11 +186,67 @@ export default function LoanPage() {
   const [pendingReturn, setPendingReturn] = useState<PendingReturn | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [featureAllowed, setFeatureAllowed] = useState<boolean | null>(null)
 
   useEffect(() => {
+    checkLoanFeature()
+  }, [activeCompanyId, schemaReady])
+
+  useEffect(() => {
+    if (featureAllowed !== true) return
     fetchLoans()
     focusInput()
-  }, [])
+  }, [featureAllowed])
+
+  async function checkLoanFeature() {
+    if (!schemaReady || !activeCompanyId) {
+      setFeatureAllowed(false)
+      router.replace('/')
+      return
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      setFeatureAllowed(false)
+      router.replace('/')
+      return
+    }
+
+    const [companyFeatureResult, userOverrideResult] = await Promise.all([
+      supabase
+        .from('company_features')
+        .select('enabled')
+        .eq('company_id', activeCompanyId)
+        .eq('feature_key', 'loan_page')
+        .maybeSingle(),
+      supabase
+        .from('user_feature_overrides')
+        .select('enabled')
+        .eq('company_id', activeCompanyId)
+        .eq('user_id', user.id)
+        .eq('feature_key', 'loan_page')
+        .maybeSingle(),
+    ])
+
+    if (companyFeatureResult.error || userOverrideResult.error) {
+      setFeatureAllowed(false)
+      router.replace('/')
+      return
+    }
+
+    const allowed =
+      userOverrideResult.data?.enabled === true ||
+      (!userOverrideResult.data && companyFeatureResult.data?.enabled === true)
+
+    setFeatureAllowed(allowed)
+
+    if (!allowed) {
+      router.replace('/')
+    }
+  }
 
   function focusInput() {
     setTimeout(() => inputRef.current?.focus(), 50)
@@ -503,6 +564,21 @@ export default function LoanPage() {
     if (!notes?.source_location && !notes?.source_bin) return 'Original location unknown'
 
     return `${notes.source_location || 'Original'} / ${notes.source_bin || 'Default'}`
+  }
+
+  if (featureAllowed !== true) {
+    return (
+      <StaffPermissionGate permission="scanner">
+        <main className="min-h-screen bg-neutral-950 p-5 text-white">
+          <section className="mx-auto mt-20 max-w-xl rounded-2xl border border-neutral-800 bg-neutral-900 p-6 text-center">
+            <h1 className="text-2xl font-black">Loan workflow unavailable</h1>
+            <p className="mt-2 text-sm font-bold text-neutral-400">
+              This custom page is not enabled for the active company.
+            </p>
+          </section>
+        </main>
+      </StaffPermissionGate>
+    )
   }
 
   return (

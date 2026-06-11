@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
+import { getEnabledIntegrationCompanies } from '@/lib/tenantCronCompanies'
 
 export const dynamic = 'force-dynamic'
 
@@ -136,12 +137,15 @@ const DEFAULT_APP_LOCATION_SETTINGS: Record<string, AppLocationSetting> = {
 let activeAppLocationSettings = DEFAULT_APP_LOCATION_SETTINGS
 
 
-async function loadLocationMappings(supabase: any) {
-  const { data, error } = await supabase
+async function loadLocationMappings(supabase: any, companyId?: string | null) {
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('channel', 'linnworks')
-    .maybeSingle()
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) return DEFAULT_LOCATION_MAPPINGS
 
@@ -157,15 +161,19 @@ async function loadLocationMappings(supabase: any) {
   return mappings
 }
 
-async function loadAppLocationSettings(supabase: any) {
+async function loadAppLocationSettings(supabase: any, companyId?: string | null) {
   const settings: Record<string, AppLocationSetting> = {
     ...DEFAULT_APP_LOCATION_SETTINGS,
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('locations')
     .select('name, label, is_active, bin_mode, basic_bins')
     .in('name', Object.keys(DEFAULT_APP_LOCATION_SETTINGS))
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
 
   if (error) return settings
 
@@ -1793,12 +1801,12 @@ async function processUpdateLocationQueueRow(params: {
   }
 }
 
-async function processQueue(request: Request) {
+async function processQueue(request: Request, companyId?: string | null) {
   const startedAt = new Date().toISOString()
 
   try {
     const supabase = getSupabaseAdmin()
-    const integrationConfig = await getLinnworksIntegrationConfig(supabase)
+    const integrationConfig = await getLinnworksIntegrationConfig(supabase, companyId)
     const integrationGate = shouldRunLinnworksRoute({
       config: integrationConfig,
       route: 'process_queue',
@@ -1814,8 +1822,8 @@ async function processQueue(request: Request) {
         finished_at: new Date().toISOString(),
       })
     }
-    activeLocationMappings = await loadLocationMappings(supabase)
-    activeAppLocationSettings = await loadAppLocationSettings(supabase)
+    activeLocationMappings = await loadLocationMappings(supabase, companyId)
+    activeAppLocationSettings = await loadAppLocationSettings(supabase, companyId)
 
     const body = await request.json().catch(() => ({}))
     const limit = Math.min(Number(body.limit || 10), 50)
@@ -1824,6 +1832,7 @@ async function processQueue(request: Request) {
       .from('linnworks_sync_queue')
       .select('*')
       .eq('status', 'pending')
+      .eq('company_id', companyId)
       .order('created_at', { ascending: true })
       .limit(limit)
 
@@ -1930,13 +1939,14 @@ async function processQueue(request: Request) {
           .eq('id', row.id)
 
         await supabase
-          .from('items')
-          .update({
+        .from('items')
+        .update({
             linnworks_location_sync_status: 'failed',
             linnworks_sync_error: error.message || 'Unknown queue processing error.',
             updated_at: new Date().toISOString(),
-          })
-          .eq('sku', row.sku)
+        })
+        .eq('sku', row.sku)
+        .eq('company_id', companyId)
 
         results.push({
           id: row.id,
@@ -1950,6 +1960,7 @@ async function processQueue(request: Request) {
 
     return NextResponse.json({
       ok: true,
+      company_id: companyId || null,
       processed: results.filter((row) => row.ok).length,
       failed: results.filter((row) => !row.ok).length,
       results,
@@ -1967,6 +1978,46 @@ async function processQueue(request: Request) {
   }
 }
 
+async function processQueueForAllCompanies(request: Request) {
+  const supabase = getSupabaseAdmin()
+  const manual = new URL(request.url).searchParams.get('manual') === 'true'
+  const companies = await getEnabledIntegrationCompanies(supabase, 'linnworks', manual)
+
+  if (companies.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      message: 'No active companies have Linnworks auto-sync enabled.',
+      processed_companies: 0,
+      results: [],
+    })
+  }
+
+  const results = []
+
+  for (const company of companies) {
+    const response = await processQueue(request.clone(), company.id)
+    const payload = await response.json().catch(() => ({
+      ok: false,
+      message: `Unexpected response status ${response.status}`,
+    }))
+
+    results.push({
+      company_id: company.id,
+      company_name: company.name,
+      company_slug: company.slug,
+      status: response.status,
+      ...payload,
+    })
+  }
+
+  return NextResponse.json({
+    ok: results.every((result) => result.ok),
+    processed_companies: results.length,
+    results,
+  })
+}
+
 export async function POST(request: Request) {
   const authHeader = request.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET
@@ -1975,7 +2026,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
   }
 
-  return processQueue(request)
+  return processQueueForAllCompanies(request)
 }
 
 export async function GET(request: Request) {
@@ -1986,5 +2037,5 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
   }
 
-  return processQueue(request)
+  return processQueueForAllCompanies(request)
 }

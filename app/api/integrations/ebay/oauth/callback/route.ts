@@ -14,6 +14,20 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 function html(title: string, body: string, ok = true) {
   return new NextResponse(
     `<!doctype html>
@@ -58,7 +72,8 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const tokens = await exchangeEbayCodeForTokens(config.settings, code)
     const profile = await getEbayUserProfile(config.settings, tokens.access_token).catch(() => null)
     const accountName =
@@ -78,7 +93,7 @@ export async function GET(request: NextRequest) {
       ebay_account_type: profile?.accountType || null,
     }
 
-    await supabase
+    let updateQuery = supabase
       .from('integration_settings')
       .update({
         enabled: true,
@@ -89,6 +104,12 @@ export async function GET(request: NextRequest) {
         updated_at: new Date().toISOString(),
       })
       .eq('channel', 'ebay')
+
+    if (companyId) {
+      updateQuery = updateQuery.eq('company_id', companyId)
+    }
+
+    await updateQuery
 
     return html(
       'eBay connected',

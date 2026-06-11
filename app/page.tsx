@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
+import { useCompany } from '@/app/context/CompanyContext'
 import { useStaff } from '@/app/context/StaffContext'
 
 type ItemImage = {
@@ -133,6 +134,7 @@ async function upsertStockLocationViaApi(params: {
   binCode: string
   stockLevel: number
   source: string
+  companyId?: string | null
 }) {
   const response = await fetch('/api/items/stock-location', {
     method: 'POST',
@@ -144,6 +146,7 @@ async function upsertStockLocationViaApi(params: {
       bin_code: params.binCode,
       stock_level: params.stockLevel,
       source: params.source,
+      company_id: params.companyId || null,
     }),
   })
 
@@ -263,6 +266,7 @@ export default function SkuSearchPage() {
   const router = useRouter()
   const scanInputRef = useRef<HTMLInputElement | null>(null)
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [scanValue, setScanValue] = useState('')
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([])
@@ -282,14 +286,18 @@ export default function SkuSearchPage() {
 
   useEffect(() => {
     fetchLocationConfigs()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   async function fetchLocationConfigs() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('locations')
       .select('name, label, is_active, bin_mode, basic_bins')
       .eq('is_active', true)
       .order('name', { ascending: true })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (!error) {
       setLocationConfigs(configuredLocationRows((data || []) as LocationConfig[]))
@@ -387,10 +395,12 @@ export default function SkuSearchPage() {
 
     let query = supabase
       .from('stock_transfer_items')
-      .select('id, item_id, sku, source_bin, status, stock_transfers!inner(from_location, status)')
+      .select('id, item_id, sku, source_bin, status, stock_transfers!inner(from_location, status, company_id)')
       .eq('sku', cleanSku)
       .eq('status', 'in_transfer')
       .eq('stock_transfers.status', 'sent')
+
+    if (schemaReady) query = query.eq('stock_transfers.company_id', activeCompanyId)
 
     if (itemId) {
       query = query.eq('item_id', itemId)
@@ -518,6 +528,7 @@ export default function SkuSearchPage() {
     const { data, error } = await supabase
       .from('items')
       .insert({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         sku,
         status: 'working',
         stock_level: 1,
@@ -555,6 +566,7 @@ export default function SkuSearchPage() {
         binCode: DEFAULT_BIN,
         stockLevel: 1,
         source: 'sku_search_create',
+        companyId: schemaReady ? activeCompanyId : null,
       })
     } catch (error: any) {
       setMessage(`Created item, but stock-location row failed: ${error.message}`)
@@ -567,10 +579,14 @@ export default function SkuSearchPage() {
     const rows = new Map<string, StockLocationChoice>()
 
     if (itemData?.id) {
-      const { data, error } = await supabase
+      let query = supabase
         .from('item_stock_locations')
         .select('id, item_id, sku, location_name, bin_code, stock_level')
         .eq('item_id', itemData.id)
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
 
       if (error) throw new Error(error.message)
 
@@ -580,10 +596,14 @@ export default function SkuSearchPage() {
     const cleanSku = text(sku).toUpperCase()
 
     if (cleanSku) {
-      const { data, error } = await supabase
+      let query = supabase
         .from('item_stock_locations')
         .select('id, item_id, sku, location_name, bin_code, stock_level')
         .eq('sku', cleanSku)
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
 
       if (error) throw new Error(error.message)
 
@@ -638,7 +658,7 @@ export default function SkuSearchPage() {
 
     const safeLookup = escapePostgrestOrValue(rawSku)
 
-    const { data, error } = await supabase
+    let itemLookupQuery = supabase
       .from('items')
       .select(`
         id,
@@ -676,7 +696,10 @@ export default function SkuSearchPage() {
         )
       `)
       .eq('sku', rawSku)
-      .maybeSingle()
+
+    if (schemaReady) itemLookupQuery = itemLookupQuery.eq('company_id', activeCompanyId)
+
+    const { data, error } = await itemLookupQuery.maybeSingle()
 
     setBusy(false)
 
@@ -688,12 +711,15 @@ export default function SkuSearchPage() {
     let itemData = data
 
     if (!itemData) {
-      const { data: identifierData, error: identifierError } = await supabase
+      let identifierQuery = supabase
         .from('item_identifiers')
         .select('item_id')
         .eq('identifier_value_normalized', normaliseIdentifier(rawSku))
         .eq('is_active', true)
-        .maybeSingle()
+
+      if (schemaReady) identifierQuery = identifierQuery.eq('company_id', activeCompanyId)
+
+      const { data: identifierData, error: identifierError } = await identifierQuery.maybeSingle()
 
       if (identifierError) {
         setMessage(identifierError.message)
@@ -701,7 +727,7 @@ export default function SkuSearchPage() {
       }
 
       if (identifierData?.item_id) {
-        const { data: identifierItem, error: identifierItemError } = await supabase
+        let identifierItemQuery = supabase
           .from('items')
           .select(`
             id,
@@ -739,7 +765,10 @@ export default function SkuSearchPage() {
             )
           `)
           .eq('id', identifierData.item_id)
-          .maybeSingle()
+
+        if (schemaReady) identifierItemQuery = identifierItemQuery.eq('company_id', activeCompanyId)
+
+        const { data: identifierItem, error: identifierItemError } = await identifierItemQuery.maybeSingle()
 
         if (identifierItemError) {
           setMessage(identifierItemError.message)
@@ -882,12 +911,16 @@ export default function SkuSearchPage() {
     const rows = new Map<string, StockLocationChoice>()
 
     if (item.id) {
-      const { data, error } = await supabase
+      let query = supabase
         .from('item_stock_locations')
         .select('id, item_id, sku, location_name, bin_code, stock_level')
         .eq('item_id', item.id)
         .gt('stock_level', 0)
         .order('location_name', { ascending: true })
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
 
       if (error) throw new Error(error.message)
 
@@ -899,12 +932,16 @@ export default function SkuSearchPage() {
     const sku = text(item.sku).toUpperCase()
 
     if (sku) {
-      const { data, error } = await supabase
+      let query = supabase
         .from('item_stock_locations')
         .select('id, item_id, sku, location_name, bin_code, stock_level')
         .eq('sku', sku)
         .gt('stock_level', 0)
         .order('location_name', { ascending: true })
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
 
       if (error) throw new Error(error.message)
 
@@ -1142,6 +1179,7 @@ export default function SkuSearchPage() {
     const { data: transfer, error: transferError } = await supabase
       .from('stock_transfers')
       .insert({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         from_location: fromLocation,
         to_location: toLocation,
         status: 'sent',
@@ -1162,6 +1200,7 @@ export default function SkuSearchPage() {
       .insert(
         transferLines.flatMap((line) =>
           Array.from({ length: Number(line.quantity || 0) }, () => ({
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             transfer_id: transfer.id,
             item_id: line.item.id,
             sku: line.item.sku,
@@ -1192,6 +1231,7 @@ export default function SkuSearchPage() {
           updated_at: now,
         })
         .in('id', singleUseTransferIds)
+        .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : singleUseTransferIds[0])
 
       if (itemUpdateError) {
         setBusy(false)
@@ -1289,11 +1329,14 @@ export default function SkuSearchPage() {
 
         if (skus.includes(sku)) continue
 
-        const { data: existingItem, error: itemCheckError } = await supabase
+        let itemCheckQuery = supabase
           .from('items')
           .select('sku')
           .eq('sku', sku)
-          .maybeSingle()
+
+        if (schemaReady) itemCheckQuery = itemCheckQuery.eq('company_id', activeCompanyId)
+
+        const { data: existingItem, error: itemCheckError } = await itemCheckQuery.maybeSingle()
 
         if (itemCheckError) {
           throw new Error(`Item SKU check failed: ${itemCheckError.message}`)
@@ -1366,11 +1409,14 @@ export default function SkuSearchPage() {
       const checkDigit = luhnCheckDigit(body)
       const barcodeNumber = `${body}${checkDigit}`
 
-      const { data: existingItemBySku, error: itemSkuError } = await supabase
+      let itemSkuQuery = supabase
         .from('items')
         .select('id')
         .eq('sku', barcodeNumber)
-        .maybeSingle()
+
+      if (schemaReady) itemSkuQuery = itemSkuQuery.eq('company_id', activeCompanyId)
+
+      const { data: existingItemBySku, error: itemSkuError } = await itemSkuQuery.maybeSingle()
 
       if (itemSkuError) {
         throw new Error(`Item SKU check failed: ${itemSkuError.message}`)
@@ -1378,11 +1424,14 @@ export default function SkuSearchPage() {
 
       if (existingItemBySku) continue
 
-      const { data: existingItemByBarcode, error: itemBarcodeError } = await supabase
+      let itemBarcodeQuery = supabase
         .from('items')
         .select('id')
         .eq('barcode_number', barcodeNumber)
-        .maybeSingle()
+
+      if (schemaReady) itemBarcodeQuery = itemBarcodeQuery.eq('company_id', activeCompanyId)
+
+      const { data: existingItemByBarcode, error: itemBarcodeError } = await itemBarcodeQuery.maybeSingle()
 
       if (itemBarcodeError) {
         throw new Error(`Item barcode check failed: ${itemBarcodeError.message}`)
@@ -1431,7 +1480,7 @@ export default function SkuSearchPage() {
     setReusableMessage('')
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('items')
         .select(`
           id,
@@ -1451,6 +1500,10 @@ export default function SkuSearchPage() {
         .eq('sku_type', 'reusable')
         .order('sku', { ascending: true })
         .limit(300)
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
 
       if (error) throw new Error(error.message)
 
@@ -1478,7 +1531,7 @@ export default function SkuSearchPage() {
       const sku = cleanReusableSku(clean)
       const safe = escapePostgrestOrValue(clean)
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('items')
         .select(`
           id,
@@ -1501,6 +1554,10 @@ export default function SkuSearchPage() {
         )
         .order('sku', { ascending: true })
         .limit(8)
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
 
       if (error) throw new Error(error.message)
 
@@ -1558,11 +1615,14 @@ export default function SkuSearchPage() {
     setReusableMessage('Creating reusable SKU...')
 
     try {
-      const { data: existing, error: existingError } = await supabase
+      let existingQuery = supabase
         .from('items')
         .select('id, sku, barcode_number, sku_type')
         .eq('sku', sku)
-        .maybeSingle()
+
+      if (schemaReady) existingQuery = existingQuery.eq('company_id', activeCompanyId)
+
+      const { data: existing, error: existingError } = await existingQuery.maybeSingle()
 
       if (existingError) throw new Error(existingError.message)
 
@@ -1580,6 +1640,7 @@ export default function SkuSearchPage() {
       const { data, error } = await supabase
         .from('items')
         .insert({
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           sku,
           barcode_number: barcodeNumber,
           sku_type: 'reusable',

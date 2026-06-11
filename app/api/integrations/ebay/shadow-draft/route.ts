@@ -13,6 +13,20 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -31,7 +45,8 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const draft = readiness.listing_draft
     const policies = {
       payment_policy_id: draft.policies?.payment_policy_id || config.settings.payment_policy_id || null,
@@ -41,6 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = {
+      ...(companyId ? { company_id: companyId } : {}),
       item_id: readiness.item.id,
       sku: readiness.sku,
       marketplace_id: config.settings.marketplace_id,

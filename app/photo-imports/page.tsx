@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type ImportImage = {
   id: string
@@ -27,6 +28,7 @@ type ImportGroup = {
 type StatusFilter = 'pending' | 'approved' | 'all'
 
 export default function PhotoImportsPage() {
+  const { activeCompanyId, schemaReady } = useCompany()
   const [groups, setGroups] = useState<ImportGroup[]>([])
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending')
   const [message, setMessage] = useState('')
@@ -34,7 +36,7 @@ export default function PhotoImportsPage() {
 
   useEffect(() => {
     fetchGroups()
-  }, [statusFilter])
+  }, [statusFilter, activeCompanyId, schemaReady])
 
   async function fetchGroups() {
     setLoading(true)
@@ -62,6 +64,8 @@ export default function PhotoImportsPage() {
     if (statusFilter !== 'all') {
       query = query.eq('status', statusFilter)
     }
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
 
     const { data, error } = await query
 

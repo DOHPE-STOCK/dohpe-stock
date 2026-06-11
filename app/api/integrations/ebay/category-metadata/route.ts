@@ -14,6 +14,20 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const categoryId = new URL(request.url).searchParams.get('category_id')?.trim()
@@ -22,7 +36,8 @@ export async function GET(request: Request) {
     }
 
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const categoryTreeId = await getDefaultCategoryTreeId(config.settings)
 
     const [aspects, conditions] = await Promise.all([

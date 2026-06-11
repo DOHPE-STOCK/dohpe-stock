@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type ItemRow = {
   id: string
@@ -315,6 +316,7 @@ export default function CheckoutPage() {
   const retryingRef = useRef(false)
   const paymentResultTimerRef = useRef<number | null>(null)
   const { staff, clearStaff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [mode, setMode] = useState<CheckoutMode>('sale')
   const [scanValue, setScanValue] = useState('')
@@ -657,30 +659,39 @@ export default function CheckoutPage() {
   async function lookupItemByScanValue(scanValue: string) {
     const safeSkuLookup = escapePostgrestOrValue(scanValue)
 
-    const directResult = await supabase
+    let directQuery = supabase
       .from('items')
       .select('*')
       .or(`sku.eq.${safeSkuLookup},barcode_number.eq.${safeSkuLookup}`)
-      .maybeSingle()
+
+    if (schemaReady) directQuery = directQuery.eq('company_id', activeCompanyId)
+
+    const directResult = await directQuery.maybeSingle()
 
     if (directResult.error) throw new Error(directResult.error.message)
     if (directResult.data) return directResult.data as ItemRow
 
-    const identifierResult = await supabase
+    let identifierQuery = supabase
       .from('item_identifiers')
       .select('item_id')
       .eq('identifier_value_normalized', normaliseIdentifier(scanValue))
       .eq('is_active', true)
-      .maybeSingle()
+
+    if (schemaReady) identifierQuery = identifierQuery.eq('company_id', activeCompanyId)
+
+    const identifierResult = await identifierQuery.maybeSingle()
 
     if (identifierResult.error) throw new Error(identifierResult.error.message)
     if (!identifierResult.data?.item_id) return null
 
-    const itemResult = await supabase
+    let itemQuery = supabase
       .from('items')
       .select('*')
       .eq('id', identifierResult.data.item_id)
-      .maybeSingle()
+
+    if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
+
+    const itemResult = await itemQuery.maybeSingle()
 
     if (itemResult.error) throw new Error(itemResult.error.message)
     return (itemResult.data || null) as ItemRow | null
@@ -1207,6 +1218,7 @@ export default function CheckoutPage() {
 
     for (const line of returnLines.filter((row) => row.quantity > 0)) {
       queueRows.push({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         sku: line.sku,
         action: 'adjust_stock',
         payload: {
@@ -1229,6 +1241,7 @@ export default function CheckoutPage() {
 
     for (const line of saleLines.filter((row) => row.quantity > 0 && !row.isBag)) {
       queueRows.push({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         sku: line.sku,
         action: 'adjust_stock',
         payload: {
@@ -1275,6 +1288,7 @@ export default function CheckoutPage() {
         : defaultCardDetails
 
     return {
+      ...(schemaReady ? { company_id: activeCompanyId } : {}),
       id: saleId,
       sale_number: saleNumber,
       mode: action,
@@ -1308,6 +1322,7 @@ export default function CheckoutPage() {
       lines: basket
         .filter((line) => line.quantity > 0)
         .map((line) => ({
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           sale_id: saleId,
           sku: line.sku,
           title: line.title,

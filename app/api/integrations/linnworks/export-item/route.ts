@@ -86,6 +86,20 @@ function normaliseText(value: any) {
   return String(value).trim()
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 function normaliseNumber(value: any) {
   if (value === null || value === undefined || value === '') return null
   const num = Number(value)
@@ -102,18 +116,23 @@ const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
   DEFAULT: 'Default',
 }
 
-async function loadLocationMappings() {
+async function loadLocationMappings(companyId?: string | null) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!url || !serviceKey) return DEFAULT_LOCATION_MAPPINGS
 
   const supabase = createClient(url, serviceKey)
-  const { data, error } = await supabase
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('channel', 'linnworks')
-    .maybeSingle()
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) return DEFAULT_LOCATION_MAPPINGS
 
@@ -900,6 +919,7 @@ function addFilledMeasurementProperties(body: any, target: Record<string, any>) 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
+    const companyId = getActiveCompanyIdFromRequest(request)
 
     const sku = normaliseText(body.sku)
     const title = normaliseText(
@@ -947,7 +967,7 @@ export async function POST(request: Request) {
       normaliseText(body.current_location) ||
       normaliseText(body.default_location) ||
       'Default'
-    const locationMappings = await loadLocationMappings()
+    const locationMappings = await loadLocationMappings(companyId)
     const linnworksLocationName = mapAppLocationWithMappings(locationName, locationMappings)
 
     const binRack =

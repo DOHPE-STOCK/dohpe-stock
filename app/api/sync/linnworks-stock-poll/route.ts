@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
+import { getEnabledIntegrationCompanies } from '@/lib/tenantCronCompanies'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -133,12 +134,15 @@ const DEFAULT_LOCATION_MAPPINGS: Record<string, string> = {
 
 let activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
 
-async function loadLocationMappings(supabase: any) {
-  const { data, error } = await supabase
+async function loadLocationMappings(supabase: any, companyId?: string | null) {
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('channel', 'linnworks')
-    .maybeSingle()
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) return DEFAULT_LOCATION_MAPPINGS
 
@@ -488,7 +492,12 @@ function sumLocationType(rows: MappedStockRow[], type: 'shop' | 'warehouse') {
   }, 0)
 }
 
-async function getLocalItems(supabase: any, limit: number, onlySku: string) {
+async function getLocalItems(
+  supabase: any,
+  limit: number,
+  onlySku: string,
+  companyId?: string | null
+) {
   let query = supabase
     .from('items')
     .select(`
@@ -505,6 +514,10 @@ async function getLocalItems(supabase: any, limit: number, onlySku: string) {
     .order('updated_at', { ascending: true })
     .limit(limit)
 
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
   if (onlySku) {
     query = query.eq('sku', onlySku)
   }
@@ -516,13 +529,17 @@ async function getLocalItems(supabase: any, limit: number, onlySku: string) {
   return (data || []) as LocalItem[]
 }
 
-async function hasBlockingQueueRows(supabase: any, sku: string) {
-  const { data, error } = await supabase
+async function hasBlockingQueueRows(supabase: any, sku: string, companyId?: string | null) {
+  let query = supabase
     .from('linnworks_sync_queue')
     .select('id, status, action, created_at')
     .eq('sku', sku)
     .in('status', ['pending', 'processing', 'failed'])
     .limit(1)
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -583,6 +600,7 @@ function getOnlinePollDeductionPriority(locationName: string) {
 
 async function upsertPollLocationRow(params: {
   supabase: any
+  companyId?: string | null
   item: LocalItem
   locationName: string
   binCode: string
@@ -593,13 +611,17 @@ async function upsertPollLocationRow(params: {
   const locationName = canonicalLocationName(params.locationName)
   const now = new Date().toISOString()
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('item_stock_locations')
     .select('id')
     .eq('item_id', item.id)
     .eq('location_name', locationName)
     .eq('bin_code', binCode)
     .limit(1)
+
+  if (params.companyId) query = query.eq('company_id', params.companyId)
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -623,6 +645,7 @@ async function upsertPollLocationRow(params: {
   const { error: insertError } = await supabase
     .from('item_stock_locations')
     .insert({
+      ...(params.companyId ? { company_id: params.companyId } : {}),
       item_id: item.id,
       sku: item.sku,
       location_name: locationName,
@@ -637,11 +660,15 @@ async function upsertPollLocationRow(params: {
   if (insertError) throw new Error(insertError.message)
 }
 
-async function mergeLegacyWarehouseRows(supabase: any, item: LocalItem) {
-  const { data, error } = await supabase
+async function mergeLegacyWarehouseRows(supabase: any, item: LocalItem, companyId?: string | null) {
+  let query = supabase
     .from('item_stock_locations')
     .select('id, location_name, bin_code, stock_level, source, synced_at')
     .eq('item_id', item.id)
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -694,10 +721,14 @@ async function mergeLegacyWarehouseRows(supabase: any, item: LocalItem) {
   }
 }
 
-async function getReservedOnlineTransferQtyByLocation(supabase: any, item: LocalItem) {
+async function getReservedOnlineTransferQtyByLocation(
+  supabase: any,
+  item: LocalItem,
+  companyId?: string | null
+) {
   const reserved = new Map<string, number>()
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('stock_transfer_items')
     .select(`
       id,
@@ -711,6 +742,10 @@ async function getReservedOnlineTransferQtyByLocation(supabase: any, item: Local
     `)
     .eq('item_id', item.id)
     .in('status', ['pending_pick', 'picked', 'in_transfer', 'in_transit'])
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -738,21 +773,26 @@ async function getReservedOnlineTransferQtyByLocation(supabase: any, item: Local
 
 async function reconcileAppBinsFromLinnworksRows(params: {
   supabase: any
+  companyId?: string | null
   item: LocalItem
   rows: MappedStockRow[]
 }) {
-  const { supabase, item, rows } = params
+  const { supabase, companyId, item, rows } = params
   const changes: any[] = []
 
-  const { data: existingRows, error } = await supabase
+  let existingRowsQuery = supabase
     .from('item_stock_locations')
     .select('id, location_name, bin_code, stock_level')
     .eq('item_id', item.id)
 
+  if (companyId) existingRowsQuery = existingRowsQuery.eq('company_id', companyId)
+
+  const { data: existingRows, error } = await existingRowsQuery
+
   if (error) throw new Error(error.message)
 
   const appRows = existingRows || []
-  const reservedByLocation = await getReservedOnlineTransferQtyByLocation(supabase, item)
+  const reservedByLocation = await getReservedOnlineTransferQtyByLocation(supabase, item, companyId)
 
   for (const row of rows) {
     const locationName = mapPollLocationToStoredLocation(row.locationName)
@@ -779,6 +819,7 @@ async function reconcileAppBinsFromLinnworksRows(params: {
       const defaultBin = isShopPollLocation(locationName) ? 'STOCK' : 'Default'
       await upsertPollLocationRow({
         supabase,
+        companyId,
         item,
         locationName,
         binCode: defaultBin,
@@ -797,6 +838,7 @@ async function reconcileAppBinsFromLinnworksRows(params: {
 
       await upsertPollLocationRow({
         supabase,
+        companyId,
         item,
         locationName,
         binCode: targetRow?.bin_code || defaultBin,
@@ -828,6 +870,7 @@ async function reconcileAppBinsFromLinnworksRows(params: {
 
         await upsertPollLocationRow({
           supabase,
+          companyId,
           item,
           locationName,
           binCode: appRow.bin_code,
@@ -845,11 +888,15 @@ async function reconcileAppBinsFromLinnworksRows(params: {
   return changes
 }
 
-async function readOperationalRows(supabase: any, itemId: string) {
-  const { data, error } = await supabase
+async function readOperationalRows(supabase: any, itemId: string, companyId?: string | null) {
+  let query = supabase
     .from('item_stock_locations')
     .select('location_name, bin_code, stock_level')
     .eq('item_id', itemId)
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -872,7 +919,7 @@ function sumOperationalRows(rows: any[], type: 'shop_floor' | 'warehouse') {
   }, 0)
 }
 
-async function processStockPoll(request: Request) {
+async function processStockPoll(request: Request, companyId?: string | null) {
   const startedAt = new Date().toISOString()
   const url = new URL(request.url)
   const debug = url.searchParams.get('debug') === 'true'
@@ -881,7 +928,7 @@ async function processStockPoll(request: Request) {
 
   try {
     const supabase = getSupabaseAdmin()
-    const integrationConfig = await getLinnworksIntegrationConfig(supabase)
+    const integrationConfig = await getLinnworksIntegrationConfig(supabase, companyId)
     const integrationGate = shouldRunLinnworksRoute({
       config: integrationConfig,
       route: 'stock_poll',
@@ -897,11 +944,11 @@ async function processStockPoll(request: Request) {
         finished_at: new Date().toISOString(),
       })
     }
-    activeLocationMappings = await loadLocationMappings(supabase)
+    activeLocationMappings = await loadLocationMappings(supabase, companyId)
     const { server, token } = await authoriseLinnworks()
     const locations = await linnworksGet(server, token, '/api/Inventory/GetStockLocations')
 
-    const items = await getLocalItems(supabase, limit, onlySku)
+    const items = await getLocalItems(supabase, limit, onlySku, companyId)
     const results: any[] = []
 
     for (const item of items) {
@@ -909,7 +956,7 @@ async function processStockPoll(request: Request) {
 
       if (!sku) continue
 
-      const blockingQueue = await hasBlockingQueueRows(supabase, sku)
+      const blockingQueue = await hasBlockingQueueRows(supabase, sku, companyId)
 
       if (blockingQueue) {
         results.push({
@@ -959,19 +1006,20 @@ async function processStockPoll(request: Request) {
           0
         )
 
-        await mergeLegacyWarehouseRows(supabase, item)
+        await mergeLegacyWarehouseRows(supabase, item, companyId)
 
         const displayLocation = chooseDisplayLocation(rows, item.current_location)
 
         const appBinChanges = await reconcileAppBinsFromLinnworksRows({
           supabase,
+          companyId,
           item,
           rows,
         })
 
-        await mergeLegacyWarehouseRows(supabase, item)
+        await mergeLegacyWarehouseRows(supabase, item, companyId)
 
-        const operationalRows = await readOperationalRows(supabase, item.id)
+        const operationalRows = await readOperationalRows(supabase, item.id, companyId)
         const displayOperationalRow = operationalRows
           .filter((row: any) => Number(row.stock_level || 0) > 0)
           .sort((a: any, b: any) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0]
@@ -997,6 +1045,7 @@ async function processStockPoll(request: Request) {
           .from('items')
           .update(updatePayload)
           .eq('id', item.id)
+          .eq('company_id', companyId)
 
         if (updateError) throw new Error(updateError.message)
 
@@ -1024,6 +1073,7 @@ async function processStockPoll(request: Request) {
 
     return NextResponse.json({
       ok: true,
+      company_id: companyId || null,
       message: 'Linnworks stock poll completed.',
       started_at: startedAt,
       finished_at: new Date().toISOString(),
@@ -1049,6 +1099,46 @@ async function processStockPoll(request: Request) {
   }
 }
 
+async function processStockPollForAllCompanies(request: Request) {
+  const supabase = getSupabaseAdmin()
+  const manual = new URL(request.url).searchParams.get('manual') === 'true'
+  const companies = await getEnabledIntegrationCompanies(supabase, 'linnworks', manual)
+
+  if (companies.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      message: 'No active companies have Linnworks auto-sync enabled.',
+      processed_companies: 0,
+      results: [],
+    })
+  }
+
+  const results = []
+
+  for (const company of companies) {
+    const response = await processStockPoll(request.clone(), company.id)
+    const payload = await response.json().catch(() => ({
+      ok: false,
+      message: `Unexpected response status ${response.status}`,
+    }))
+
+    results.push({
+      company_id: company.id,
+      company_name: company.name,
+      company_slug: company.slug,
+      status: response.status,
+      ...payload,
+    })
+  }
+
+  return NextResponse.json({
+    ok: results.every((result) => result.ok),
+    processed_companies: results.length,
+    results,
+  })
+}
+
 function isAuthorised(request: Request) {
   const cronSecret = process.env.CRON_SECRET
 
@@ -1065,7 +1155,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
   }
 
-  return processStockPoll(request)
+  return processStockPollForAllCompanies(request)
 }
 
 export async function POST(request: Request) {
@@ -1073,5 +1163,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: 'Unauthorised.' }, { status: 401 })
   }
 
-  return processStockPoll(request)
+  return processStockPollForAllCompanies(request)
 }

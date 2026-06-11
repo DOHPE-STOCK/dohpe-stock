@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import AppNav from '@/app/components/AppNav'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
 import { supabase } from '@/lib/supabase'
 
 type ItemImage = {
@@ -160,6 +161,7 @@ export default function PriceResearchPage() {
   const params = useParams()
   const router = useRouter()
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const itemId = String(params.id)
 
@@ -173,13 +175,13 @@ export default function PriceResearchPage() {
 
   useEffect(() => {
     fetchItem()
-  }, [itemId])
+  }, [itemId, activeCompanyId, schemaReady])
 
   async function fetchItem() {
     setLoading(true)
     setMessage('')
 
-    const { data, error } = await supabase
+    let itemQuery = supabase
       .from('items')
       .select(`
         id,
@@ -206,7 +208,10 @@ export default function PriceResearchPage() {
         )
       `)
       .eq('id', itemId)
-      .single()
+
+    if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
+
+    const { data, error } = await itemQuery.single()
 
     if (error || !data) {
       setLoading(false)
@@ -217,8 +222,8 @@ export default function PriceResearchPage() {
     const loadedItem = data as Item
     setItem(loadedItem)
 
-    const query = buildSearchQuery(loadedItem)
-    setSearchQuery(query)
+    const searchPhrase = buildSearchQuery(loadedItem)
+    setSearchQuery(searchPhrase)
     setSuggestedPrice(
       typeof loadedItem.selling_price === 'number'
         ? loadedItem.selling_price.toFixed(2)
@@ -236,7 +241,7 @@ export default function PriceResearchPage() {
       return
     }
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select(`
         id,
@@ -266,7 +271,10 @@ export default function PriceResearchPage() {
       .eq('brand', baseItem.brand)
       .eq('reporting_category', baseItem.reporting_category)
       .not('selling_price', 'is', null)
-      .limit(30)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.limit(30)
 
     if (error) {
       setMessage(error.message)
@@ -295,7 +303,7 @@ export default function PriceResearchPage() {
 
     const now = new Date().toISOString()
 
-    const { error } = await supabase
+    let query = supabase
       .from('items')
       .update({
         selling_price: price,
@@ -303,6 +311,10 @@ export default function PriceResearchPage() {
         updated_at: now,
       })
       .eq('id', itemId)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { error } = await query
 
     setSaving(false)
 

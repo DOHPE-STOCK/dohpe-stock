@@ -19,6 +19,20 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
 function locationPayload(settings: any) {
   const country = text(settings.merchant_location_country) || 'GB'
   const postalCode = text(settings.merchant_location_postal_code)
@@ -43,7 +57,8 @@ function locationPayload(settings: any) {
 export async function GET(request: NextRequest) {
   try {
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const listLocations = request.nextUrl.searchParams.get('list') === '1'
     const merchantLocationKey = text(config.settings.merchant_location_key)
 
@@ -86,10 +101,11 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const merchantLocationKey = text(config.settings.merchant_location_key)
     if (!merchantLocationKey) {
       return NextResponse.json(

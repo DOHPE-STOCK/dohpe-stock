@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useCompany } from '@/app/context/CompanyContext'
 import { supabase } from '@/lib/supabase'
 
 type IntegrationSetting = {
@@ -113,6 +114,7 @@ function iconOpacity(integration: IntegrationSetting) {
 }
 
 export default function IntegrationsPanel() {
+  const { activeCompanyId, schemaReady } = useCompany()
   const [integrations, setIntegrations] = useState<IntegrationSetting[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
@@ -120,7 +122,7 @@ export default function IntegrationsPanel() {
 
   useEffect(() => {
     fetchIntegrations()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
     if (!message) return
@@ -131,10 +133,14 @@ export default function IntegrationsPanel() {
   async function fetchIntegrations() {
     setLoading(true)
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('integration_settings')
       .select('*')
       .order('channel', { ascending: true })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -142,20 +148,72 @@ export default function IntegrationsPanel() {
       return
     }
 
-    setIntegrations(((data || []) as IntegrationSetting[]).filter((integration) => integration.channel !== 'loyverse'))
+    const savedRows = new Map(
+      ((data || []) as IntegrationSetting[])
+        .filter((integration) => integration.channel !== 'loyverse')
+        .map((integration) => [integration.channel, integration])
+    )
+
+    setIntegrations(
+      CHANNELS.map((channel) => {
+        const saved = savedRows.get(channel.key)
+        return (
+          saved || {
+            id: '',
+            channel: channel.key,
+            enabled: false,
+            auto_sync: false,
+            connection_status: 'not_configured',
+            settings: {},
+            last_synced_at: null,
+            last_error: null,
+          }
+        )
+      })
+    )
     setLoading(false)
   }
 
-  async function updateIntegration(id: string, updates: Partial<IntegrationSetting>) {
-    setSavingId(id)
+  async function updateIntegration(integrationOrId: IntegrationSetting | string, updates: Partial<IntegrationSetting>) {
+    const existing =
+      typeof integrationOrId === 'string'
+        ? integrations.find((integration) => integration.id === integrationOrId)
+        : integrationOrId
 
-    const { error } = await supabase
-      .from('integration_settings')
-      .update({
-        ...updates,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
+    if (!existing) return false
+
+    setSavingId(existing.id || existing.channel)
+
+    const payload = {
+      ...(schemaReady ? { company_id: activeCompanyId } : {}),
+      channel: existing.channel,
+      enabled: updates.enabled ?? existing.enabled,
+      auto_sync: updates.auto_sync ?? existing.auto_sync,
+      connection_status: updates.connection_status ?? existing.connection_status,
+      settings: updates.settings ?? existing.settings ?? {},
+      last_synced_at: updates.last_synced_at ?? existing.last_synced_at,
+      last_error: updates.last_error ?? existing.last_error,
+      updated_at: new Date().toISOString(),
+    }
+
+    const result = existing.id
+      ? await supabase
+          .from('integration_settings')
+          .update({
+            ...updates,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id)
+          .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : existing.id)
+      : await supabase
+          .from('integration_settings')
+          .upsert(payload, {
+            onConflict: schemaReady ? 'company_id,channel' : 'channel',
+          })
+          .select('*')
+          .single()
+
+    const error = result.error
 
     if (error) {
       setMessage(error.message)
@@ -163,9 +221,11 @@ export default function IntegrationsPanel() {
       return false
     }
 
+    const savedRow = (result as any).data || { ...existing, ...updates }
+
     setIntegrations((current) =>
       current.map((integration) =>
-        integration.id === id ? { ...integration, ...updates } : integration
+        integration.channel === existing.channel ? { ...integration, ...savedRow, ...updates } : integration
       )
     )
 
@@ -188,10 +248,10 @@ export default function IntegrationsPanel() {
       return
     }
 
-    setSavingId(integration.id)
+    setSavingId(integration.id || integration.channel)
     setMessage(`Testing ${testRoute.label} connection...`)
 
-    await updateIntegration(integration.id, {
+    await updateIntegration(integration, {
       connection_status: 'testing',
       last_error: null,
     })
@@ -207,7 +267,7 @@ export default function IntegrationsPanel() {
           data?.details ||
           `${testRoute.label} connection failed.`
 
-        await updateIntegration(integration.id, {
+        await updateIntegration(integration, {
           connection_status: 'error',
           last_error: typeof reason === 'string' ? reason : JSON.stringify(reason),
         })
@@ -222,7 +282,7 @@ export default function IntegrationsPanel() {
         return
       }
 
-      await updateIntegration(integration.id, {
+      await updateIntegration(integration, {
         connection_status: 'connected',
         last_synced_at: new Date().toISOString(),
         last_error: null,
@@ -239,7 +299,7 @@ export default function IntegrationsPanel() {
     } catch (error: any) {
       const reason = error?.message || 'Unknown error.'
 
-      await updateIntegration(integration.id, {
+      await updateIntegration(integration, {
         connection_status: 'error',
         last_error: reason,
       })
@@ -283,7 +343,7 @@ export default function IntegrationsPanel() {
 
             return (
               <div
-                key={integration.id}
+                key={integration.channel}
                 className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4"
               >
                 <div className="flex items-start justify-between gap-4">
@@ -347,7 +407,7 @@ export default function IntegrationsPanel() {
                       type="checkbox"
                       checked={integration.enabled}
                       onChange={(event) =>
-                        updateIntegration(integration.id, {
+                        updateIntegration(integration, {
                           enabled: event.target.checked,
                           connection_status: event.target.checked
                             ? integration.connection_status
@@ -365,7 +425,7 @@ export default function IntegrationsPanel() {
                       checked={integration.auto_sync}
                       disabled={!integration.enabled}
                       onChange={(event) =>
-                        updateIntegration(integration.id, {
+                        updateIntegration(integration, {
                           auto_sync: event.target.checked,
                         })
                       }
@@ -377,10 +437,10 @@ export default function IntegrationsPanel() {
                   <button
                     type="button"
                     onClick={() => testConnection(integration)}
-                    disabled={savingId === integration.id}
+                    disabled={savingId === (integration.id || integration.channel)}
                     className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-40"
                   >
-                    {savingId === integration.id ? 'Testing...' : 'Test'}
+                    {savingId === (integration.id || integration.channel) ? 'Testing...' : 'Test'}
                   </button>
 
                   <Link

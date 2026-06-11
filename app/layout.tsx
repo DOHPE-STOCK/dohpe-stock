@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { StaffProvider } from '@/app/context/StaffContext'
+import { CompanyProvider } from '@/app/context/CompanyContext'
 import ThemeProvider from '@/app/components/ThemeProvider'
 
 export const metadata: Metadata = {
@@ -17,7 +18,9 @@ export default function RootLayout({
     <html lang="en" data-theme="dark">
       <body>
         <ThemeProvider>
-          <StaffProvider>{children}</StaffProvider>
+          <CompanyProvider>
+            <StaffProvider>{children}</StaffProvider>
+          </CompanyProvider>
         </ThemeProvider>
       </body>
     </html>

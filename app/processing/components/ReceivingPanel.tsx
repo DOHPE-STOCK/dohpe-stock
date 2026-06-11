@@ -22,6 +22,8 @@ type InboundBatch = {
 }
 
 type ReceivingPanelProps = {
+  activeCompanyId?: string
+  schemaReady?: boolean
   selectedBatchId?: string
   onChanged?: () => void
 }
@@ -42,7 +44,12 @@ function parseTidList(value: string) {
   )
 }
 
-export default function ReceivingPanel({ selectedBatchId = '', onChanged }: ReceivingPanelProps) {
+export default function ReceivingPanel({
+  activeCompanyId = '',
+  schemaReady = false,
+  selectedBatchId = '',
+  onChanged,
+}: ReceivingPanelProps) {
   const { staff } = useStaff()
   const [batches, setBatches] = useState<InboundBatch[]>([])
   const [activeBatchId, setActiveBatchId] = useState(selectedBatchId)
@@ -62,7 +69,7 @@ export default function ReceivingPanel({ selectedBatchId = '', onChanged }: Rece
   useEffect(() => {
     fetchBatches()
     fetchWorkflowSettings()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
     if (selectedBatchId) setActiveBatchId(selectedBatchId)
@@ -107,11 +114,15 @@ export default function ReceivingPanel({ selectedBatchId = '', onChanged }: Rece
   }, [activeBatch?.id])
 
   async function fetchBatches() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('inbound_batches')
       .select('*')
       .in('status', ['receiving'])
       .order('created_at', { ascending: false })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -127,11 +138,16 @@ export default function ReceivingPanel({ selectedBatchId = '', onChanged }: Rece
   }
 
   async function fetchWorkflowSettings() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('app_settings')
       .select('enable_rfid_receiving')
-      .eq('id', 'default')
-      .maybeSingle()
+      .limit(1)
+
+    query = schemaReady
+      ? query.eq('company_id', activeCompanyId)
+      : query.eq('id', 'default')
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) {
       setMessage(error.message)
@@ -307,6 +323,7 @@ export default function ReceivingPanel({ selectedBatchId = '', onChanged }: Rece
         tids: rfidReceivingEnabled ? tids : [],
         use_rfid: rfidReceivingEnabled,
         staff_id: staff.id,
+        company_id: schemaReady ? activeCompanyId : null,
       }),
     })
 

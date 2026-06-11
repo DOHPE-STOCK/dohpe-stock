@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
 import { supabase } from '@/lib/supabase'
 
 type ScanMode = 'bin' | 'items'
@@ -93,6 +94,7 @@ function configuredLocationRows(rows: LocationConfig[]) {
 export default function AllocatePage() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [scanValue, setScanValue] = useState('')
   const [mode, setMode] = useState<ScanMode>('bin')
@@ -145,13 +147,17 @@ export default function AllocatePage() {
     }
 
     focusInput()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   async function fetchLocationConfigs() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('locations')
       .select('name, label, is_active, bin_mode, basic_bins')
       .eq('is_active', true)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (!error) {
       setLocationConfigs(configuredLocationRows((data || []) as LocationConfig[]))
@@ -229,10 +235,14 @@ export default function AllocatePage() {
     setBusy(true)
     setMessage('Loading transfer items for allocation...')
 
-    const { data, error } = await supabase
+    let itemQuery = supabase
       .from('items')
       .select('id, sku, barcode_number, sku_type, current_location, current_bin, location_status')
       .in('sku', skus)
+
+    if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
+
+    const { data, error } = await itemQuery
 
     setBusy(false)
 
@@ -303,6 +313,8 @@ export default function AllocatePage() {
       .select('id, bin_code, location_name, label, is_active')
       .eq('bin_code', cleanBin)
 
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
     if (cleanLocation) {
       query = query.eq('location_name', cleanLocation)
     }
@@ -321,12 +333,13 @@ export default function AllocatePage() {
         .from('warehouse_bins')
         .upsert(
           {
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             bin_code: cleanBin,
             label: cleanBin,
             location_name: cleanLocation,
             is_active: true,
           },
-          { onConflict: 'bin_code,location_name' }
+          { onConflict: schemaReady ? 'company_id,location_name,bin_code' : 'bin_code,location_name' }
         )
         .select('id, bin_code, location_name, label, is_active')
         .single()
@@ -390,32 +403,41 @@ export default function AllocatePage() {
     if (itemScanMode === 'rfid') {
       const normalizedIdentifier = cleanScanValue(scannedValue)
 
-      const identifierResult = await supabase
+      let identifierQuery = supabase
         .from('item_identifiers')
         .select('item_id')
         .eq('identifier_type', 'rfid')
         .eq('identifier_value_normalized', normalizedIdentifier)
         .eq('is_active', true)
-        .maybeSingle()
+
+      if (schemaReady) identifierQuery = identifierQuery.eq('company_id', activeCompanyId)
+
+      const identifierResult = await identifierQuery.maybeSingle()
 
       if (identifierResult.error) {
         error = identifierResult.error
       } else if (identifierResult.data?.item_id) {
-        const itemResult = await supabase
+        let itemQuery = supabase
           .from('items')
           .select('id, sku, barcode_number, sku_type, current_location, current_bin, location_status')
           .eq('id', identifierResult.data.item_id)
-          .maybeSingle()
+
+        if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
+
+        const itemResult = await itemQuery.maybeSingle()
 
         data = itemResult.data as PendingItem | null
         error = itemResult.error
       }
     } else {
-      const itemResult = await supabase
+      let itemQuery = supabase
         .from('items')
         .select('id, sku, barcode_number, sku_type, current_location, current_bin, location_status')
         .or(`sku.eq.${scannedValue},barcode_number.eq.${scannedValue}`)
-        .maybeSingle()
+
+      if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
+
+      const itemResult = await itemQuery.maybeSingle()
 
       data = itemResult.data as PendingItem | null
       error = itemResult.error
@@ -507,6 +529,7 @@ export default function AllocatePage() {
         bin_code: binCode,
         delta: params.delta,
         source: 'app_allocate',
+        company_id: schemaReady ? activeCompanyId : null,
       }),
     })
 
@@ -558,7 +581,7 @@ export default function AllocatePage() {
       if (singleUseItems.length > 0) {
         const itemIds = singleUseItems.map((item) => item.id)
 
-        const { error: updateError } = await supabase
+        let updateQuery = supabase
           .from('items')
           .update({
             current_location: getActiveLocation(activeBin),
@@ -571,12 +594,17 @@ export default function AllocatePage() {
           })
           .in('id', itemIds)
 
+        if (schemaReady) updateQuery = updateQuery.eq('company_id', activeCompanyId)
+
+        const { error: updateError } = await updateQuery
+
         if (updateError) throw new Error(updateError.message)
 
         const { error: movementError } = await supabase
           .from('item_location_movements')
           .insert(
             singleUseItems.map((item) => ({
+              ...(schemaReady ? { company_id: activeCompanyId } : {}),
               item_id: item.id,
               sku: item.sku,
               from_location: stockLocationName(item.current_location || WAREHOUSE_LOCATION),
@@ -594,6 +622,7 @@ export default function AllocatePage() {
           .from('linnworks_sync_queue')
           .insert(
             singleUseItems.map((item) => ({
+              ...(schemaReady ? { company_id: activeCompanyId } : {}),
               item_id: item.id,
               sku: item.sku,
               action: 'update_location',
@@ -631,6 +660,7 @@ export default function AllocatePage() {
       if (reusableItems.length > 0) {
         const queueRows = reusableItems.flatMap((item) => [
           {
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             item_id: item.id,
             sku: item.sku,
             action: 'adjust_stock',
@@ -648,6 +678,7 @@ export default function AllocatePage() {
             status: 'pending',
           },
           {
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
             item_id: item.id,
             sku: item.sku,
             action: 'adjust_stock',
@@ -673,7 +704,7 @@ export default function AllocatePage() {
       }
 
       if (prefillContext?.receiveTransferId) {
-        const { error: transferItemsError } = await supabase
+        let transferItemsQuery = supabase
           .from('stock_transfer_items')
           .update({
             status: 'received',
@@ -682,9 +713,13 @@ export default function AllocatePage() {
           .eq('transfer_id', prefillContext.receiveTransferId)
           .eq('status', 'in_transfer')
 
+        if (schemaReady) transferItemsQuery = transferItemsQuery.eq('company_id', activeCompanyId)
+
+        const { error: transferItemsError } = await transferItemsQuery
+
         if (transferItemsError) throw new Error(transferItemsError.message)
 
-        const { error: transferError } = await supabase
+        let transferQuery = supabase
           .from('stock_transfers')
           .update({
             status: 'received',
@@ -694,6 +729,10 @@ export default function AllocatePage() {
           })
           .eq('id', prefillContext.receiveTransferId)
           .neq('status', 'received')
+
+        if (schemaReady) transferQuery = transferQuery.eq('company_id', activeCompanyId)
+
+        const { error: transferError } = await transferQuery
 
         if (transferError) throw new Error(transferError.message)
       }

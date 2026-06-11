@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type InventoryItem = {
   id: string
@@ -151,6 +152,7 @@ function canonicalLocationKey(value: string | null | undefined) {
 const IN_TRANSIT_LOCATION = 'IN_TRANSIT'
 
 export default function InventoryPage() {
+  const { activeCompanyId, schemaReady } = useCompany()
   const [items, setItems] = useState<InventoryItem[]>([])
   const [locations, setLocations] = useState<StockLocationRow[]>([])
   const [locationLabels, setLocationLabels] = useState<Record<string, string>>({})
@@ -170,77 +172,91 @@ export default function InventoryPage() {
 
   useEffect(() => {
     fetchInventory()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   async function fetchInventory() {
     setLoading(true)
     setMessage('')
 
+    let itemsQuery = supabase
+      .from('items')
+      .select(`
+        id,
+        sku,
+        status,
+        barcode_number,
+        sku_type,
+        brand,
+        reporting_category,
+        sub_category,
+        sub_type,
+        colour_primary,
+        tagged_size,
+        waist_in,
+        selling_price,
+        stock_level,
+        shop_floor_stock,
+        warehouse_stock,
+        current_location,
+        current_bin,
+        linnworks_managed,
+        linnworks_status,
+        ebay_status,
+        shopify_status,
+        square_status,
+        grailed_status,
+        vestiaire_collective_status,
+        whatnot_status,
+        vinted_status,
+        depop_status,
+        tiktok_shop_status,
+        updated_at
+      `)
+      .order('updated_at', { ascending: false })
+      .limit(2000)
+
+    let stockLocationsQuery = supabase
+      .from('item_stock_locations')
+      .select(`
+        id,
+        item_id,
+        sku,
+        location_name,
+        bin_code,
+        stock_level,
+        synced_at
+      `)
+
+    let locationLabelsQuery = supabase
+      .from('locations')
+      .select('name, label, is_active')
+      .eq('is_active', true)
+
+    let transferItemsQuery = supabase
+      .from('stock_transfer_items')
+      .select('id, item_id, sku, source_bin, status, stock_transfers!inner(from_location, status, company_id)')
+      .eq('status', 'in_transfer')
+      .eq('stock_transfers.status', 'sent')
+
+    let integrationsQuery = supabase
+      .from('integration_settings')
+      .select('channel, enabled')
+      .eq('enabled', true)
+
+    if (schemaReady) {
+      itemsQuery = itemsQuery.eq('company_id', activeCompanyId)
+      stockLocationsQuery = stockLocationsQuery.eq('company_id', activeCompanyId)
+      locationLabelsQuery = locationLabelsQuery.eq('company_id', activeCompanyId)
+      transferItemsQuery = transferItemsQuery.eq('stock_transfers.company_id', activeCompanyId)
+      integrationsQuery = integrationsQuery.eq('company_id', activeCompanyId)
+    }
+
     const [itemsResult, locationsResult, locationLabelsResult, transferItemsResult, integrationsResult] = await Promise.all([
-      supabase
-        .from('items')
-        .select(`
-          id,
-          sku,
-          status,
-          barcode_number,
-          sku_type,
-          brand,
-          reporting_category,
-          sub_category,
-          sub_type,
-          colour_primary,
-          tagged_size,
-          waist_in,
-          selling_price,
-          stock_level,
-          shop_floor_stock,
-          warehouse_stock,
-          current_location,
-          current_bin,
-          linnworks_managed,
-          linnworks_status,
-          ebay_status,
-          shopify_status,
-          square_status,
-          grailed_status,
-          vestiaire_collective_status,
-          whatnot_status,
-          vinted_status,
-          depop_status,
-          tiktok_shop_status,
-          updated_at
-        `)
-        .order('updated_at', { ascending: false })
-        .limit(2000),
-
-      supabase
-        .from('item_stock_locations')
-        .select(`
-          id,
-          item_id,
-          sku,
-          location_name,
-          bin_code,
-          stock_level,
-          synced_at
-        `),
-
-      supabase
-        .from('locations')
-        .select('name, label, is_active')
-        .eq('is_active', true),
-
-      supabase
-        .from('stock_transfer_items')
-        .select('id, item_id, sku, source_bin, status, stock_transfers!inner(from_location, status)')
-        .eq('status', 'in_transfer')
-        .eq('stock_transfers.status', 'sent'),
-
-      supabase
-        .from('integration_settings')
-        .select('channel, enabled')
-        .eq('enabled', true),
+      itemsQuery,
+      stockLocationsQuery,
+      locationLabelsQuery,
+      transferItemsQuery,
+      integrationsQuery,
     ])
 
     if (itemsResult.error) {
@@ -780,15 +796,6 @@ export default function InventoryPage() {
 
             <AppNav current="inventory" />
           </div>
-
-          <button
-            type="button"
-            onClick={fetchInventory}
-            disabled={loading}
-            className="rounded-xl bg-white px-4 py-2 text-sm font-black text-black disabled:opacity-50"
-          >
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
         </div>
 
         <section className="mb-4 rounded-xl border border-neutral-800 bg-neutral-900 p-4">
@@ -896,7 +903,7 @@ export default function InventoryPage() {
             <button
               type="button"
               onClick={clearFilters}
-              className="rounded-xl border border-neutral-700 px-4 py-3 text-sm font-black text-white hover:bg-neutral-800"
+              className="rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm font-black text-white hover:bg-neutral-800"
             >
               Clear
             </button>

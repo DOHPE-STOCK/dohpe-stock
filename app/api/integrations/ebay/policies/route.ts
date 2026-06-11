@@ -14,10 +14,25 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
-export async function GET() {
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
+export async function GET(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
-    const config = await getEbayIntegrationConfig(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const config = await getEbayIntegrationConfig(supabase, companyId)
     const marketplace = encodeURIComponent(config.settings.marketplace_id)
 
     const [payment, fulfillment, returns] = await Promise.all([

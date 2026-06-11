@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type LinnworksSettings = {
   mode: string
@@ -145,6 +146,7 @@ function mergeSettings(settings: any): LinnworksSettings {
 }
 
 export default function LinnworksIntegrationPage() {
+  const { activeCompanyId, schemaReady } = useCompany()
   const [integration, setIntegration] = useState<IntegrationSetting | null>(null)
   const [settings, setSettings] = useState<LinnworksSettings>(defaultSettings)
   const [locations, setLocations] = useState<LocationRow[]>(fallbackLocations)
@@ -156,7 +158,7 @@ export default function LinnworksIntegrationPage() {
 
   useEffect(() => {
     Promise.all([fetchIntegration(), fetchLocations()]).finally(() => setLoading(false))
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   const orderedLocations = useMemo(() => {
     const byName = new Map(locations.map((location) => [canonicalLocation(location.name), location]))
@@ -182,14 +184,34 @@ export default function LinnworksIntegrationPage() {
   async function fetchIntegration() {
     setLoading(true)
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('integration_settings')
       .select('*')
       .eq('channel', 'linnworks')
-      .single()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) {
       setMessage(error.message)
+      return
+    }
+
+    if (!data) {
+      setIntegration({
+        id: '',
+        channel: 'linnworks',
+        enabled: false,
+        auto_sync: false,
+        connection_status: 'not_configured',
+        settings: defaultSettings,
+        last_synced_at: null,
+        last_error: null,
+      })
+      setSettings(defaultSettings)
+      setEnabled(false)
+      setAutoSync(false)
       return
     }
 
@@ -202,10 +224,14 @@ export default function LinnworksIntegrationPage() {
   }
 
   async function fetchLocations() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('locations')
       .select('name, label, is_active, bin_mode, basic_bins')
       .eq('is_active', true)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (!error && data && data.length > 0) {
       setLocations(data as LocationRow[])
@@ -251,15 +277,37 @@ export default function LinnworksIntegrationPage() {
 
     setSaving(true)
 
-    const { error } = await supabase
-      .from('integration_settings')
-      .update({
-        enabled,
-        auto_sync: autoSync,
-        settings,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', integration.id)
+    const payload = {
+      ...(schemaReady ? { company_id: activeCompanyId } : {}),
+      channel: 'linnworks',
+      enabled,
+      auto_sync: autoSync,
+      settings,
+      updated_at: new Date().toISOString(),
+    }
+
+    const result = integration.id
+      ? await supabase
+          .from('integration_settings')
+          .update({
+            enabled,
+            auto_sync: autoSync,
+            settings,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', integration.id)
+          .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : integration.id)
+      : await supabase
+          .from('integration_settings')
+          .upsert(payload, { onConflict: schemaReady ? 'company_id,channel' : 'channel' })
+          .select('*')
+          .single()
+
+    const error = result.error
+
+    if (!error && (result as any).data) {
+      setIntegration((result as any).data as IntegrationSetting)
+    }
 
     if (error) {
       setMessage(error.message)

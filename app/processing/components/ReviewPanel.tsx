@@ -5,11 +5,18 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
 type ReviewPanelProps = {
+  activeCompanyId?: string
+  schemaReady?: boolean
   embedded?: boolean
   onChanged?: () => void
 }
 
-export default function ReviewPanel({ embedded = false, onChanged }: ReviewPanelProps) {
+export default function ReviewPanel({
+  activeCompanyId = '',
+  schemaReady = false,
+  embedded = false,
+  onChanged,
+}: ReviewPanelProps) {
   const [items, setItems] = useState<any[]>([])
   const [imagesByItem, setImagesByItem] = useState<Record<string, string>>({})
   const [ebayReadinessBySku, setEbayReadinessBySku] = useState<Record<string, any>>({})
@@ -17,16 +24,20 @@ export default function ReviewPanel({ embedded = false, onChanged }: ReviewPanel
 
   useEffect(() => {
     fetchReviewItems()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   async function fetchReviewItems() {
     setMessage('')
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('*')
       .eq('status', 'review')
       .order('created_at', { ascending: false })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -125,6 +136,7 @@ export default function ReviewPanel({ embedded = false, onChanged }: ReviewPanel
       .from('items')
       .update({ status: 'finalised' })
       .eq('id', item.id)
+      .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : item.id)
 
     if (error) {
       setMessage(error.message)

@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import QRCode from 'react-qr-code'
 import { supabase } from '@/lib/supabase'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 
 type TransferItem = {
   id: string
@@ -38,18 +39,19 @@ function isManifestItem(item: TransferItem) {
 export default function TransferManifestPage() {
   const params = useParams()
   const id = params.id as string
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [transfer, setTransfer] = useState<Transfer | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     fetchTransfer()
-  }, [id])
+  }, [id, activeCompanyId, schemaReady])
 
   async function fetchTransfer() {
     setLoading(true)
 
-    const { data } = await supabase
+    let query = supabase
       .from('stock_transfers')
       .select(`
         id,
@@ -70,7 +72,12 @@ export default function TransferManifestPage() {
         )
       `)
       .eq('id', id)
-      .single()
+
+    if (schemaReady && activeCompanyId) {
+      query = query.eq('company_id', activeCompanyId)
+    }
+
+    const { data } = await query.single()
 
     setTransfer(data as any)
     setLoading(false)

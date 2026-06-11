@@ -29,11 +29,18 @@ type BatchStats = {
 }
 
 type WorkingPanelProps = {
+  activeCompanyId?: string
+  schemaReady?: boolean
   embedded?: boolean
   onChanged?: () => void
 }
 
-export default function WorkingPanel({ embedded = false, onChanged }: WorkingPanelProps) {
+export default function WorkingPanel({
+  activeCompanyId = '',
+  schemaReady = false,
+  embedded = false,
+  onChanged,
+}: WorkingPanelProps) {
   const router = useRouter()
   const { staff } = useStaff()
 
@@ -48,14 +55,18 @@ export default function WorkingPanel({ embedded = false, onChanged }: WorkingPan
 
   useEffect(() => {
     fetchWorkingItems()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   async function fetchWorkingItems() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('*')
       .eq('status', 'working')
       .order('created_at', { ascending: false })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -82,10 +93,14 @@ export default function WorkingPanel({ embedded = false, onChanged }: WorkingPan
       return
     }
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('id,inbound_batch_id,status,sent_to_review_at,current_location,current_bin')
       .in('inbound_batch_id', batchIds)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -142,11 +157,14 @@ export default function WorkingPanel({ embedded = false, onChanged }: WorkingPan
 
     setLoading(true)
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('items')
       .select('*')
       .eq('sku', cleanSku)
-      .maybeSingle()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.maybeSingle()
 
     setLoading(false)
 
@@ -178,6 +196,7 @@ export default function WorkingPanel({ embedded = false, onChanged }: WorkingPan
     const { data, error } = await supabase
       .from('items')
       .insert({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
         sku: cleanSku,
         status: 'working',
         last_saved_by: staff.id,

@@ -64,18 +64,41 @@ function getActiveStaffFromRequest(request: Request) {
   }
 }
 
-async function requireCheckoutPermission(request: Request, supabase: any): Promise<AccessResult> {
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
+async function requireCheckoutPermission(
+  request: Request,
+  supabase: any,
+  companyId?: string | null
+): Promise<AccessResult> {
   const staffCookie = getActiveStaffFromRequest(request)
 
   if (!staffCookie?.id) {
     return { ok: false, status: 401, message: 'Staff PIN required.' }
   }
 
-  const { data: staff, error } = await supabase
+  let staffQuery = supabase
     .from('staff_users')
     .select('id, name, role, permissions, is_active')
     .eq('id', staffCookie.id)
-    .maybeSingle()
+
+  if (companyId) {
+    staffQuery = staffQuery.eq('company_id', companyId)
+  }
+
+  const { data: staff, error } = await staffQuery.maybeSingle()
 
   if (error) {
     throw new Error(error.message)
@@ -221,8 +244,9 @@ export async function GET(request: Request) {
     }
 
     const supabase = getSupabaseAdmin()
+    const activeCompanyId = getActiveCompanyIdFromRequest(request)
 
-    const access = await requireCheckoutPermission(request, supabase)
+    const access = await requireCheckoutPermission(request, supabase, activeCompanyId)
 
     if (!access.ok) {
       return NextResponse.json(
@@ -248,7 +272,7 @@ export async function GET(request: Request) {
     let saleIdsFromLines: string[] | null = null
 
     if (finalQuery) {
-      const { data: matchingLines, error: lineError } = await supabase
+      let matchingLinesQuery = supabase
         .from('pos_sale_lines')
         .select('sale_id')
         .or(
@@ -263,6 +287,12 @@ export async function GET(request: Request) {
         )
         .limit(200)
 
+      if (activeCompanyId) {
+        matchingLinesQuery = matchingLinesQuery.eq('company_id', activeCompanyId)
+      }
+
+      const { data: matchingLines, error: lineError } = await matchingLinesQuery
+
       if (lineError) throw new Error(lineError.message)
 
       saleIdsFromLines = Array.from(
@@ -275,6 +305,10 @@ export async function GET(request: Request) {
       .select(saleSelect)
       .order('created_at', { ascending: false })
       .limit(limit)
+
+    if (activeCompanyId) {
+      salesQuery = salesQuery.eq('company_id', activeCompanyId)
+    }
 
     if (dateFrom) {
       salesQuery = salesQuery.gte('created_at', startOfDayIso(dateFrom))
@@ -336,11 +370,17 @@ export async function GET(request: Request) {
         relatedFilters.push(`id.in.(${originalSaleIds.join(',')})`)
       }
 
-      const { data: relatedSales, error: relatedError } = await supabase
+      let relatedSalesQuery = supabase
         .from('pos_sales')
         .select(saleSelect)
         .or(relatedFilters.join(','))
         .order('created_at', { ascending: true })
+
+      if (activeCompanyId) {
+        relatedSalesQuery = relatedSalesQuery.eq('company_id', activeCompanyId)
+      }
+
+      const { data: relatedSales, error: relatedError } = await relatedSalesQuery
 
       if (relatedError) throw new Error(relatedError.message)
 

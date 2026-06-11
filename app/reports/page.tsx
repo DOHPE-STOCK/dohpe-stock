@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 import { supabase } from '@/lib/supabase'
 
 type StaffUser = {
@@ -776,6 +777,7 @@ function includeStaffInPayroll(staff?: StaffUser) {
 }
 
 export default function ReportsPage() {
+  const { activeCompanyId, activeCompany, schemaReady } = useCompany()
   const [staffUsers, setStaffUsers] = useState<StaffUser[]>([])
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([])
   const [posSales, setPosSales] = useState<PosSale[]>([])
@@ -809,7 +811,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     fetchReports()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
     return () => {
@@ -857,7 +859,77 @@ export default function ReportsPage() {
       since.setDate(since.getDate() - 120)
       since.setHours(0, 0, 0, 0)
       const { data: sessionData } = await supabase.auth.getSession()
-      const rotaUserKey = sessionData.session?.user?.id ? `rota:${sessionData.session.user.id}` : 'rota:default'
+      const rotaUserKey = sessionData.session?.user?.id
+        ? `rota:${sessionData.session.user.id}:${activeCompanyId}`
+        : `rota:default:${activeCompanyId}`
+
+      let staffQuery = supabase
+        .from('staff_users')
+        .select('id, name, is_active, payroll_settings')
+        .order('name', { ascending: true })
+      let reviewItemsQuery = supabase
+        .from('items')
+        .select('id, sku, status, sent_to_review_at, sent_to_review_by')
+        .not('sent_to_review_at', 'is', null)
+        .order('sent_to_review_at', { ascending: false })
+        .limit(1000)
+      let posSalesQuery = supabase
+        .from('pos_sales')
+        .select('id, sale_number, mode, payment_method, subtotal, discount_amount, total, status, checkout_location, created_at')
+        .gte('created_at', since.toISOString())
+        .order('created_at', { ascending: false })
+        .limit(2000)
+      let onlineSalesQuery = supabase
+        .from('linnworks_processed_sales')
+        .select('id, sku, quantity, source, sub_source, current_status, processed_at, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(2000)
+      let stockQuery = supabase
+        .from('item_stock_locations')
+        .select('item_id, sku, location_name, bin_code, stock_level')
+        .order('location_name', { ascending: true })
+        .limit(5000)
+      let locationQuery = supabase
+        .from('locations')
+        .select('name, label, is_active')
+        .order('name', { ascending: true })
+      let payrollSettingsQuery = supabase
+        .from('payroll_settings')
+        .select('*')
+        .limit(1)
+      let rotaFinalisationsQuery = supabase
+        .from('rota_week_finalisations')
+        .select('id, company_id, company_key, week_id, status, totals, finalised_at')
+        .eq('status', 'finalised')
+        .order('week_id', { ascending: false })
+        .limit(260)
+      let rotaSettingsQuery = supabase
+        .from('rota_settings')
+        .select('data')
+        .eq('user_key', rotaUserKey)
+        .limit(1)
+      let holidayRolloverQuery = supabase
+        .from('staff_holiday_year_rollovers')
+        .select(
+          'id, staff_id, company_id, company_key, holiday_year_start, holiday_year_end, carried_over_hours, source_holiday_year_start, source_holiday_year_end, source_accrued_hours, source_taken_hours, source_closing_balance_hours'
+        )
+        .order('holiday_year_start', { ascending: false })
+        .limit(1000)
+
+      if (schemaReady) {
+        staffQuery = staffQuery.eq('company_id', activeCompanyId)
+        reviewItemsQuery = reviewItemsQuery.eq('company_id', activeCompanyId)
+        posSalesQuery = posSalesQuery.eq('company_id', activeCompanyId)
+        onlineSalesQuery = onlineSalesQuery.eq('company_id', activeCompanyId)
+        stockQuery = stockQuery.eq('company_id', activeCompanyId)
+        locationQuery = locationQuery.eq('company_id', activeCompanyId)
+        payrollSettingsQuery = payrollSettingsQuery.eq('company_id', activeCompanyId)
+        rotaFinalisationsQuery = rotaFinalisationsQuery.eq('company_id', activeCompanyId)
+        rotaSettingsQuery = rotaSettingsQuery.eq('company_id', activeCompanyId)
+        holidayRolloverQuery = holidayRolloverQuery.eq('company_id', activeCompanyId)
+      } else {
+        payrollSettingsQuery = payrollSettingsQuery.eq('id', 'default')
+      }
 
       const [
         staffResult,
@@ -871,56 +943,16 @@ export default function ReportsPage() {
         rotaSettingsResult,
         holidayRolloverResult,
       ] = await Promise.all([
-        supabase.from('staff_users').select('id, name, is_active, payroll_settings').order('name', { ascending: true }),
-        supabase
-          .from('items')
-          .select('id, sku, status, sent_to_review_at, sent_to_review_by')
-          .not('sent_to_review_at', 'is', null)
-          .order('sent_to_review_at', { ascending: false })
-          .limit(1000),
-        supabase
-          .from('pos_sales')
-          .select('id, sale_number, mode, payment_method, subtotal, discount_amount, total, status, checkout_location, created_at')
-          .gte('created_at', since.toISOString())
-          .order('created_at', { ascending: false })
-          .limit(2000),
-        supabase
-          .from('linnworks_processed_sales')
-          .select('id, sku, quantity, source, sub_source, current_status, processed_at, updated_at')
-          .order('updated_at', { ascending: false })
-          .limit(2000),
-        supabase
-          .from('item_stock_locations')
-          .select('item_id, sku, location_name, bin_code, stock_level')
-          .order('location_name', { ascending: true })
-          .limit(5000),
-        supabase
-          .from('locations')
-          .select('name, label, is_active')
-          .order('name', { ascending: true }),
-        supabase
-          .from('payroll_settings')
-          .select('*')
-          .eq('id', 'default')
-          .maybeSingle(),
-        supabase
-          .from('rota_week_finalisations')
-          .select('id, company_key, week_id, status, totals, finalised_at')
-          .eq('status', 'finalised')
-          .order('week_id', { ascending: false })
-          .limit(260),
-        supabase
-          .from('rota_settings')
-          .select('data')
-          .eq('user_key', rotaUserKey)
-          .maybeSingle(),
-        supabase
-          .from('staff_holiday_year_rollovers')
-          .select(
-            'id, staff_id, company_key, holiday_year_start, holiday_year_end, carried_over_hours, source_holiday_year_start, source_holiday_year_end, source_accrued_hours, source_taken_hours, source_closing_balance_hours'
-          )
-          .order('holiday_year_start', { ascending: false })
-          .limit(1000),
+        staffQuery,
+        reviewItemsQuery,
+        posSalesQuery,
+        onlineSalesQuery,
+        stockQuery,
+        locationQuery,
+        payrollSettingsQuery.maybeSingle(),
+        rotaFinalisationsQuery,
+        rotaSettingsQuery.maybeSingle(),
+        holidayRolloverQuery,
       ])
 
       if (staffResult.error) throw new Error(staffResult.error.message)
@@ -979,10 +1011,14 @@ export default function ReportsPage() {
       const itemRows: ItemRow[] = []
       for (let index = 0; index < allSkus.length; index += 500) {
         const chunk = allSkus.slice(index, index + 500)
-        const rows = await supabase
+        let rowsQuery = supabase
           .from('items')
           .select('id, sku, brand, reporting_category, sub_category, sub_type, final_title, ai_title, basic_title, selling_price')
           .in('sku', chunk)
+
+        if (schemaReady) rowsQuery = rowsQuery.eq('company_id', activeCompanyId)
+
+        const rows = await rowsQuery
 
         if (rows.error) throw new Error(rows.error.message)
         itemRows.push(...((rows.data || []) as ItemRow[]))
@@ -1908,20 +1944,11 @@ export default function ReportsPage() {
             <AppNav current="reports" />
           </div>
 
-          <div className="flex items-center gap-3">
-            {message && (
-              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-                {message}
-              </span>
-            )}
-
-            <button
-              onClick={fetchReports}
-              className="rounded-xl bg-white px-5 py-2 text-sm font-black text-black hover:bg-zinc-200"
-            >
-              Refresh
-            </button>
-          </div>
+          {message && (
+            <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+              {message}
+            </span>
+          )}
         </div>
 
         {activePayrollTooltipRow && payrollTooltipPosition && (
@@ -1939,7 +1966,7 @@ export default function ReportsPage() {
                     <p className="font-black text-zinc-100">
                       {row.staffName}
                       {row.preview && <span className="ml-1 text-[10px] uppercase text-yellow-300">preview</span>}
-                      {row.excluded && <span className="ml-1 text-[10px] uppercase text-yellow-300">excluded</span>}
+                      {row.excluded && <span className="ml-1 text-[10px] uppercase text-yellow-300">director</span>}
                     </p>
                     <p className="mt-0.5 text-emerald-300">Work: {hours(row.workHours)}</p>
                     <p className="text-blue-300">Holiday: {hours(row.holidayHours)}</p>
@@ -1947,7 +1974,7 @@ export default function ReportsPage() {
                       <p className="text-zinc-100">Wages: {money(row.wageSpend)}</p>
                     )}
                     {row.excludedHours > 0 && (
-                      <p className="text-yellow-300">Excluded: {hours(row.excludedHours)}</p>
+                      <p className="text-yellow-300">Director hours: {hours(row.excludedHours)}</p>
                     )}
                   </div>
                 ))}
@@ -1957,7 +1984,7 @@ export default function ReportsPage() {
             )}
             {activePayrollTooltipStaffRows.some((row) => row.excludedHours > 0) && (
               <p className="mt-2 text-[10px] font-bold leading-snug text-yellow-300">
-                Excluded staff are shown on the chart only and are not included in payroll or holiday totals.
+                Director hours are shown on the chart only and are not included in payroll or holiday totals.
               </p>
             )}
             {activePayrollTooltipRow.hasPreviewHours && (
@@ -2555,11 +2582,11 @@ export default function ReportsPage() {
             </div>
             <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
               <p className="text-xs font-bold uppercase text-zinc-500">Paid hours</p>
-              <p className="mt-1 text-3xl font-black text-emerald-300">{hours(payrollSummary.paidHours)}</p>
+              <p className="mt-1 text-3xl font-black text-black">{hours(payrollSummary.paidHours)}</p>
             </div>
             <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
               <p className="text-xs font-bold uppercase text-zinc-500">Wage spend</p>
-              <p className="mt-1 text-3xl font-black text-yellow-300">{money(payrollSummary.wageSpend)}</p>
+              <p className="mt-1 text-3xl font-black text-black">{money(payrollSummary.wageSpend)}</p>
             </div>
           </div>
 
@@ -2582,18 +2609,18 @@ export default function ReportsPage() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-3 text-xs font-black uppercase">
-                <span className="flex items-center gap-2 text-emerald-300">
+              <div className="flex items-center gap-3 text-xs font-black uppercase text-black">
+                <span className="flex items-center gap-2">
                   <span className="h-3 w-3 rounded-sm bg-emerald-500" />
                   Work
                 </span>
-                <span className="flex items-center gap-2 text-blue-300">
+                <span className="flex items-center gap-2">
                   <span className="h-3 w-3 rounded-sm bg-blue-500" />
                   Holiday
                 </span>
-                <span className="flex items-center gap-2 text-yellow-300">
+                <span className="flex items-center gap-2">
                   <span className="h-3 w-3 rounded-sm bg-yellow-400" />
-                  Excluded
+                  Director hours
                 </span>
               </div>
             </div>
@@ -2637,7 +2664,7 @@ export default function ReportsPage() {
                           <div
                             role="button"
                             tabIndex={0}
-                            aria-label={`${row.label}: Work ${hours(row.workHours)}, Holiday ${hours(row.holidayHours)}, Wages ${money(row.wageSpend)}, Excluded ${hours(row.excludedHours)}${staffLabel ? `, Staff: ${staffLabel}` : ''}`}
+                            aria-label={`${row.label}: Work ${hours(row.workHours)}, Holiday ${hours(row.holidayHours)}, Wages ${money(row.wageSpend)}, Director hours ${hours(row.excludedHours)}${staffLabel ? `, Staff: ${staffLabel}` : ''}`}
                             onPointerEnter={(event) => queuePayrollTooltip(row.key, event.currentTarget)}
                             onPointerLeave={() => hidePayrollTooltip(row.key)}
                             onFocus={(event) => queuePayrollTooltip(row.key, event.currentTarget)}

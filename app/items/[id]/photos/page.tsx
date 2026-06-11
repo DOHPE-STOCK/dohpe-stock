@@ -6,12 +6,14 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
+import { useCompany } from '@/app/context/CompanyContext'
 
 export default function PhotosPage() {
   const params = useParams()
   const id = params.id as string
 
   const { staff } = useStaff()
+  const { activeCompanyId, schemaReady } = useCompany()
 
   const [item, setItem] = useState<any>(null)
   const [images, setImages] = useState<any[]>([])
@@ -32,7 +34,7 @@ export default function PhotosPage() {
   useEffect(() => {
     fetchItem()
     fetchImages()
-  }, [id])
+  }, [id, activeCompanyId, schemaReady])
 
   useEffect(() => {
     if (!message) return
@@ -47,31 +49,41 @@ export default function PhotosPage() {
   async function touchItemLastSavedBy() {
     if (!staff) return
 
-    await supabase
+    let query = supabase
       .from('items')
       .update({
         last_saved_by: staff.id,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    await query
   }
 
   async function fetchItem() {
-    const { data } = await supabase
+    let query = supabase
       .from('items')
       .select('*')
       .eq('id', id)
-      .single()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data } = await query.single()
 
     setItem(data)
   }
 
   async function fetchImages() {
-    const { data } = await supabase
+    let query = supabase
       .from('item_images')
       .select('*')
       .eq('item_id', id)
-      .order('image_order', { ascending: true })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data } = await query.order('image_order', { ascending: true })
 
     const imageList = data || []
 
@@ -144,6 +156,7 @@ export default function PhotosPage() {
       await supabase
         .from('item_images')
         .insert({
+          ...(schemaReady ? { company_id: activeCompanyId } : {}),
           item_id: id,
           original_url: publicUrlData.publicUrl,
           image_order: images.length + i + 1,
@@ -170,10 +183,14 @@ export default function PhotosPage() {
 
     if (!confirmed) return
 
-    const { error } = await supabase
+    let query = supabase
       .from('item_images')
       .delete()
       .eq('id', image.id)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { error } = await query
 
     if (error) {
       setMessage(error.message)
@@ -219,19 +236,27 @@ export default function PhotosPage() {
 
     const targetImage = images[targetIndex]
 
-    await supabase
+    let imageUpdateQuery = supabase
       .from('item_images')
       .update({
         image_order: targetImage.image_order,
       })
       .eq('id', image.id)
 
-    await supabase
+    if (schemaReady) imageUpdateQuery = imageUpdateQuery.eq('company_id', activeCompanyId)
+
+    await imageUpdateQuery
+
+    let targetUpdateQuery = supabase
       .from('item_images')
       .update({
         image_order: image.image_order,
       })
       .eq('id', targetImage.id)
+
+    if (schemaReady) targetUpdateQuery = targetUpdateQuery.eq('company_id', activeCompanyId)
+
+    await targetUpdateQuery
 
     await touchItemLastSavedBy()
 
@@ -351,14 +376,18 @@ export default function PhotosPage() {
           .from('item-images')
           .getPublicUrl(storagePath)
 
-      const { error: updateError } =
-        await supabase
+      let updateQuery =
+        supabase
           .from('item_images')
           .update({
             processed_url:
               publicUrlData.publicUrl,
           })
           .eq('id', selectedImage.id)
+
+      if (schemaReady) updateQuery = updateQuery.eq('company_id', activeCompanyId)
+
+      const { error: updateError } = await updateQuery
 
       if (updateError) {
         throw new Error(updateError.message)

@@ -24,11 +24,31 @@ function canonicalLocationKey(value: any) {
   return text(value).toUpperCase().replace(/[\s_]+/g, '-')
 }
 
-async function syncItemStockTotal(supabase: any, itemId: string) {
-  const { data, error } = await supabase
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
+async function syncItemStockTotal(supabase: any, itemId: string, companyId?: string | null) {
+  let stockQuery = supabase
     .from('item_stock_locations')
     .select('stock_level')
     .eq('item_id', itemId)
+
+  if (companyId) {
+    stockQuery = stockQuery.eq('company_id', companyId)
+  }
+
+  const { data, error } = await stockQuery
 
   if (error) throw new Error(error.message)
 
@@ -37,7 +57,7 @@ async function syncItemStockTotal(supabase: any, itemId: string) {
     0
   )
 
-  const { error: updateError } = await supabase
+  let itemUpdate = supabase
     .from('items')
     .update({
       stock_level: totalStock,
@@ -45,15 +65,27 @@ async function syncItemStockTotal(supabase: any, itemId: string) {
     })
     .eq('id', itemId)
 
+  if (companyId) {
+    itemUpdate = itemUpdate.eq('company_id', companyId)
+  }
+
+  const { error: updateError } = await itemUpdate
+
   if (updateError) throw new Error(updateError.message)
 }
 
-async function resolveLocation(supabase: any, rawLocation: any) {
+async function resolveLocation(supabase: any, rawLocation: any, companyId?: string | null) {
   const raw = text(rawLocation)
   const key = canonicalLocationKey(raw)
-  const { data, error } = await supabase
+  let locationQuery = supabase
     .from('locations')
     .select('name, label')
+
+  if (companyId) {
+    locationQuery = locationQuery.eq('company_id', companyId)
+  }
+
+  const { data, error } = await locationQuery
 
   if (error) throw new Error(error.message)
 
@@ -86,6 +118,7 @@ export async function POST(request: Request) {
     const sku = text(body.sku).toUpperCase()
     const rawLocationName = body.location_name || body.locationName
     const binCode = text(body.bin_code || body.binCode) || 'Default'
+    const companyId = text(body.company_id || body.companyId) || getActiveCompanyIdFromRequest(request)
     const delta = Number(body.delta ?? 0)
     const source = text(body.source) || 'app_transfer'
     const allowMissingSource = Boolean(body.allow_missing_source || body.allowMissingSource)
@@ -104,16 +137,22 @@ export async function POST(request: Request) {
     }
 
     const supabase = getSupabaseAdmin()
-    const resolvedLocation = await resolveLocation(supabase, rawLocationName)
+    const resolvedLocation = await resolveLocation(supabase, rawLocationName, companyId)
     const locationName = resolvedLocation.name
     const aliases = resolvedLocation.aliases
 
-    const { data: rows, error: readError } = await supabase
+    let readQuery = supabase
       .from('item_stock_locations')
       .select('id, item_id, sku, location_name, stock_level')
       .or(`item_id.eq.${itemId},sku.eq.${sku}`)
       .ilike('bin_code', binCode)
       .in('location_name', aliases)
+
+    if (companyId) {
+      readQuery = readQuery.eq('company_id', companyId)
+    }
+
+    const { data: rows, error: readError } = await readQuery
 
     if (readError) throw new Error(readError.message)
 
@@ -186,7 +225,7 @@ export async function POST(request: Request) {
         if (error) throw new Error(error.message)
       }
 
-      await syncItemStockTotal(supabase, itemId)
+      await syncItemStockTotal(supabase, itemId, companyId)
 
       return NextResponse.json({
         ok: true,
@@ -230,7 +269,7 @@ export async function POST(request: Request) {
 
       if (error) throw new Error(error.message)
 
-      await syncItemStockTotal(supabase, itemId)
+      await syncItemStockTotal(supabase, itemId, companyId)
 
       return NextResponse.json({
         ok: true,
@@ -243,6 +282,7 @@ export async function POST(request: Request) {
     const { data, error } = await supabase
       .from('item_stock_locations')
       .insert({
+        ...(companyId ? { company_id: companyId } : {}),
         item_id: itemId,
         sku,
         location_name: locationName,
@@ -258,7 +298,7 @@ export async function POST(request: Request) {
 
     if (error) throw new Error(error.message)
 
-    await syncItemStockTotal(supabase, itemId)
+    await syncItemStockTotal(supabase, itemId, companyId)
 
     return NextResponse.json({
       ok: true,

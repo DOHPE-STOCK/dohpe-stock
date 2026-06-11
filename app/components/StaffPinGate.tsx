@@ -18,6 +18,8 @@ type StaffPinGateProps = {
   onStaffSelected?: (staff: StaffUser | null) => void
 }
 
+const STAFF_PIN_SESSION_MS = 1000 * 60 * 30
+
 export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
   const [staffUsers, setStaffUsers] = useState<StaffRow[]>([])
   const [selectedStaffId, setSelectedStaffId] = useState('')
@@ -65,6 +67,14 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
 
     try {
       const parsed = JSON.parse(saved)
+      const expiresAt = Number(parsed.expires_at || 0)
+
+      if (expiresAt && expiresAt <= Date.now()) {
+        window.localStorage.removeItem('active_staff_user')
+        document.cookie =
+          'active_staff_user=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        return
+      }
 
       if (parsed?.id && parsed?.name) {
         onStaffSelected?.({
@@ -84,10 +94,14 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
 
   function saveStaff(staff: StaffRow) {
     const safeStaff = normaliseStaff(staff)
-    const encoded = encodeURIComponent(JSON.stringify(safeStaff))
+    const persistedStaff = {
+      ...safeStaff,
+      expires_at: Date.now() + STAFF_PIN_SESSION_MS,
+    }
+    const encoded = encodeURIComponent(JSON.stringify(persistedStaff))
 
-    window.localStorage.setItem('active_staff_user', JSON.stringify(safeStaff))
-    document.cookie = `active_staff_user=${encoded}; path=/; max-age=2592000; SameSite=Lax`
+    window.localStorage.setItem('active_staff_user', JSON.stringify(persistedStaff))
+    document.cookie = `active_staff_user=${encoded}; path=/; max-age=1800; SameSite=Lax`
 
     onStaffSelected?.(safeStaff)
 

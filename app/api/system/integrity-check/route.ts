@@ -77,6 +77,7 @@ export async function POST(request: NextRequest) {
       .from('item_stock_locations')
       .select(`
         id,
+        company_id,
         item_id,
         sku,
         location_name,
@@ -92,6 +93,7 @@ export async function POST(request: NextRequest) {
 
     for (const row of stockRows || []) {
       const key = [
+        row.company_id || 'legacy-company',
         row.item_id,
         text(row.location_name).toUpperCase(),
         text(row.bin_code).toUpperCase(),
@@ -109,6 +111,7 @@ export async function POST(request: NextRequest) {
         severity: 'critical',
         category: 'duplicate_stock_rows',
         reference_id: rows[0].sku,
+        company_id: rows[0].company_id || null,
         message: `Duplicate stock rows found for ${rows[0].sku}`,
         payload: rows,
       })
@@ -124,6 +127,7 @@ export async function POST(request: NextRequest) {
           severity: 'warning',
           category: 'negative_stock',
           reference_id: row.sku,
+          company_id: row.company_id || null,
           message: `${row.sku} has negative stock in ${row.location_name} / ${row.bin_code}`,
           payload: row,
         })
@@ -144,6 +148,7 @@ export async function POST(request: NextRequest) {
         severity: 'critical',
         category: 'failed_queue_row',
         reference_id: row.sku,
+        company_id: row.company_id || null,
         message: `Failed Linnworks queue row for ${row.sku}`,
         payload: row,
       })
@@ -168,6 +173,7 @@ export async function POST(request: NextRequest) {
         severity: 'warning',
         category: 'stale_pending_queue',
         reference_id: row.sku,
+        company_id: row.company_id || null,
         message: `Pending queue row older than 30 mins for ${row.sku}`,
         payload: row,
       })
@@ -192,6 +198,7 @@ export async function POST(request: NextRequest) {
         severity: 'warning',
         category: 'stuck_transfer',
         reference_id: row.sku,
+        company_id: row.company_id || null,
         message: `Transfer item stuck in_transfer for >24h`,
         payload: row,
       })
@@ -218,6 +225,7 @@ export async function POST(request: NextRequest) {
         severity: 'critical',
         category: 'legacy_location',
         reference_id: row.sku,
+        company_id: row.company_id || null,
         message: `Legacy location row found for ${row.sku}`,
         payload: row,
       })
@@ -240,6 +248,7 @@ export async function POST(request: NextRequest) {
           severity: 'critical',
           category: 'missing_stock_deductions',
           reference_id: row.sku,
+          company_id: row.company_id || null,
           message: `Missing stock deductions for ${row.sku}`,
           payload: row,
         })
@@ -258,6 +267,7 @@ export async function POST(request: NextRequest) {
             severity: issue.severity,
             category: issue.category,
             reference_id: issue.reference_id,
+            company_id: issue.company_id || null,
             message: issue.message,
             payload: issue.payload,
           }))

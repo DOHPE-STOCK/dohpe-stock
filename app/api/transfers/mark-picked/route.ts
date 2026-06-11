@@ -35,11 +35,15 @@ function canonical(value: any) {
   return text(value).toUpperCase()
 }
 
-async function loadLocationMappings(supabase: any) {
-  const { data, error } = await supabase
+async function loadLocationMappings(supabase: any, companyId?: string) {
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('channel', 'linnworks')
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
     .maybeSingle()
 
   if (error) return DEFAULT_LOCATION_MAPPINGS
@@ -146,11 +150,15 @@ async function sendTelegramReply(params: {
   return { ok: true }
 }
 
-async function getTransferPickProgress(supabase: any, transferId: string) {
-  const { data, error } = await supabase
+async function getTransferPickProgress(supabase: any, transferId: string, companyId?: string | null) {
+  let query = supabase
     .from('stock_transfer_items')
     .select('id, status')
     .eq('transfer_id', transferId)
+
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -172,7 +180,7 @@ async function getTransferPickProgress(supabase: any, transferId: string) {
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
-    activeLocationMappings = await loadLocationMappings(supabase)
+    activeLocationMappings = DEFAULT_LOCATION_MAPPINGS
 
     const body = await request.json().catch(() => ({}))
 
@@ -193,6 +201,7 @@ export async function POST(request: Request) {
       .from('stock_transfer_items')
       .select(`
         id,
+        company_id,
         transfer_id,
         sku,
         status,
@@ -244,9 +253,11 @@ export async function POST(request: Request) {
       )
     }
 
+    activeLocationMappings = await loadLocationMappings(supabase, match.company_id || undefined)
+
     const now = new Date().toISOString()
 
-    const { error: updateError } = await supabase
+    let updateQuery = supabase
       .from('stock_transfer_items')
       .update({
         status: 'picked',
@@ -255,13 +266,17 @@ export async function POST(request: Request) {
       })
       .eq('id', match.id)
 
+    if (match.company_id) updateQuery = updateQuery.eq('company_id', match.company_id)
+
+    const { error: updateError } = await updateQuery
+
     if (updateError) throw new Error(updateError.message)
 
     const transfer = Array.isArray(match.stock_transfers)
       ? match.stock_transfers[0]
       : match.stock_transfers
 
-    const transferStatus = await getTransferPickProgress(supabase, match.transfer_id)
+    const transferStatus = await getTransferPickProgress(supabase, match.transfer_id, match.company_id)
 
     let telegramReply: any = { skipped: true }
 
@@ -276,6 +291,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       message: `${sku} marked as picked.`,
+      company_id: match.company_id || null,
       transfer_id: match.transfer_id,
       transfer_number: transfer?.transfer_number || null,
       from_location: appStorageLocation(transfer?.from_location),

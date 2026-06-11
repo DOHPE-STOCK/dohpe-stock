@@ -17,6 +17,8 @@ type StaffInput = Partial<StaffUser> & {
   name: string
 }
 
+const STAFF_PIN_SESSION_MS = 1000 * 60 * 30
+
 type StaffContextType = {
   staff: StaffUser | null
   setStaff: (staff: StaffInput | null) => void
@@ -55,6 +57,13 @@ export function StaffProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const parsed = JSON.parse(saved)
+      const expiresAt = Number(parsed.expires_at || 0)
+
+      if (expiresAt && expiresAt <= Date.now()) {
+        clearStaffStorage()
+        return
+      }
+
       const normalised = normaliseStaff(parsed)
 
       if (normalised) {
@@ -79,10 +88,15 @@ export function StaffProvider({ children }: { children: React.ReactNode }) {
     setStaffState(safeStaff)
 
     if (safeStaff) {
-      const encoded = encodeURIComponent(JSON.stringify(safeStaff))
+      const expiresAt = Date.now() + STAFF_PIN_SESSION_MS
+      const persistedStaff = {
+        ...safeStaff,
+        expires_at: expiresAt,
+      }
+      const encoded = encodeURIComponent(JSON.stringify(persistedStaff))
 
-      window.localStorage.setItem('active_staff_user', JSON.stringify(safeStaff))
-      document.cookie = `active_staff_user=${encoded}; path=/; max-age=2592000; SameSite=Lax`
+      window.localStorage.setItem('active_staff_user', JSON.stringify(persistedStaff))
+      document.cookie = `active_staff_user=${encoded}; path=/; max-age=1800; SameSite=Lax`
     } else {
       clearStaffStorage()
     }

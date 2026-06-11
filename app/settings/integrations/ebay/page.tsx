@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
+import { useCompany } from '@/app/context/CompanyContext'
 import { supabase } from '@/lib/supabase'
 import {
   DEFAULT_EBAY_SETTINGS,
@@ -125,6 +126,7 @@ function pickPolicyId(options: EbayPolicyOption[], current: string) {
 }
 
 export default function EbayIntegrationPage() {
+  const { activeCompanyId, schemaReady } = useCompany()
   const [integration, setIntegration] = useState<IntegrationSetting | null>(null)
   const [settings, setSettings] = useState<EbaySettings>(DEFAULT_EBAY_SETTINGS)
   const [enabled, setEnabled] = useState(false)
@@ -150,7 +152,7 @@ export default function EbayIntegrationPage() {
 
   useEffect(() => {
     fetchIntegration().finally(() => setLoading(false))
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
     if (!message) return
@@ -159,11 +161,14 @@ export default function EbayIntegrationPage() {
   }, [message])
 
   async function fetchIntegration() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('integration_settings')
       .select('*')
       .eq('channel', 'ebay')
-      .maybeSingle()
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) {
       setMessage(error.message)
@@ -171,7 +176,19 @@ export default function EbayIntegrationPage() {
     }
 
     if (!data) {
-      setMessage('No eBay integration row exists yet in integration_settings.')
+      setIntegration({
+        id: '',
+        channel: 'ebay',
+        enabled: false,
+        auto_sync: false,
+        connection_status: 'not_configured',
+        settings: DEFAULT_EBAY_SETTINGS,
+        last_synced_at: null,
+        last_error: null,
+      })
+      setSettings(DEFAULT_EBAY_SETTINGS)
+      setEnabled(false)
+      setAutoSync(false)
       return
     }
 
@@ -225,15 +242,37 @@ export default function EbayIntegrationPage() {
     if (!integration) return
     setSaving(true)
 
-    const { error } = await supabase
-      .from('integration_settings')
-      .update({
-        enabled,
-        auto_sync: autoSync,
-        settings,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', integration.id)
+    const payload = {
+      ...(schemaReady ? { company_id: activeCompanyId } : {}),
+      channel: 'ebay',
+      enabled,
+      auto_sync: autoSync,
+      settings,
+      updated_at: new Date().toISOString(),
+    }
+
+    const result = integration.id
+      ? await supabase
+          .from('integration_settings')
+          .update({
+            enabled,
+            auto_sync: autoSync,
+            settings,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', integration.id)
+          .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : integration.id)
+      : await supabase
+          .from('integration_settings')
+          .upsert(payload, { onConflict: schemaReady ? 'company_id,channel' : 'channel' })
+          .select('*')
+          .single()
+
+    const error = result.error
+
+    if (!error && (result as any).data) {
+      setIntegration((result as any).data as IntegrationSetting)
+    }
 
     setSaving(false)
 

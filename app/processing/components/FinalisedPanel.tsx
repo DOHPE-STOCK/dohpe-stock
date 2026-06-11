@@ -30,6 +30,8 @@ const MEASUREMENT_FIELDS = [
 ]
 
 type FinalisedPanelProps = {
+  activeCompanyId?: string
+  schemaReady?: boolean
   embedded?: boolean
 }
 
@@ -100,7 +102,11 @@ function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
   return payload
 }
 
-export default function FinalisedPanel({ embedded = false }: FinalisedPanelProps) {
+export default function FinalisedPanel({
+  activeCompanyId = '',
+  schemaReady = false,
+  embedded = false,
+}: FinalisedPanelProps) {
   const { staff } = useStaff()
 
   const [items, setItems] = useState<any[]>([])
@@ -119,23 +125,31 @@ export default function FinalisedPanel({ embedded = false }: FinalisedPanelProps
 
   useEffect(() => {
     fetchFinalisedItems()
-  }, [])
+  }, [activeCompanyId, schemaReady])
 
   async function fetchFinalisedItems() {
     setLoading(true)
     setMessage('')
 
-    const [itemsResult, integrationsResult] = await Promise.all([
-      supabase
-        .from('items')
-        .select('*')
-        .eq('status', 'finalised')
-        .order('created_at', { ascending: false }),
+    let itemsQuery = supabase
+      .from('items')
+      .select('*')
+      .eq('status', 'finalised')
+      .order('created_at', { ascending: false })
 
-      supabase
-        .from('integration_settings')
-        .select('channel, enabled')
-        .eq('enabled', true),
+    let integrationsQuery = supabase
+      .from('integration_settings')
+      .select('channel, enabled')
+      .eq('enabled', true)
+
+    if (schemaReady) {
+      itemsQuery = itemsQuery.eq('company_id', activeCompanyId)
+      integrationsQuery = integrationsQuery.eq('company_id', activeCompanyId)
+    }
+
+    const [itemsResult, integrationsResult] = await Promise.all([
+      itemsQuery,
+      integrationsQuery,
     ])
 
     setLoading(false)

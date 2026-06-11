@@ -66,18 +66,41 @@ function getActiveStaffFromRequest(request: Request) {
   }
 }
 
-async function requireCheckoutPermission(request: Request, supabase: any): Promise<AccessResult> {
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
+async function requireCheckoutPermission(
+  request: Request,
+  supabase: any,
+  companyId?: string | null
+): Promise<AccessResult> {
   const staffCookie = getActiveStaffFromRequest(request)
 
   if (!staffCookie?.id) {
     return { ok: false, status: 401, message: 'Staff PIN required.' }
   }
 
-  const { data: staff, error } = await supabase
+  let query = supabase
     .from('staff_users')
     .select('id, name, role, permissions, is_active')
     .eq('id', staffCookie.id)
-    .maybeSingle()
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  const { data: staff, error } = await query.maybeSingle()
 
   if (error) {
     throw new Error(error.message)
@@ -97,12 +120,16 @@ async function requireCheckoutPermission(request: Request, supabase: any): Promi
   return { ok: true, staff }
 }
 
-async function requirePosAccess(request: Request, supabase: any): Promise<AccessResult> {
+async function requirePosAccess(
+  request: Request,
+  supabase: any,
+  companyId?: string | null
+): Promise<AccessResult> {
   const login = await requireAppLogin()
 
   if (!login.ok) return login
 
-  const staffAccess = await requireCheckoutPermission(request, supabase)
+  const staffAccess = await requireCheckoutPermission(request, supabase, companyId)
 
   if (!staffAccess.ok) return staffAccess
 
@@ -147,8 +174,9 @@ function poundsToMinorUnits(amount: any) {
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
+    const activeCompanyId = getActiveCompanyIdFromRequest(request)
 
-    const access = await requirePosAccess(request, supabase)
+    const access = await requirePosAccess(request, supabase, activeCompanyId)
 
     if (!access.ok) {
       return accessDeniedResponse(access)
@@ -165,6 +193,18 @@ export async function POST(request: Request) {
 
     if (!paymentId) {
       throw new Error('Missing original Square payment_id.')
+    }
+
+    if (activeCompanyId && saleNumber) {
+      const { data: sale, error: saleError } = await supabase
+        .from('pos_sales')
+        .select('id')
+        .eq('sale_number', saleNumber)
+        .eq('company_id', activeCompanyId)
+        .maybeSingle()
+
+      if (saleError) throw new Error(saleError.message)
+      if (!sale) throw new Error('Sale not found for this company.')
     }
 
     const idempotencyKey = String(

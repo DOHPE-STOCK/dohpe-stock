@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { createServerClient } from '@supabase/ssr'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -43,6 +44,98 @@ function getSupabaseAdmin() {
   return createClient(url, serviceKey)
 }
 
+function getSupabaseAuth(request: Request) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!url || !anonKey) {
+    throw new Error('Missing Supabase auth environment variables.')
+  }
+
+  const cookieHeader = request.headers.get('cookie') || ''
+  const cookies = cookieHeader
+    .split(';')
+    .map((cookie) => cookie.trim())
+    .filter(Boolean)
+    .map((cookie) => {
+      const separatorIndex = cookie.indexOf('=')
+      return {
+        name: separatorIndex === -1 ? cookie : cookie.slice(0, separatorIndex),
+        value: separatorIndex === -1 ? '' : cookie.slice(separatorIndex + 1),
+      }
+    })
+
+  return createServerClient(url, anonKey, {
+    cookies: {
+      getAll() {
+        return cookies
+      },
+      setAll() {},
+    },
+  })
+}
+
+function getActiveCompanyIdFromRequest(request: Request) {
+  const cookie = request.headers.get('cookie') || ''
+  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
+
+  if (!match) return null
+
+  try {
+    const companyId = decodeURIComponent(match[1])
+    return companyId && companyId !== 'single-company-fallback' ? companyId : null
+  } catch {
+    return null
+  }
+}
+
+async function getRequestUserId(request: Request) {
+  const supabaseAuth = getSupabaseAuth(request)
+  const {
+    data: { user },
+  } = await supabaseAuth.auth.getUser()
+
+  return user?.id || null
+}
+
+async function assertLoanFeatureEnabled(supabase: any, companyId?: string | null, userId?: string | null) {
+  if (!companyId || !userId) {
+    throw new Error('Loan workflow is not enabled for this company.')
+  }
+
+  const { data: override, error: overrideError } = await supabase
+    .from('user_feature_overrides')
+    .select('enabled')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .eq('feature_key', 'loan_page')
+    .maybeSingle()
+
+  if (overrideError && overrideError.code !== 'PGRST116') {
+    throw new Error(overrideError.message)
+  }
+
+  if (override) {
+    if (override.enabled === true) return
+    throw new Error('Loan workflow is not enabled for this user.')
+  }
+
+  const { data: feature, error: featureError } = await supabase
+    .from('company_features')
+    .select('enabled')
+    .eq('company_id', companyId)
+    .eq('feature_key', 'loan_page')
+    .maybeSingle()
+
+  if (featureError && featureError.code !== 'PGRST116') {
+    throw new Error(featureError.message)
+  }
+
+  if (feature?.enabled === true) return
+
+  throw new Error('Loan workflow is not enabled for this company.')
+}
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -64,12 +157,17 @@ function escapePostgrestOrValue(value: string) {
     .replaceAll(',', '\\,')
 }
 
-async function loadLocationMappings(supabase: any) {
-  const { data, error } = await supabase
+async function loadLocationMappings(supabase: any, companyId?: string | null) {
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('channel', 'linnworks')
-    .maybeSingle()
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) return DEFAULT_LOCATION_MAPPINGS
 
@@ -159,11 +257,11 @@ function isShopStorageLocation(value: any) {
   return displayLocation(storage).toUpperCase().startsWith('SHOP-')
 }
 
-async function findItemByScan(supabase: any, scanValue: string) {
+async function findItemByScan(supabase: any, scanValue: string, companyId?: string | null) {
   const clean = cleanScan(scanValue)
   const safe = escapePostgrestOrValue(clean)
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('items')
     .select(`
       id,
@@ -187,18 +285,29 @@ async function findItemByScan(supabase: any, scanValue: string) {
       basic_title
     `)
     .or(`sku.eq.${safe},barcode_number.eq.${safe}`)
-    .maybeSingle()
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  const { data, error } = await query.maybeSingle()
 
   if (error) throw new Error(error.message)
 
   return data
 }
 
-async function getStockRows(supabase: any, itemId: string) {
-  const { data, error } = await supabase
+async function getStockRows(supabase: any, itemId: string, companyId?: string | null) {
+  let query = supabase
     .from('item_stock_locations')
     .select('id, item_id, sku, location_name, bin_code, stock_level')
     .eq('item_id', itemId)
+
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -247,6 +356,7 @@ async function setStockRowLevel(params: {
 
 async function upsertStockRow(params: {
   supabase: any
+  companyId?: string | null
   itemId: string
   sku: string
   locationName: string
@@ -258,13 +368,19 @@ async function upsertStockRow(params: {
   const binCode = canonicalBin(params.binCode, locationName)
   const now = new Date().toISOString()
 
-  const { data, error } = await params.supabase
+  let existingQuery = params.supabase
     .from('item_stock_locations')
     .select('id, stock_level')
     .eq('item_id', params.itemId)
     .eq('location_name', locationName)
     .eq('bin_code', binCode)
     .limit(1)
+
+  if (params.companyId) {
+    existingQuery = existingQuery.eq('company_id', params.companyId)
+  }
+
+  const { data, error } = await existingQuery
 
   if (error) throw new Error(error.message)
 
@@ -298,6 +414,7 @@ async function upsertStockRow(params: {
   const { data: inserted, error: insertError } = await params.supabase
     .from('item_stock_locations')
     .insert({
+      ...(params.companyId ? { company_id: params.companyId } : {}),
       item_id: params.itemId,
       sku: params.sku,
       location_name: locationName,
@@ -321,10 +438,11 @@ async function upsertStockRow(params: {
 
 async function updateItemSummary(params: {
   supabase: any
+  companyId?: string | null
   itemId: string
   extra?: Record<string, any>
 }) {
-  const rows = await getStockRows(params.supabase, params.itemId)
+  const rows = await getStockRows(params.supabase, params.itemId, params.companyId)
   const stockLevel = rows.reduce((sum, row) => sum + Number(row.stock_level || 0), 0)
   const warehouseStock = rows
     .filter((row) => appStorageLocation(row.location_name) === DEFAULT_STORAGE_LOCATION)
@@ -354,10 +472,16 @@ async function updateItemSummary(params: {
     ...(params.extra || {}),
   }
 
-  const { error } = await params.supabase
+  let query = params.supabase
     .from('items')
     .update(payload)
     .eq('id', params.itemId)
+
+  if (params.companyId) {
+    query = query.eq('company_id', params.companyId)
+  }
+
+  const { error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -372,6 +496,7 @@ async function updateItemSummary(params: {
 
 async function insertQueueRow(params: {
   supabase: any
+  companyId?: string | null
   itemId: string
   sku: string
   delta: number
@@ -388,6 +513,7 @@ async function insertQueueRow(params: {
   const { error } = await params.supabase
     .from('linnworks_sync_queue')
     .insert({
+      ...(params.companyId ? { company_id: params.companyId } : {}),
       item_id: params.itemId,
       sku: params.sku,
       action: 'adjust_stock',
@@ -408,8 +534,8 @@ async function insertQueueRow(params: {
   if (error) throw new Error(error.message)
 }
 
-async function fetchLoans(supabase: any) {
-  const { data, error } = await supabase
+async function fetchLoans(supabase: any, companyId?: string | null) {
+  let query = supabase
     .from('items')
     .select(`
       id,
@@ -433,6 +559,12 @@ async function fetchLoans(supabase: any) {
     .eq('loan_status', 'on_loan')
     .order('loaned_at', { ascending: false })
 
+  if (companyId) {
+    query = query.eq('company_id', companyId)
+  }
+
+  const { data, error } = await query
+
   if (error) throw new Error(error.message)
 
   return data || []
@@ -440,15 +572,16 @@ async function fetchLoans(supabase: any) {
 
 async function lookupLoanItem(params: {
   supabase: any
+  companyId?: string | null
   scanValue: string
 }) {
-  const item = await findItemByScan(params.supabase, params.scanValue)
+  const item = await findItemByScan(params.supabase, params.scanValue, params.companyId)
 
   if (!item) {
     throw new Error(`Item not found: ${cleanScan(params.scanValue)}`)
   }
 
-  const stockRows = await getStockRows(params.supabase, item.id)
+  const stockRows = await getStockRows(params.supabase, item.id, params.companyId)
 
   return {
     item,
@@ -458,13 +591,14 @@ async function lookupLoanItem(params: {
 
 async function loanOut(params: {
   supabase: any
+  companyId?: string | null
   scanValue: string
   staffId: string
   staffName: string
   sourceLocation: string
   sourceBin: string
 }) {
-  const item = await findItemByScan(params.supabase, params.scanValue)
+  const item = await findItemByScan(params.supabase, params.scanValue, params.companyId)
 
   if (!item) {
     throw new Error(`Item not found: ${cleanScan(params.scanValue)}`)
@@ -477,7 +611,7 @@ async function loanOut(params: {
   const sourceLocation = appStorageLocation(params.sourceLocation)
   const sourceBin = canonicalBin(params.sourceBin, sourceLocation)
 
-  const stockRows = await getStockRows(params.supabase, item.id)
+  const stockRows = await getStockRows(params.supabase, item.id, params.companyId)
   const sourceRow = stockRows.find(
     (row) =>
       appStorageLocation(row.location_name) === sourceLocation &&
@@ -509,7 +643,7 @@ async function loanOut(params: {
     loaned_out_by: params.staffName,
   })
 
-  const { error: itemUpdateError } = await params.supabase
+  let itemUpdateQuery = params.supabase
     .from('items')
     .update({
       loan_status: 'on_loan',
@@ -524,11 +658,18 @@ async function loanOut(params: {
     })
     .eq('id', item.id)
 
+  if (params.companyId) {
+    itemUpdateQuery = itemUpdateQuery.eq('company_id', params.companyId)
+  }
+
+  const { error: itemUpdateError } = await itemUpdateQuery
+
   if (itemUpdateError) throw new Error(itemUpdateError.message)
 
   const { error: loanInsertError } = await params.supabase
     .from('item_loans')
     .insert({
+      ...(params.companyId ? { company_id: params.companyId } : {}),
       item_id: item.id,
       sku: item.sku,
       status: 'on_loan',
@@ -542,6 +683,7 @@ async function loanOut(params: {
 
   await insertQueueRow({
     supabase: params.supabase,
+    companyId: params.companyId,
     itemId: item.id,
     sku: item.sku,
     delta: -1,
@@ -555,6 +697,7 @@ async function loanOut(params: {
 
   const summary = await updateItemSummary({
     supabase: params.supabase,
+    companyId: params.companyId,
     itemId: item.id,
     extra: {
       loan_status: 'on_loan',
@@ -581,13 +724,14 @@ async function loanOut(params: {
 
 async function returnLoan(params: {
   supabase: any
+  companyId?: string | null
   scanValue: string
   staffId: string
   staffName: string
   returnLocation: string
   returnBin: string
 }) {
-  const item = await findItemByScan(params.supabase, params.scanValue)
+  const item = await findItemByScan(params.supabase, params.scanValue, params.companyId)
 
   if (!item) {
     throw new Error(`Item not found: ${cleanScan(params.scanValue)}`)
@@ -603,6 +747,7 @@ async function returnLoan(params: {
 
   const returnedRow = await upsertStockRow({
     supabase: params.supabase,
+    companyId: params.companyId,
     itemId: item.id,
     sku: item.sku,
     locationName: returnLocation,
@@ -611,7 +756,7 @@ async function returnLoan(params: {
     source: 'loan_return',
   })
 
-  const { error: loanUpdateError } = await params.supabase
+  let loanUpdateQuery = params.supabase
     .from('item_loans')
     .update({
       status: 'returned',
@@ -624,9 +769,15 @@ async function returnLoan(params: {
     .eq('item_id', item.id)
     .eq('status', 'on_loan')
 
+  if (params.companyId) {
+    loanUpdateQuery = loanUpdateQuery.eq('company_id', params.companyId)
+  }
+
+  const { error: loanUpdateError } = await loanUpdateQuery
+
   if (loanUpdateError) throw new Error(loanUpdateError.message)
 
-  const { error: itemUpdateError } = await params.supabase
+  let itemUpdateQuery = params.supabase
     .from('items')
     .update({
       loan_status: 'not_on_loan',
@@ -639,10 +790,17 @@ async function returnLoan(params: {
     })
     .eq('id', item.id)
 
+  if (params.companyId) {
+    itemUpdateQuery = itemUpdateQuery.eq('company_id', params.companyId)
+  }
+
+  const { error: itemUpdateError } = await itemUpdateQuery
+
   if (itemUpdateError) throw new Error(itemUpdateError.message)
 
   await insertQueueRow({
     supabase: params.supabase,
+    companyId: params.companyId,
     itemId: item.id,
     sku: item.sku,
     delta: 1,
@@ -656,6 +814,7 @@ async function returnLoan(params: {
 
   const summary = await updateItemSummary({
     supabase: params.supabase,
+    companyId: params.companyId,
     itemId: item.id,
     extra: {
       loan_status: 'not_on_loan',
@@ -677,23 +836,28 @@ async function returnLoan(params: {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
-    activeLocationMappings = await loadLocationMappings(supabase)
-    const loans = await fetchLoans(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const userId = await getRequestUserId(request)
+    await assertLoanFeatureEnabled(supabase, companyId, userId)
+    activeLocationMappings = await loadLocationMappings(supabase, companyId)
+    const loans = await fetchLoans(supabase, companyId)
 
     return NextResponse.json({
       ok: true,
       loans,
     })
   } catch (error: any) {
+    const status = String(error.message || '').includes('Loan workflow is not enabled') ? 403 : 500
+
     return NextResponse.json(
       {
         ok: false,
         message: error.message || 'Unknown loan list error.',
       },
-      { status: 500 }
+      { status }
     )
   }
 }
@@ -701,7 +865,10 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const supabase = getSupabaseAdmin()
-    activeLocationMappings = await loadLocationMappings(supabase)
+    const companyId = getActiveCompanyIdFromRequest(request)
+    const userId = await getRequestUserId(request)
+    await assertLoanFeatureEnabled(supabase, companyId, userId)
+    activeLocationMappings = await loadLocationMappings(supabase, companyId)
 
     const body = await request.json().catch(() => ({}))
 
@@ -719,7 +886,7 @@ export async function POST(request: Request) {
     }
 
     if (action === 'lookup') {
-      const result = await lookupLoanItem({ supabase, scanValue })
+      const result = await lookupLoanItem({ supabase, companyId, scanValue })
 
       return NextResponse.json({
         ok: true,
@@ -741,6 +908,7 @@ export async function POST(request: Request) {
 
       const result = await loanOut({
         supabase,
+        companyId,
         scanValue,
         staffId,
         staffName,
@@ -764,6 +932,7 @@ export async function POST(request: Request) {
 
     const result = await returnLoan({
       supabase,
+      companyId,
       scanValue,
       staffId,
       staffName,
@@ -778,13 +947,14 @@ export async function POST(request: Request) {
     })
   } catch (error: any) {
     console.error('LOAN_ROUTE_ERROR', error)
+    const status = String(error.message || '').includes('Loan workflow is not enabled') ? 403 : 500
 
     return NextResponse.json(
       {
         ok: false,
         message: error.message || 'Unknown loan action error.',
       },
-      { status: 500 }
+      { status }
     )
   }
 }
