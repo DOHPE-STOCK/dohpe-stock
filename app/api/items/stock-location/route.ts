@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
     const body = await request.json()
     const itemId = text(body.item_id || body.itemId)
     const sku = text(body.sku).toUpperCase()
-    const companyId = text(body.company_id || body.companyId)
+    const requestedCompanyId = text(body.company_id || body.companyId)
     const rawLocationName = body.location_name || body.locationName
     const binCode = canonicalBinCode(body.bin_code || body.binCode)
     const stockLevel = Number(body.stock_level ?? body.stockLevel ?? 0)
@@ -88,7 +89,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'Invalid stock level.' }, { status: 400 })
     }
 
+    const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!access.ok) {
+      return NextResponse.json({ ok: false, error: access.message }, { status: access.status })
+    }
+
+    const companyId = access.company.id
+    if (requestedCompanyId && requestedCompanyId !== companyId) {
+      return NextResponse.json({ ok: false, error: 'Company mismatch.' }, { status: 403 })
+    }
+
     const supabase = getSupabaseAdmin()
+    const { data: item, error: itemError } = await supabase
+      .from('items')
+      .select('id')
+      .eq('id', itemId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (itemError) throw new Error(itemError.message)
+    if (!item) {
+      return NextResponse.json({ ok: false, error: 'Item not found for active company.' }, { status: 404 })
+    }
+
     const resolvedLocation = await resolveLocation(supabase, rawLocationName, companyId)
     const locationName = resolvedLocation.name
     const aliases = resolvedLocation.aliases
@@ -115,7 +138,7 @@ export async function POST(request: Request) {
       const { data, error } = await supabase
         .from('item_stock_locations')
         .update({
-          ...(companyId ? { company_id: companyId } : {}),
+          company_id: companyId,
           sku,
           location_name: locationName,
           bin_code: binCode,
@@ -135,7 +158,7 @@ export async function POST(request: Request) {
     const { data, error } = await supabase
       .from('item_stock_locations')
       .upsert({
-        ...(companyId ? { company_id: companyId } : {}),
+        company_id: companyId,
         item_id: itemId,
         sku,
         location_name: locationName,
@@ -145,9 +168,7 @@ export async function POST(request: Request) {
         source,
         updated_at: now,
       }, {
-        onConflict: companyId
-          ? 'company_id,item_id,location_name,bin_code'
-          : 'item_id,location_name,bin_code',
+        onConflict: 'company_id,item_id,location_name,bin_code',
       })
       .select('id, item_id, sku, location_name, bin_code, stock_level')
       .single()

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -246,6 +247,15 @@ export async function GET(request: Request) {
     const supabase = getSupabaseAdmin()
     const activeCompanyId = getActiveCompanyIdFromRequest(request)
 
+    const companyAccess = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!companyAccess.ok) {
+      return NextResponse.json({ ok: false, message: companyAccess.message }, { status: companyAccess.status })
+    }
+
+    if (!activeCompanyId || activeCompanyId !== companyAccess.company.id) {
+      return NextResponse.json({ ok: false, message: 'Active company required.' }, { status: 400 })
+    }
+
     const access = await requireCheckoutPermission(request, supabase, activeCompanyId)
 
     if (!access.ok) {
@@ -287,9 +297,7 @@ export async function GET(request: Request) {
         )
         .limit(200)
 
-      if (activeCompanyId) {
-        matchingLinesQuery = matchingLinesQuery.eq('company_id', activeCompanyId)
-      }
+      matchingLinesQuery = matchingLinesQuery.eq('company_id', activeCompanyId)
 
       const { data: matchingLines, error: lineError } = await matchingLinesQuery
 
@@ -306,9 +314,7 @@ export async function GET(request: Request) {
       .order('created_at', { ascending: false })
       .limit(limit)
 
-    if (activeCompanyId) {
-      salesQuery = salesQuery.eq('company_id', activeCompanyId)
-    }
+    salesQuery = salesQuery.eq('company_id', activeCompanyId)
 
     if (dateFrom) {
       salesQuery = salesQuery.gte('created_at', startOfDayIso(dateFrom))
@@ -376,9 +382,7 @@ export async function GET(request: Request) {
         .or(relatedFilters.join(','))
         .order('created_at', { ascending: true })
 
-      if (activeCompanyId) {
-        relatedSalesQuery = relatedSalesQuery.eq('company_id', activeCompanyId)
-      }
+      relatedSalesQuery = relatedSalesQuery.eq('company_id', activeCompanyId)
 
       const { data: relatedSales, error: relatedError } = await relatedSalesQuery
 

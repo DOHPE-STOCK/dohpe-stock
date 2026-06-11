@@ -10,6 +10,7 @@ import { useCompany } from '@/app/context/CompanyContext'
 import CompanySettingsPanel from '@/app/settings/company/CompanySettingsPanel'
 import BillingSettingsPanel from '@/app/settings/company/billing/BillingSettingsPanel'
 import IntegrationsPanel from '@/app/settings/integrations/IntegrationsPanel'
+import SupportPanel from '@/app/settings/support/SupportPanel'
 
 type StaffUser = {
   id: string
@@ -74,6 +75,7 @@ type FixedCost = {
 type OpenSection =
   | 'company'
   | 'billing'
+  | 'support'
   | 'integrations'
   | 'processing'
   | 'locations'
@@ -370,6 +372,7 @@ export default function SettingsPage() {
         'integrations',
         'company',
         'billing',
+        'support',
         'processing',
         'locations',
         'users',
@@ -1332,6 +1335,11 @@ export default function SettingsPage() {
       description: 'Plans, pricing and invoice history.',
     },
     {
+      section: 'support',
+      title: 'Support',
+      description: 'Open tickets and view replies from Loopbase.',
+    },
+    {
       section: 'integrations',
       title: 'Channel Integrations',
       description: 'Linnworks, eBay, Shopify, Vinted and other channels.',
@@ -1477,6 +1485,17 @@ export default function SettingsPage() {
 
           {openSection === 'billing' && (
             <BillingSettingsPanel />
+          )}
+
+          <SectionHeader
+            section="support"
+            title="Support"
+            description="Open tickets and view replies from Loopbase."
+            colour="emerald"
+          />
+
+          {openSection === 'support' && (
+            <SupportPanel />
           )}
 
           <SectionHeader

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -176,6 +177,15 @@ export async function POST(request: Request) {
     const supabase = getSupabaseAdmin()
     const activeCompanyId = getActiveCompanyIdFromRequest(request)
 
+    const companyAccess = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!companyAccess.ok) {
+      return NextResponse.json({ ok: false, message: companyAccess.message }, { status: companyAccess.status })
+    }
+
+    if (!activeCompanyId || activeCompanyId !== companyAccess.company.id) {
+      return NextResponse.json({ ok: false, message: 'Active company required.' }, { status: 400 })
+    }
+
     const access = await requirePosAccess(request, supabase, activeCompanyId)
 
     if (!access.ok) {
@@ -195,7 +205,7 @@ export async function POST(request: Request) {
       throw new Error('Missing original Square payment_id.')
     }
 
-    if (activeCompanyId && saleNumber) {
+    if (saleNumber) {
       const { data: sale, error: saleError } = await supabase
         .from('pos_sales')
         .select('id')

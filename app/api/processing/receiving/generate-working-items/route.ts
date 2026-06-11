@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -155,13 +156,22 @@ export async function POST(request: Request) {
       )
     }
 
+    const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!access.ok) {
+      return NextResponse.json({ ok: false, message: access.message }, { status: access.status })
+    }
+
+    const companyId = access.company.id
+    if (requestCompanyId && requestCompanyId !== companyId) {
+      return NextResponse.json({ ok: false, message: 'Company mismatch.' }, { status: 403 })
+    }
+
     const supabase = getSupabaseAdmin()
     let batchQuery = supabase
       .from('inbound_batches')
       .select('*')
       .eq('id', batchId)
-
-    if (requestCompanyId) batchQuery = batchQuery.eq('company_id', requestCompanyId)
+      .eq('company_id', companyId)
 
     const { data: batch, error: batchError } = await batchQuery.maybeSingle()
 
@@ -200,7 +210,6 @@ export async function POST(request: Request) {
       }
     }
 
-    const companyId = text(batch.company_id) || requestCompanyId || null
     const skus = await generateSkus(supabase, actualQuantity, companyId)
     const itemRows = skus.map((sku, index) => ({
       ...(companyId ? { company_id: companyId } : {}),
@@ -255,7 +264,7 @@ export async function POST(request: Request) {
 
     const { error: stockError } = await supabase
       .from('item_stock_locations')
-      .upsert(stockRows, { onConflict: 'item_id,location_name,bin_code' })
+      .upsert(stockRows, { onConflict: 'company_id,item_id,location_name,bin_code' })
 
     if (stockError) throw new Error(stockError.message)
 
@@ -322,6 +331,7 @@ export async function POST(request: Request) {
         updated_at: now,
       })
       .eq('id', batch.id)
+      .eq('company_id', companyId)
 
     if (batchUpdateError) throw new Error(batchUpdateError.message)
 

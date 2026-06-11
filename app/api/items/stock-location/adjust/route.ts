@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -22,20 +23,6 @@ function text(value: any) {
 
 function canonicalLocationKey(value: any) {
   return text(value).toUpperCase().replace(/[\s_]+/g, '-')
-}
-
-function getActiveCompanyIdFromRequest(request: Request) {
-  const cookie = request.headers.get('cookie') || ''
-  const match = cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)
-
-  if (!match) return null
-
-  try {
-    const companyId = decodeURIComponent(match[1])
-    return companyId && companyId !== 'single-company-fallback' ? companyId : null
-  } catch {
-    return null
-  }
 }
 
 async function syncItemStockTotal(supabase: any, itemId: string, companyId?: string | null) {
@@ -118,7 +105,7 @@ export async function POST(request: Request) {
     const sku = text(body.sku).toUpperCase()
     const rawLocationName = body.location_name || body.locationName
     const binCode = text(body.bin_code || body.binCode) || 'Default'
-    const companyId = text(body.company_id || body.companyId) || getActiveCompanyIdFromRequest(request)
+    const requestedCompanyId = text(body.company_id || body.companyId)
     const delta = Number(body.delta ?? 0)
     const source = text(body.source) || 'app_transfer'
     const allowMissingSource = Boolean(body.allow_missing_source || body.allowMissingSource)
@@ -136,7 +123,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'Invalid stock adjustment.' }, { status: 400 })
     }
 
+    const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!access.ok) {
+      return NextResponse.json({ ok: false, error: access.message }, { status: access.status })
+    }
+
+    const companyId = access.company.id
+    if (requestedCompanyId && requestedCompanyId !== companyId) {
+      return NextResponse.json({ ok: false, error: 'Company mismatch.' }, { status: 403 })
+    }
+
     const supabase = getSupabaseAdmin()
+    const { data: item, error: itemError } = await supabase
+      .from('items')
+      .select('id')
+      .eq('id', itemId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (itemError) throw new Error(itemError.message)
+    if (!item) {
+      return NextResponse.json({ ok: false, error: 'Item not found for active company.' }, { status: 404 })
+    }
+
     const resolvedLocation = await resolveLocation(supabase, rawLocationName, companyId)
     const locationName = resolvedLocation.name
     const aliases = resolvedLocation.aliases
@@ -282,7 +291,7 @@ export async function POST(request: Request) {
     const { data, error } = await supabase
       .from('item_stock_locations')
       .insert({
-        ...(companyId ? { company_id: companyId } : {}),
+        company_id: companyId,
         item_id: itemId,
         sku,
         location_name: locationName,

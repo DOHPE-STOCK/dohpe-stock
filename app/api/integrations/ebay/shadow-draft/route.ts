@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getEbayIntegrationConfig } from '@/lib/ebayIntegrationSettings'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -46,6 +47,14 @@ export async function POST(request: NextRequest) {
 
     const supabase = getSupabaseAdmin()
     const companyId = getActiveCompanyIdFromRequest(request)
+    const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!access.ok) {
+      return NextResponse.json({ ok: false, message: access.message }, { status: access.status })
+    }
+    if (!companyId || companyId !== access.company.id) {
+      return NextResponse.json({ ok: false, message: 'Active company required.' }, { status: 400 })
+    }
+
     const config = await getEbayIntegrationConfig(supabase, companyId)
     const draft = readiness.listing_draft
     const policies = {
@@ -56,7 +65,7 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = {
-      ...(companyId ? { company_id: companyId } : {}),
+      company_id: companyId,
       item_id: readiness.item.id,
       sku: readiness.sku,
       marketplace_id: config.settings.marketplace_id,
@@ -86,7 +95,7 @@ export async function POST(request: NextRequest) {
 
     const { data, error } = await supabase
       .from('ebay_listing_drafts')
-      .upsert(payload, { onConflict: 'item_id,marketplace_id' })
+      .upsert(payload, { onConflict: 'company_id,item_id,marketplace_id' })
       .select('id, sku, status, ready, category_id, title, updated_at')
       .single()
 

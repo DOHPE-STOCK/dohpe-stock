@@ -740,8 +740,8 @@ export default function CompanySettingsPanel({
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
             <h2 className="text-xl font-black">Plan Usage</h2>
             <p className="mt-1 text-sm font-bold text-zinc-400">
-              Current usage for the active company. These limits are plan controlled and can
-              become billing gates later.
+              Current usage for the active company. These limits are enforced for non-internal
+              companies.
             </p>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2">

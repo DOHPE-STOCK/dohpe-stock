@@ -64,29 +64,10 @@ for select
 to authenticated
 using (coalesce(auth_user_id, user_id) = auth.uid());
 
+-- Do not add an authenticated "manage platform admins" policy here. A policy on
+-- platform_admin_users that queries platform_admin_users causes RLS recursion.
+-- Platform admin writes should go through service-role API routes.
 drop policy if exists "platform admins manage platform admins" on public.platform_admin_users;
-create policy "platform admins manage platform admins"
-on public.platform_admin_users
-for all
-to authenticated
-using (
-  exists (
-    select 1
-    from public.platform_admin_users pau
-    where coalesce(pau.auth_user_id, pau.user_id) = auth.uid()
-      and pau.is_active = true
-      and pau.role in ('owner', 'admin')
-  )
-)
-with check (
-  exists (
-    select 1
-    from public.platform_admin_users pau
-    where coalesce(pau.auth_user_id, pau.user_id) = auth.uid()
-      and pau.is_active = true
-      and pau.role in ('owner', 'admin')
-  )
-);
 
 select
   pau.user_id,

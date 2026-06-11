@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -371,10 +372,44 @@ async function waitForFinalCheckoutStatus({
   }
 }
 
+async function assertSaleBelongsToCompany(
+  supabase: any,
+  companyId: string,
+  saleReference: any
+) {
+  const reference = String(saleReference || '').trim()
+  if (!reference) return
+
+  let query = supabase
+    .from('pos_sales')
+    .select('id')
+    .eq('company_id', companyId)
+    .limit(1)
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference)) {
+    query = query.eq('id', reference)
+  } else {
+    query = query.eq('sale_number', reference.toUpperCase())
+  }
+
+  const { data, error } = await query.maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Sale not found for active company.')
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = getSupabaseAdmin()
     const activeCompanyId = getActiveCompanyIdFromRequest(request)
+
+    const companyAccess = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!companyAccess.ok) {
+      return NextResponse.json({ ok: false, message: companyAccess.message }, { status: companyAccess.status })
+    }
+
+    if (!activeCompanyId || activeCompanyId !== companyAccess.company.id) {
+      return NextResponse.json({ ok: false, message: 'Active company required.' }, { status: 400 })
+    }
 
     const access = await requirePosAccess(request, supabase, activeCompanyId)
 
@@ -384,6 +419,8 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}))
     const action = body.action || 'create_and_wait'
+
+    await assertSaleBelongsToCompany(supabase, activeCompanyId, body.sale_number || body.sale_id)
 
     if (action === 'status') {
       const checkoutId = String(body.checkout_id || '')

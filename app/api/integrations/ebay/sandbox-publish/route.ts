@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getEbayIntegrationConfig } from '@/lib/ebayIntegrationSettings'
 import { ebayRequest } from '@/lib/ebayApi'
 import { buildEbayDescriptionHtml } from '@/lib/ebayListingTemplate'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -179,7 +180,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, message: 'Missing sku.' }, { status: 400 })
     }
 
+    const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!access.ok) {
+      return NextResponse.json({ ok: false, message: access.message }, { status: access.status })
+    }
+
     companyId = getActiveCompanyIdFromRequest(request)
+    if (!companyId || companyId !== access.company.id) {
+      return NextResponse.json({ ok: false, message: 'Active company required.' }, { status: 400 })
+    }
+
     const config = await getEbayIntegrationConfig(supabase, companyId)
 
     if (config.settings.environment !== 'sandbox') {
@@ -195,9 +205,7 @@ export async function POST(request: NextRequest) {
       .eq('sku', sku)
       .eq('marketplace_id', config.settings.marketplace_id)
 
-    if (companyId) {
-      draftQuery = draftQuery.eq('company_id', companyId)
-    }
+    draftQuery = draftQuery.eq('company_id', companyId)
 
     const { data: draft, error } = await draftQuery.maybeSingle()
 

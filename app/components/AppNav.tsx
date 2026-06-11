@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useStaff } from '@/app/context/StaffContext'
 import { useCompany } from '@/app/context/CompanyContext'
+import NotificationBell from '@/app/components/NotificationBell'
 
 type NavKey =
   | 'settings'
@@ -285,6 +286,12 @@ export default function AppNav({ current, onNavigate }: AppNavProps) {
             Staff PIN
           </Link>
         )}
+
+        <NotificationBell
+          activeCompanyId={activeCompanyId}
+          schemaReady={schemaReady}
+          enabled={Boolean(userLabel)}
+        />
 
         {userLabel ? (
           <div className="relative">

@@ -229,10 +229,13 @@ export default function WorkingPanel({
     setLoading(true)
     setMessage(`Deleting ${item.sku}...`)
 
-    const { error: imageError } = await supabase
+    let imageDelete = supabase
       .from('item_images')
       .delete()
       .eq('item_id', item.id)
+    if (schemaReady) imageDelete = imageDelete.eq('company_id', activeCompanyId)
+
+    const { error: imageError } = await imageDelete
 
     if (imageError) {
       setLoading(false)
@@ -240,18 +243,29 @@ export default function WorkingPanel({
       return
     }
 
-    await supabase.from('item_identifiers').delete().eq('item_id', item.id)
-    await supabase.from('item_stock_locations').delete().eq('item_id', item.id)
-    await supabase
+    let identifierDelete = supabase.from('item_identifiers').delete().eq('item_id', item.id)
+    if (schemaReady) identifierDelete = identifierDelete.eq('company_id', activeCompanyId)
+    await identifierDelete
+
+    let stockDelete = supabase.from('item_stock_locations').delete().eq('item_id', item.id)
+    if (schemaReady) stockDelete = stockDelete.eq('company_id', activeCompanyId)
+    await stockDelete
+
+    let rfidUpdate = supabase
       .from('inbound_batch_rfids')
       .update({ item_id: null, status: 'void' })
       .eq('item_id', item.id)
+    if (schemaReady) rfidUpdate = rfidUpdate.eq('company_id', activeCompanyId)
+    await rfidUpdate
 
-    const { error } = await supabase
+    let itemDelete = supabase
       .from('items')
       .delete()
       .eq('id', item.id)
       .eq('status', 'working')
+    if (schemaReady) itemDelete = itemDelete.eq('company_id', activeCompanyId)
+
+    const { error } = await itemDelete
 
     setLoading(false)
 
@@ -261,17 +275,22 @@ export default function WorkingPanel({
     }
 
     if (item.inbound_batch_id) {
-      const { count } = await supabase
+      let remainingItemsQuery = supabase
         .from('items')
         .select('id', { count: 'exact', head: true })
         .eq('inbound_batch_id', item.inbound_batch_id)
         .eq('status', 'working')
+      if (schemaReady) remainingItemsQuery = remainingItemsQuery.eq('company_id', activeCompanyId)
+
+      const { count } = await remainingItemsQuery
 
       if ((count || 0) === 0) {
-        await supabase
+        let batchUpdate = supabase
           .from('inbound_batches')
           .update({ status: 'cancelled', updated_at: new Date().toISOString() })
           .eq('id', item.inbound_batch_id)
+        if (schemaReady) batchUpdate = batchUpdate.eq('company_id', activeCompanyId)
+        await batchUpdate
       }
     }
 
@@ -298,10 +317,13 @@ export default function WorkingPanel({
     setLoading(true)
     setMessage(`Deleting ${group.label}...`)
 
-    const { error: imageError } = await supabase
+    let imageDelete = supabase
       .from('item_images')
       .delete()
       .in('item_id', itemIds)
+    if (schemaReady) imageDelete = imageDelete.eq('company_id', activeCompanyId)
+
+    const { error: imageError } = await imageDelete
 
     if (imageError) {
       setLoading(false)
@@ -309,18 +331,29 @@ export default function WorkingPanel({
       return
     }
 
-    await supabase.from('item_identifiers').delete().in('item_id', itemIds)
-    await supabase.from('item_stock_locations').delete().in('item_id', itemIds)
-    await supabase
+    let identifierDelete = supabase.from('item_identifiers').delete().in('item_id', itemIds)
+    if (schemaReady) identifierDelete = identifierDelete.eq('company_id', activeCompanyId)
+    await identifierDelete
+
+    let stockDelete = supabase.from('item_stock_locations').delete().in('item_id', itemIds)
+    if (schemaReady) stockDelete = stockDelete.eq('company_id', activeCompanyId)
+    await stockDelete
+
+    let rfidUpdate = supabase
       .from('inbound_batch_rfids')
       .update({ item_id: null, status: 'void' })
       .in('item_id', itemIds)
+    if (schemaReady) rfidUpdate = rfidUpdate.eq('company_id', activeCompanyId)
+    await rfidUpdate
 
-    const { error } = await supabase
+    let itemDelete = supabase
       .from('items')
       .delete()
       .in('id', itemIds)
       .eq('status', 'working')
+    if (schemaReady) itemDelete = itemDelete.eq('company_id', activeCompanyId)
+
+    const { error } = await itemDelete
 
     setLoading(false)
 
@@ -330,10 +363,12 @@ export default function WorkingPanel({
     }
 
     if (batchId) {
-      await supabase
+      let batchUpdate = supabase
         .from('inbound_batches')
         .update({ status: 'cancelled', updated_at: new Date().toISOString() })
         .eq('id', batchId)
+      if (schemaReady) batchUpdate = batchUpdate.eq('company_id', activeCompanyId)
+      await batchUpdate
     }
 
     setMessage(`${group.label} deleted`)

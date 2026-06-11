@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 const CHANNEL_SOURCE = 'EBAY'
 const CHANNEL_SUBSOURCE = 'dohpe_vintage_UK'
@@ -920,6 +921,14 @@ export async function POST(request: Request) {
   try {
     const body = await request.json()
     const companyId = getActiveCompanyIdFromRequest(request)
+    const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!access.ok) {
+      return NextResponse.json({ ok: false, message: access.message }, { status: access.status })
+    }
+
+    if (!companyId || companyId !== access.company.id) {
+      return NextResponse.json({ ok: false, message: 'Active company required.' }, { status: 400 })
+    }
 
     const sku = normaliseText(body.sku)
     const title = normaliseText(
@@ -935,6 +944,22 @@ export async function POST(request: Request) {
 
     if (!title) {
       return NextResponse.json({ ok: false, message: 'Missing title.' }, { status: 400 })
+    }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+    const { data: item, error: itemError } = await supabase
+      .from('items')
+      .select('id, sku')
+      .eq('sku', sku)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (itemError) throw new Error(itemError.message)
+    if (!item) {
+      return NextResponse.json({ ok: false, message: 'Item not found for active company.' }, { status: 404 })
     }
 
     const { server, token } = await authoriseLinnworks()

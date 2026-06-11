@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
+import { requireCompanyAccess } from '@/lib/serverTenant'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -696,16 +697,26 @@ export async function POST(request: Request) {
     const supabase = getSupabaseAdmin()
     const requestCompanyId = getActiveCompanyIdFromRequest(request)
 
+    const companyAccess = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member'])
+    if (!companyAccess.ok) {
+      return NextResponse.json({ ok: false, message: companyAccess.message }, { status: companyAccess.status })
+    }
+
+    if (!requestCompanyId || requestCompanyId !== companyAccess.company.id) {
+      return NextResponse.json({ ok: false, message: 'Active company required.' }, { status: 400 })
+    }
+
     const access = await requirePosAccess(request, supabase, requestCompanyId)
     if (!access.ok) return accessDeniedResponse(access)
 
     const tx = await request.json()
     const { lines, queueRows, ...sale } = tx
-    const activeCompanyId = requestCompanyId || sale.company_id
+    const activeCompanyId = requestCompanyId
 
-    if (activeCompanyId) {
-      sale.company_id = activeCompanyId
+    if (sale.company_id && sale.company_id !== activeCompanyId) {
+      return NextResponse.json({ ok: false, message: 'Company mismatch.' }, { status: 403 })
     }
+    sale.company_id = activeCompanyId
 
     if (!sale?.id || !sale?.sale_number) {
       return NextResponse.json(
@@ -715,12 +726,12 @@ export async function POST(request: Request) {
     }
 
     const safeLines = (Array.isArray(lines) ? lines : []).map((line) => ({
-      ...(activeCompanyId ? { company_id: activeCompanyId } : {}),
       ...line,
+      company_id: activeCompanyId,
     }))
     const safeQueueRows = (Array.isArray(queueRows) ? queueRows : []).map((queueRow) => ({
-      ...(activeCompanyId ? { company_id: activeCompanyId } : {}),
       ...queueRow,
+      company_id: activeCompanyId,
     }))
 
     if (numberValue(sale.total) > 0 && safeLines.length === 0) {

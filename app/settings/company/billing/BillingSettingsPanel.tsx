@@ -1,141 +1,172 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useCompany } from '@/app/context/CompanyContext'
+import { supabase } from '@/lib/supabase'
 
 type BillingCadence = 'monthly' | 'yearly'
 
-type Plan = {
-  key: string
-  name: string
-  monthly: number | null
-  yearly: number | null
-  summary: string
-  highlights: string[]
-  features: Record<string, boolean | string>
+type PlanVersion = {
+  monthly_price: number | null
+  yearly_price: number | null
+  limits: Record<string, any>
+  features: Record<string, any>
+  version: number
 }
+
+type BillingPlan = {
+  id: string
+  plan_key: string
+  name: string
+  description: string | null
+  is_public: boolean
+  is_custom: boolean
+  billing_plan_versions?: PlanVersion[]
+}
+
+type SubscriptionRow = {
+  id: string
+  provider: string
+  plan_key: string
+  status: string
+  payment_status: string | null
+  trial_ends_at: string | null
+  current_period_end: string | null
+  limits: Record<string, any>
+}
+
+const planOrder = ['starter', 'growth', 'pro', 'enterprise', 'internal_lifetime']
+
+const limitRows = [
+  { key: 'company_limit', label: 'Companies' },
+  { key: 'sku_limit', label: 'SKUs' },
+  { key: 'user_limit', label: 'Login users' },
+  { key: 'staff_limit', label: 'Staff / PIN profiles' },
+  { key: 'device_limit', label: 'Devices' },
+  { key: 'location_limit', label: 'Locations' },
+  { key: 'channel_limit', label: 'Channels' },
+  { key: 'department_limit', label: 'Departments / 3PL clients' },
+  { key: 'monthly_ai_generations', label: 'AI generations / month' },
+  { key: 'storage_gb', label: 'Storage' },
+]
 
 const featureRows = [
-  { key: 'companies', label: 'Companies' },
-  { key: 'inventory', label: 'Inventory and barcode stock control' },
-  { key: 'pos', label: 'POS checkout and offline queueing' },
-  { key: 'marketplaces', label: 'Marketplace listing and sync tools' },
-  { key: 'warehouse', label: 'Warehouse bins, transfers and picking' },
-  { key: 'rfid', label: 'RFID receiving table workflows' },
-  { key: 'reports', label: 'Reports, payroll and holiday reporting' },
-  { key: 'invoices', label: 'Invoices and billing history' },
-  { key: 'support', label: 'Support level' },
+  { key: 'rfid_workflows', label: 'RFID receiving workflows' },
+  { key: 'advanced_reports', label: 'Advanced reports' },
+  { key: 'priority_support', label: 'Priority support' },
 ]
 
-const plans: Plan[] = [
-  {
-    key: 'starter',
-    name: 'Starter',
-    monthly: 69,
-    yearly: 759,
-    summary: 'Single-company resale inventory, POS and channel foundations.',
-    highlights: ['1 company', 'Up to 2 channels', 'Up to 2 devices'],
-    features: {
-      companies: '1',
-      inventory: true,
-      pos: true,
-      marketplaces: true,
-      warehouse: 'Core bins',
-      rfid: false,
-      reports: 'Basic',
-      invoices: true,
-      support: 'Standard',
-    },
-  },
-  {
-    key: 'growth',
-    name: 'Growth',
-    monthly: 149,
-    yearly: 1639,
-    summary: 'Higher-volume warehouse teams with RFID and more automation.',
-    highlights: ['1 company', 'RFID workflows', 'More devices and channels'],
-    features: {
-      companies: '1',
-      inventory: true,
-      pos: true,
-      marketplaces: true,
-      warehouse: true,
-      rfid: true,
-      reports: true,
-      invoices: true,
-      support: 'Priority',
-    },
-  },
-  {
-    key: 'pro',
-    name: 'Pro',
-    monthly: 299,
-    yearly: 3289,
-    summary: 'Advanced operations, deeper reporting and larger limits.',
-    highlights: ['1 company', 'Advanced reports', 'Higher SKU and device limits'],
-    features: {
-      companies: '1',
-      inventory: true,
-      pos: true,
-      marketplaces: true,
-      warehouse: true,
-      rfid: true,
-      reports: 'Advanced',
-      invoices: true,
-      support: 'Priority',
-    },
-  },
-  {
-    key: 'enterprise',
-    name: 'Enterprise',
-    monthly: null,
-    yearly: null,
-    summary: 'Multi-company, custom limits, onboarding and bespoke workflows.',
-    highlights: ['2+ companies', 'Custom limits', 'Dedicated support'],
-    features: {
-      companies: '2+ / custom',
-      inventory: true,
-      pos: true,
-      marketplaces: true,
-      warehouse: true,
-      rfid: true,
-      reports: 'Advanced + custom',
-      invoices: true,
-      support: 'Dedicated',
-    },
-  },
-]
-
-function formatPrice(plan: Plan, cadence: BillingCadence) {
-  const amount = cadence === 'monthly' ? plan.monthly : plan.yearly
-  if (!amount) return 'Custom'
-  return `£${amount.toLocaleString('en-GB')}${cadence === 'monthly' ? ' / month' : ' / year'}`
+function formatMoney(value?: number | null, cadence?: BillingCadence) {
+  if (!value) return 'Custom'
+  return `GBP ${Number(value).toLocaleString('en-GB')}${cadence === 'yearly' ? ' / year' : ' / month'}`
 }
 
-function featureValue(value: boolean | string) {
-  if (value === true) return '✓'
-  if (value === false) return '-'
-  return value
+function formatLimit(value: any, suffix = '') {
+  if (value === null || value === undefined || value === '') return 'Unlimited'
+  if (typeof value === 'boolean') return value ? 'Included' : 'Not included'
+  return `${Number(value).toLocaleString('en-GB')}${suffix}`
+}
+
+function statusLabel(value?: string | null) {
+  return String(value || 'not configured').replaceAll('_', ' ')
+}
+
+function planVersion(plan: BillingPlan) {
+  return [...(plan.billing_plan_versions || [])].sort((a, b) => b.version - a.version)[0] || null
+}
+
+function sortPlans(a: BillingPlan, b: BillingPlan) {
+  const aIndex = planOrder.indexOf(a.plan_key)
+  const bIndex = planOrder.indexOf(b.plan_key)
+  return (aIndex === -1 ? 99 : aIndex) - (bIndex === -1 ? 99 : bIndex)
 }
 
 export default function BillingSettingsPanel() {
-  const { activeCompany } = useCompany()
+  const { activeCompany, activeCompanyId, schemaReady } = useCompany()
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
-  const yearlySaving = useMemo(() => {
-    const starter = plans.find((plan) => plan.key === 'starter')
-    if (!starter?.monthly || !starter.yearly) return ''
-    const saved = starter.monthly * 12 - starter.yearly
-    return `Starter yearly saves £${saved.toLocaleString('en-GB')}`
-  }, [])
+  const [plans, setPlans] = useState<BillingPlan[]>([])
+  const [subscription, setSubscription] = useState<SubscriptionRow | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const publicPlans = useMemo(
+    () =>
+      plans
+        .filter((plan) => plan.is_public || plan.plan_key === 'enterprise' || plan.plan_key === 'internal_lifetime')
+        .sort(sortPlans),
+    [plans]
+  )
+
+  const currentPlan = useMemo(
+    () => publicPlans.find((plan) => plan.plan_key === subscription?.plan_key) || null,
+    [publicPlans, subscription?.plan_key]
+  )
+
+  const currentVersion = currentPlan ? planVersion(currentPlan) : null
+  const isInternal = Boolean(activeCompany?.billing_exempt || activeCompany?.internal_account)
+
+  useEffect(() => {
+    loadBilling()
+  }, [activeCompanyId, schemaReady])
+
+  async function loadBilling() {
+    if (!schemaReady || !activeCompanyId) return
+
+    setLoading(true)
+    setMessage('')
+
+    const [plansResult, subscriptionResult] = await Promise.all([
+      supabase
+        .from('billing_plans')
+        .select('id, plan_key, name, description, is_public, is_custom, billing_plan_versions(monthly_price, yearly_price, limits, features, version)')
+        .order('plan_key', { ascending: true }),
+      supabase
+        .from('company_subscriptions')
+        .select('id, provider, plan_key, status, payment_status, trial_ends_at, current_period_end, limits')
+        .eq('company_id', activeCompanyId)
+        .order('updated_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+
+    setLoading(false)
+
+    if (plansResult.error) {
+      setMessage(plansResult.error.message)
+      return
+    }
+
+    if (subscriptionResult.error) {
+      setMessage(subscriptionResult.error.message)
+      return
+    }
+
+    setPlans((plansResult.data || []) as BillingPlan[])
+    setSubscription((subscriptionResult.data || null) as SubscriptionRow | null)
+  }
+
+  function beginPlanChange(plan: BillingPlan) {
+    if (plan.plan_key === subscription?.plan_key) return
+
+    setMessage(
+      plan.plan_key === 'enterprise'
+        ? 'Enterprise contact flow will be connected when the sales/support workflow is finalised.'
+        : 'Stripe checkout and prorated plan changes are the next billing integration step.'
+    )
+  }
 
   return (
     <div className="space-y-4">
       <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-black text-white">Subscription</h2>
+            <p className="text-xs font-black uppercase tracking-wide text-zinc-500">Billing</p>
+            <h2 className="mt-1 text-2xl font-black text-white">
+              {activeCompany?.name || 'Company'} subscription
+            </h2>
             <p className="mt-1 text-sm font-bold text-zinc-400">
-              Current plan and subscription options for {activeCompany?.name || 'this company'}.
+              Membership controls who can access the company. Billing controls whether the company has service access.
             </p>
           </div>
 
@@ -155,58 +186,168 @@ export default function BillingSettingsPanel() {
           </div>
         </div>
 
-        <p className="mt-3 text-xs font-bold text-emerald-300">{yearlySaving}</p>
+        {message && (
+          <p className="mt-4 rounded-xl border border-yellow-800 bg-yellow-950 p-3 text-sm font-bold text-yellow-200">
+            {message}
+          </p>
+        )}
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[360px_1fr]">
+          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-4">
+            <p className="text-xs font-black uppercase tracking-wide text-emerald-200">Current plan</p>
+            <p className="mt-2 text-3xl font-black text-white">
+              {isInternal ? 'Internal Lifetime' : currentPlan?.name || statusLabel(subscription?.plan_key)}
+            </p>
+            <p className="mt-2 text-sm font-bold text-emerald-100">
+              {isInternal
+                ? 'Manual lifetime access. Plan limits are not enforced for this company.'
+                : `${statusLabel(subscription?.status)} · ${statusLabel(subscription?.payment_status)}`}
+            </p>
+
+            {subscription?.trial_ends_at && !isInternal && (
+              <p className="mt-3 rounded-lg bg-black/30 px-3 py-2 text-xs font-bold text-white">
+                Trial ends {new Date(subscription.trial_ends_at).toLocaleDateString('en-GB')}
+              </p>
+            )}
+
+            {subscription?.current_period_end && !isInternal && (
+              <p className="mt-3 rounded-lg bg-black/30 px-3 py-2 text-xs font-bold text-white">
+                Current period ends {new Date(subscription.current_period_end).toLocaleDateString('en-GB')}
+              </p>
+            )}
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {limitRows.slice(0, 8).map((row) => (
+              <div key={row.key} className="rounded-xl border border-zinc-800 bg-zinc-950 p-3">
+                <p className="text-xs font-black uppercase text-zinc-500">{row.label}</p>
+                <p className="mt-1 text-lg font-black text-white">
+                  {formatLimit((subscription?.limits || currentVersion?.limits || {})[row.key])}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-black text-white">Plans</h2>
+            <p className="mt-1 text-sm font-bold text-zinc-400">
+              Prices and limits are read from billing plan versions. Stripe checkout will connect to these plan keys.
+            </p>
+          </div>
+
+          {cadence === 'yearly' && (
+            <span className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white">
+              Yearly is roughly one month cheaper
+            </span>
+          )}
+        </div>
 
         <div className="mt-5 grid gap-4 xl:grid-cols-4">
-          {plans.map((plan) => (
-            <div key={plan.key} className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
-              <p className="text-lg font-black text-white">{plan.name}</p>
-              <p className="mt-1 text-2xl font-black text-emerald-300">
-                {formatPrice(plan, cadence)}
-              </p>
-              <p className="mt-2 min-h-12 text-sm font-bold text-zinc-400">{plan.summary}</p>
+          {loading ? (
+            <p className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-sm font-bold text-zinc-400">
+              Loading plans...
+            </p>
+          ) : (
+            publicPlans
+              .filter((plan) => plan.plan_key !== 'internal_lifetime' || isInternal)
+              .map((plan) => {
+                const version = planVersion(plan)
+                const isCurrent = plan.plan_key === subscription?.plan_key || (isInternal && plan.plan_key === 'internal_lifetime')
+                const price = cadence === 'monthly' ? version?.monthly_price : version?.yearly_price
 
-              <div className="mt-4 space-y-2">
-                {plan.highlights.map((highlight) => (
-                  <p key={highlight} className="text-sm font-bold text-zinc-300">
-                    ✓ {highlight}
-                  </p>
-                ))}
-              </div>
+                return (
+                  <div
+                    key={plan.plan_key}
+                    className={`rounded-2xl border p-4 ${
+                      isCurrent
+                        ? 'border-emerald-400 bg-emerald-500/10'
+                        : 'border-zinc-800 bg-zinc-950'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-lg font-black text-white">{plan.name}</p>
+                        <p className="mt-1 text-2xl font-black text-emerald-300">
+                          {formatMoney(price, cadence)}
+                        </p>
+                      </div>
 
-              <button
-                type="button"
-                className="mt-5 w-full rounded-xl bg-emerald-600 px-4 py-2 text-sm font-black text-white hover:bg-emerald-500"
-              >
-                {plan.key === 'enterprise' ? 'Contact Sales' : 'Change to Plan'}
-              </button>
-            </div>
-          ))}
+                      {isCurrent && (
+                        <span className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-black text-white">
+                          Current
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="mt-3 min-h-12 text-sm font-bold text-zinc-400">
+                      {plan.description || 'Custom Loopbase plan.'}
+                    </p>
+
+                    <div className="mt-4 space-y-2">
+                      {['sku_limit', 'user_limit', 'device_limit', 'channel_limit'].map((key) => (
+                        <p key={key} className="text-xs font-bold text-zinc-300">
+                          {limitRows.find((row) => row.key === key)?.label}: {formatLimit(version?.limits?.[key])}
+                        </p>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => beginPlanChange(plan)}
+                      disabled={isCurrent}
+                      className={`mt-5 w-full rounded-xl px-4 py-2 text-sm font-black text-white disabled:cursor-default disabled:opacity-70 ${
+                        isCurrent ? 'bg-zinc-700' : 'bg-emerald-600 hover:bg-emerald-500'
+                      }`}
+                    >
+                      {isCurrent ? 'Current Plan' : plan.plan_key === 'enterprise' ? 'Contact Sales' : 'Change Plan'}
+                    </button>
+                  </div>
+                )
+              })
+          )}
         </div>
       </section>
 
       <section className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900">
-        <div className="min-w-[760px]">
-          <div className="grid grid-cols-[220px_repeat(4,minmax(130px,1fr))] border-b border-zinc-800 bg-zinc-950 text-sm font-black">
-            <div className="p-3 text-zinc-400">Feature</div>
-            {plans.map((plan) => (
-              <div key={plan.key} className="p-3 text-white">
-                {plan.name}
-              </div>
-            ))}
-          </div>
-
-          {featureRows.map((feature) => (
-            <div
-              key={feature.key}
-              className="grid grid-cols-[220px_repeat(4,minmax(130px,1fr))] border-b border-zinc-800 text-sm last:border-b-0"
-            >
-              <div className="bg-zinc-950 p-3 font-bold text-zinc-300">{feature.label}</div>
-              {plans.map((plan) => (
-                <div key={plan.key} className="p-3 font-black text-white">
-                  {featureValue(plan.features[feature.key])}
+        <div className="min-w-[860px]">
+          <div
+            className="grid border-b border-zinc-800 bg-zinc-950 text-sm font-black"
+            style={{ gridTemplateColumns: `240px repeat(${Math.max(publicPlans.length, 1)}, minmax(130px, 1fr))` }}
+          >
+            <div className="p-3 text-zinc-400">Limit / Feature</div>
+            {publicPlans
+              .filter((plan) => plan.plan_key !== 'internal_lifetime' || isInternal)
+              .map((plan) => (
+                <div key={plan.plan_key} className="p-3 text-white">
+                  {plan.name}
                 </div>
               ))}
+          </div>
+
+          {[...limitRows, ...featureRows].map((row) => (
+            <div
+              key={row.key}
+              className="grid border-b border-zinc-800 text-sm last:border-b-0"
+              style={{ gridTemplateColumns: `240px repeat(${Math.max(publicPlans.length, 1)}, minmax(130px, 1fr))` }}
+            >
+              <div className="bg-zinc-950 p-3 font-bold text-zinc-300">{row.label}</div>
+              {publicPlans
+                .filter((plan) => plan.plan_key !== 'internal_lifetime' || isInternal)
+                .map((plan) => {
+                  const version = planVersion(plan)
+                  const value = version?.limits?.[row.key] ?? version?.features?.[row.key]
+                  const suffix = row.key === 'storage_gb' ? ' GB' : ''
+
+                  return (
+                    <div key={plan.plan_key} className="p-3 font-black text-white">
+                      {formatLimit(value, suffix)}
+                    </div>
+                  )
+                })}
             </div>
           ))}
         </div>
@@ -215,7 +356,7 @@ export default function BillingSettingsPanel() {
       <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
         <h2 className="text-xl font-black text-white">Invoices</h2>
         <p className="mt-1 text-sm font-bold text-zinc-400">
-          Invoice history and payment-provider actions will live here when Stripe billing is connected.
+          Stripe invoice history, payment methods, proration credits and receipts will live here when billing is connected.
         </p>
         <div className="mt-4 rounded-xl border border-dashed border-zinc-700 bg-zinc-950 p-4 text-sm font-bold text-zinc-400">
           No invoices are available yet.
