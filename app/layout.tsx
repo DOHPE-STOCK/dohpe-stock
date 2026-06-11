@@ -3,6 +3,7 @@ import './globals.css'
 import { StaffProvider } from '@/app/context/StaffContext'
 import { CompanyProvider } from '@/app/context/CompanyContext'
 import ThemeProvider from '@/app/components/ThemeProvider'
+import AppSessionProvider from '@/app/components/AppSessionProvider'
 
 export const metadata: Metadata = {
   title: 'Loopbase',
@@ -19,7 +20,9 @@ export default function RootLayout({
       <body>
         <ThemeProvider>
           <CompanyProvider>
-            <StaffProvider>{children}</StaffProvider>
+            <AppSessionProvider>
+              <StaffProvider>{children}</StaffProvider>
+            </AppSessionProvider>
           </CompanyProvider>
         </ThemeProvider>
       </body>

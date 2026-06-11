@@ -78,6 +78,18 @@ type DeviceRow = {
   is_active: boolean
 }
 
+type AppSessionRow = {
+  id: string
+  user_id: string
+  session_key: string
+  device_label: string | null
+  status: string
+  started_at: string
+  last_seen_at: string
+  ended_at: string | null
+  ended_reason: string | null
+}
+
 const emptyDepartment: DepartmentRow = {
   code: '',
   name: '',
@@ -214,6 +226,7 @@ export default function CompanySettingsPanel({
   const [incomingInvites, setIncomingInvites] = useState<IncomingInviteRow[]>([])
   const [departments, setDepartments] = useState<DepartmentRow[]>([])
   const [devices, setDevices] = useState<DeviceRow[]>([])
+  const [appSessions, setAppSessions] = useState<AppSessionRow[]>([])
   const [subscriptions, setSubscriptions] = useState<SubscriptionRow[]>([])
   const [plans, setPlans] = useState<BillingPlanRow[]>([])
   const [usage, setUsage] = useState({
@@ -285,6 +298,7 @@ export default function CompanySettingsPanel({
       setInvites([])
       setDepartments([])
       setDevices([])
+      setAppSessions([])
       setSubscriptions([])
       setUsage({ staff: 0, devices: 0, locations: 0, channels: 0, skus: 0 })
       return
@@ -295,6 +309,7 @@ export default function CompanySettingsPanel({
       inviteResult,
       departmentResult,
       deviceResult,
+      appSessionResult,
       subscriptionResult,
       planResult,
       staffCountResult,
@@ -323,6 +338,12 @@ export default function CompanySettingsPanel({
         .select('id, device_key, name, device_type, allowed_areas, is_active')
         .eq('company_id', activeCompanyId)
         .order('name', { ascending: true }),
+      supabase
+        .from('user_app_sessions')
+        .select('id, user_id, session_key, device_label, status, started_at, last_seen_at, ended_at, ended_reason')
+        .eq('company_id', activeCompanyId)
+        .order('last_seen_at', { ascending: false })
+        .limit(10),
       supabase
         .from('company_subscriptions')
         .select('id, provider, plan_key, status, payment_status, trial_ends_at, current_period_end, limits')
@@ -362,6 +383,7 @@ export default function CompanySettingsPanel({
     if (inviteResult.error) setMessage(inviteResult.error.message)
     if (departmentResult.error) setMessage(departmentResult.error.message)
     if (deviceResult.error) setMessage(deviceResult.error.message)
+    if (appSessionResult.error) setMessage(appSessionResult.error.message)
     if (subscriptionResult.error) setMessage(subscriptionResult.error.message)
     if (planResult.error) setMessage(planResult.error.message)
     if (staffCountResult.error) setMessage(staffCountResult.error.message)
@@ -373,6 +395,7 @@ export default function CompanySettingsPanel({
     setInvites((inviteResult.data || []) as InviteRow[])
     setDepartments((departmentResult.data || []) as DepartmentRow[])
     setDevices((deviceResult.data || []) as DeviceRow[])
+    setAppSessions((appSessionResult.data || []) as AppSessionRow[])
     setSubscriptions((subscriptionResult.data || []) as SubscriptionRow[])
     setPlans((planResult.data || []) as BillingPlanRow[])
     setUsage({
@@ -1145,6 +1168,54 @@ export default function CompanySettingsPanel({
                   </div>
                 ))
               )}
+            </div>
+
+            <div className="mt-5 border-t border-zinc-800 pt-4">
+              <h3 className="text-sm font-black uppercase tracking-wide text-zinc-500">
+                Active / recent app sessions
+              </h3>
+              <p className="mt-1 text-xs font-bold text-zinc-500">
+                Login sessions are limited to one active device per user unless they choose to take over.
+              </p>
+
+              <div className="mt-3 space-y-2">
+                {appSessions.length === 0 ? (
+                  <p className="rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-sm font-bold text-zinc-400">
+                    No app sessions recorded yet.
+                  </p>
+                ) : (
+                  appSessions.map((session) => (
+                    <div
+                      key={session.id}
+                      className="rounded-xl border border-zinc-800 bg-zinc-950 p-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-black">
+                            {session.device_label || 'Browser device'}
+                          </p>
+                          <p className="mt-1 text-xs font-bold text-zinc-500">
+                            User {session.user_id.slice(0, 8)} · {session.status}
+                          </p>
+                        </div>
+
+                        <span
+                          className={`rounded-md px-2 py-1 text-[11px] font-black text-white ${
+                            session.status === 'active' ? 'bg-emerald-600' : 'bg-zinc-700'
+                          }`}
+                        >
+                          {session.status}
+                        </span>
+                      </div>
+
+                      <p className="mt-2 text-xs font-bold text-zinc-400">
+                        Last seen {new Date(session.last_seen_at).toLocaleString('en-GB')}
+                        {session.ended_reason ? ` · ${session.ended_reason}` : ''}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </section>
         </div>
