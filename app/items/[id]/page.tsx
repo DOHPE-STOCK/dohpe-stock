@@ -12,6 +12,14 @@ import {
   mergeEbaySettings,
 } from '@/lib/ebayIntegrationSettings'
 
+const PHOTO_ORIGINAL_RETENTION_DAYS = 14
+
+function originalDeleteAfterIso(days = PHOTO_ORIGINAL_RETENTION_DAYS) {
+  const date = new Date()
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString()
+}
+
 const reportingCategories = [
   'Accessories',
   'Bag',
@@ -1279,11 +1287,26 @@ export default function ItemPage() {
 
       const processedUrl = publicUrlData.publicUrl
 
+      const imageUpdate: Record<string, unknown> = {
+        processed_url: processedUrl,
+        processed_storage_bucket: 'item-images',
+        processed_storage_path: path,
+        processed_file_size_bytes: processedBlob.size,
+        original_delete_after: originalDeleteAfterIso(),
+        original_retention_status: 'cleanup_scheduled',
+      }
+
+      if (!image.baseline_processed_url) {
+        imageUpdate.baseline_processed_url = processedUrl
+        imageUpdate.baseline_processed_storage_bucket = 'item-images'
+        imageUpdate.baseline_processed_storage_path = path
+        imageUpdate.baseline_processed_file_size_bytes = processedBlob.size
+        imageUpdate.baseline_processed_created_at = new Date().toISOString()
+      }
+
       const { error: updateError } = await supabase
         .from('item_images')
-        .update({
-          processed_url: processedUrl,
-        })
+        .update(imageUpdate)
         .eq('id', image.id)
 
       if (updateError) {

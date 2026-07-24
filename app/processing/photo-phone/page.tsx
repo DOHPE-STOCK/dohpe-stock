@@ -28,6 +28,7 @@ type StationRow = {
 const PHONE_PAIRING_STORAGE = 'loopbase_photo_phone_pairing'
 const PHONE_QUEUE_DB = 'loopbase_photo_phone_queue'
 const PHONE_QUEUE_STORE = 'pending_captures'
+const PHONE_CAPTURE_ROLE = 'session_photo'
 
 type PendingCapture = {
   id: string
@@ -141,7 +142,6 @@ export default function PhotoPhonePage() {
   const [message, setMessage] = useState('')
   const [pendingCount, setPendingCount] = useState(0)
   const [syncingQueue, setSyncingQueue] = useState(false)
-  const [photoRole, setPhotoRole] = useState('front')
   const [busy, setBusy] = useState(false)
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
   const libraryInputRef = useRef<HTMLInputElement | null>(null)
@@ -189,7 +189,6 @@ export default function PhotoPhonePage() {
 
     if (!previousSessionId && nextSessionId) {
       previousSessionIdRef.current = nextSessionId
-      setPhotoRole('front')
       setMessage(item?.sku ? `Ready for ${item.sku}.` : 'Ready for active photo session.')
       return
     }
@@ -202,7 +201,6 @@ export default function PhotoPhonePage() {
 
     if (previousSessionId && nextSessionId && previousSessionId !== nextSessionId) {
       previousSessionIdRef.current = nextSessionId
-      setPhotoRole('front')
       setMessage(item?.sku ? `Now capturing ${item.sku}.` : 'New photo session active.')
     }
   }, [pairing, session?.id, session?.status, item?.sku])
@@ -328,7 +326,7 @@ export default function PhotoPhonePage() {
       file,
       original_filename: filename,
       captured_at: capturedAt,
-      photo_role: photoRole,
+      photo_role: PHONE_CAPTURE_ROLE,
       idempotency_key: `phone:${pairing.source.id}:${session.id}:${filename}:${file.size}:${file.lastModified}`,
       attempts: 0,
       last_error: reason,
@@ -367,7 +365,7 @@ export default function PhotoPhonePage() {
         file,
         original_filename: filename,
         captured_at: capturedAt,
-        photo_role: photoRole,
+        photo_role: PHONE_CAPTURE_ROLE,
         idempotency_key: `phone:${pairing.source.id}:${boundSessionId}:${filename}:${file.size}:${file.lastModified}`,
         attempts: 0,
         created_at: capturedAt,
@@ -500,28 +498,6 @@ export default function PhotoPhonePage() {
             <p className="mt-3 rounded-lg border border-zinc-800 bg-black p-3 text-xs font-bold text-zinc-400">
               Phone capture uploads the original selected file. For maximum control and speed, use the native camera app or camera tethering, then choose the original files here.
             </p>
-
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {[
-                ['front', 'Front'],
-                ['back', 'Back'],
-                ['label', 'Label'],
-                ['size', 'Size'],
-                ['flaw', 'Flaw'],
-                ['detail', 'Detail'],
-              ].map(([role, label]) => (
-                <button
-                  key={role}
-                  type="button"
-                  onClick={() => setPhotoRole(role)}
-                  className={`rounded-lg px-3 py-2 text-xs font-black text-white ${
-                    photoRole === role ? 'bg-emerald-600' : 'bg-zinc-800'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
           </div>
 
           <button

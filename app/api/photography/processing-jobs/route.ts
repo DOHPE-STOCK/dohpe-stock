@@ -15,6 +15,7 @@ function text(value: unknown) {
 }
 
 const allowedJobTypes = [
+  'baseline_processed',
   'calibrated_preview',
   'measurement_analysis',
   'processed_preview',

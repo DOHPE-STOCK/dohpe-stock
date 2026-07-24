@@ -68,6 +68,7 @@ async function loadSourceByToken(token: string) {
 }
 
 const representationTypes = new Set([
+  'baseline_processed',
   'calibrated_preview',
   'processed_preview',
   'product_master',
@@ -103,7 +104,7 @@ export async function POST(request: Request) {
       .select(
         `id, company_id, station_id, source_id, session_id, capture_id, job_type,
         status, calibration_profile_ids,
-        capture:photo_captures(item_id)`
+        capture:photo_captures(item_id, item_image_id)`
       )
       .eq('company_id', source.company_id)
       .eq('source_id', source.id)
@@ -116,6 +117,7 @@ export async function POST(request: Request) {
     let representation = null
     const capture = Array.isArray(job.capture) ? job.capture[0] : job.capture
     const itemId = capture?.item_id || null
+    const itemImageId = capture?.item_image_id || null
 
     if (file instanceof File) {
       const buffer = Buffer.from(await file.arrayBuffer())
@@ -165,6 +167,40 @@ export async function POST(request: Request) {
 
       if (representationError) throw new Error(representationError.message)
       representation = inserted
+
+      if (representationType === 'baseline_processed' && itemImageId) {
+        const { data: itemImage, error: itemImageError } = await supabase
+          .from('item_images')
+          .select('id, processed_url')
+          .eq('company_id', source.company_id)
+          .eq('id', itemImageId)
+          .maybeSingle()
+
+        if (itemImageError) throw new Error(itemImageError.message)
+
+        const imageUpdate: Record<string, unknown> = {
+          baseline_processed_url: urlData.publicUrl,
+          baseline_processed_storage_bucket: 'item-images',
+          baseline_processed_storage_path: storagePath,
+          baseline_processed_file_size_bytes: buffer.length,
+          baseline_processed_created_at: new Date().toISOString(),
+        }
+
+        if (itemImage && !itemImage.processed_url) {
+          imageUpdate.processed_url = urlData.publicUrl
+          imageUpdate.processed_storage_bucket = 'item-images'
+          imageUpdate.processed_storage_path = storagePath
+          imageUpdate.processed_file_size_bytes = buffer.length
+        }
+
+        const { error: baselineError } = await supabase
+          .from('item_images')
+          .update(imageUpdate)
+          .eq('company_id', source.company_id)
+          .eq('id', itemImageId)
+
+        if (baselineError) throw new Error(baselineError.message)
+      }
     }
 
     const insertedSuggestions = []

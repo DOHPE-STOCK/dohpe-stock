@@ -8,6 +8,9 @@ import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 import { useCompany } from '@/app/context/CompanyContext'
 
+const MANUAL_UPLOAD_MAX_FILES = 20
+const MANUAL_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024
+
 export default function PhotosPage() {
   const params = useParams()
   const id = params.id as string
@@ -126,12 +129,22 @@ export default function PhotosPage() {
     const files = event.target.files
 
     if (!files || files.length === 0) return
+    if (files.length > MANUAL_UPLOAD_MAX_FILES) {
+      setMessage(`Upload ${MANUAL_UPLOAD_MAX_FILES} images or fewer at once.`)
+      event.target.value = ''
+      return
+    }
 
     setUploading(true)
     setMessage('Uploading...')
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
+
+      if (file.size > MANUAL_UPLOAD_MAX_FILE_BYTES) {
+        setMessage(`${file.name} is too large. Manual uploads are limited to 20MB per image.`)
+        continue
+      }
 
       const filename =
         `${id}/${Date.now()}-${file.name}`
@@ -159,6 +172,11 @@ export default function PhotosPage() {
           ...(schemaReady ? { company_id: activeCompanyId } : {}),
           item_id: id,
           original_url: publicUrlData.publicUrl,
+          original_storage_bucket: 'item-images',
+          original_storage_path: storagePath,
+          original_file_size_bytes: file.size,
+          original_retention_status: 'active',
+          upload_source: 'manual_upload',
           image_order: images.length + i + 1,
         })
         .select('id, item_id')

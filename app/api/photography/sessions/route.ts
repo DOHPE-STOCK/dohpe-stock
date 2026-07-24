@@ -4,6 +4,7 @@ import {
   getSupabaseAdmin,
   requireCompanyAccess,
 } from '@/lib/serverTenant'
+import { loadCompanyPhotoSettings, originalDeleteAfterFrom } from '@/lib/photoRetention'
 import { startPhotoSessionForItem, type PhotoStartMethod } from '@/lib/photographyServer'
 
 function failure(status: number, message: string) {
@@ -124,6 +125,29 @@ export async function PATCH(request: Request) {
       .single()
 
     if (error) return failure(500, error.message)
+
+    const { data: captures } = await supabase
+      .from('photo_captures')
+      .select('item_image_id')
+      .eq('company_id', access.company.id)
+      .eq('session_id', session.id)
+      .not('item_image_id', 'is', null)
+
+    const itemImageIds = Array.from(new Set((captures || []).map((capture: any) => capture.item_image_id).filter(Boolean)))
+
+    if (itemImageIds.length > 0) {
+      const photoSettings = await loadCompanyPhotoSettings(supabase, access.company.id)
+      await supabase
+        .from('item_images')
+        .update({
+          original_delete_after: originalDeleteAfterFrom(now, photoSettings.original_retention_days),
+          original_retention_status: 'cleanup_scheduled',
+        })
+        .eq('company_id', access.company.id)
+        .in('id', itemImageIds)
+        .not('processed_url', 'is', null)
+        .not('original_url', 'is', null)
+    }
 
     await supabase
       .from('photography_stations')

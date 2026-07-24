@@ -775,15 +775,18 @@ def process_photo_job(config: WorkerConfig, conn: sqlite3.Connection, source: So
             conn.commit()
             return
 
-        if job_type in {"calibrated_preview", "processed_preview", "product_master", "derivative"}:
+        if job_type in {"baseline_processed", "calibrated_preview", "processed_preview", "product_master", "derivative"}:
             suffix = job_type.replace("_", "-")
             output_path = make_output_path(source, local_path, suffix, ".jpg")
             metadata = create_pillow_preview(local_path, output_path)
+            representation_type = job_type
+            if job_type in {"product_master", "derivative"}:
+                representation_type = "processed_preview"
             upload_processing_result(
                 config,
                 source,
                 job_id,
-                "calibrated_preview" if job_type == "calibrated_preview" else "processed_preview",
+                representation_type,
                 {
                     **metadata,
                     "worker_version": WORKER_VERSION,

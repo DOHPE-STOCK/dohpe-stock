@@ -4,6 +4,7 @@ import {
   getSupabaseAdmin,
   requireCompanyAccess,
 } from '@/lib/serverTenant'
+import { loadCompanyPhotoSettings, originalDeleteAfterFrom } from '@/lib/photoRetention'
 
 function failure(status: number, message: string) {
   return NextResponse.json({ ok: false, message }, { status })
@@ -65,7 +66,7 @@ export async function POST(request: Request) {
   const supabase = getSupabaseAdmin()
   const { data: representation, error: representationError } = await supabase
     .from('photo_capture_representations')
-    .select('id, company_id, capture_id, item_id, representation_type, status, public_url')
+    .select('id, company_id, capture_id, item_id, representation_type, status, public_url, storage_bucket, storage_path, file_size_bytes')
     .eq('company_id', access.company.id)
     .eq('id', representationId)
     .maybeSingle()
@@ -88,10 +89,16 @@ export async function POST(request: Request) {
   if (captureError) return failure(500, captureError.message)
   if (!capture?.item_image_id) return failure(409, 'Capture is not linked to an item image.')
 
+  const photoSettings = await loadCompanyPhotoSettings(supabase, access.company.id)
   const { data: itemImage, error: updateError } = await supabase
     .from('item_images')
     .update({
       processed_url: representation.public_url,
+      processed_storage_bucket: representation.storage_bucket || 'item-images',
+      processed_storage_path: representation.storage_path || null,
+      processed_file_size_bytes: representation.file_size_bytes || null,
+      original_delete_after: originalDeleteAfterFrom(new Date(), photoSettings.original_retention_days),
+      original_retention_status: 'cleanup_scheduled',
     })
     .eq('company_id', access.company.id)
     .eq('id', capture.item_image_id)

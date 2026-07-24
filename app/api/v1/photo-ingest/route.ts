@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/serverTenant'
 import { designatePhotoMeasurementSource } from '@/lib/photographyServer'
+import { loadCompanyPhotoSettings, megabytesToBytes } from '@/lib/photoRetention'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -217,6 +218,52 @@ async function recordRawOriginalRepresentation(params: {
   }
 }
 
+async function queueBaselineProcessedJob(params: {
+  companyId: string
+  stationId: string
+  sourceId: string
+  sessionId: string | null
+  captureId: string
+}) {
+  const supabase = getSupabaseAdmin()
+
+  const { data: existing, error: existingError } = await supabase
+    .from('photo_processing_jobs')
+    .select('id')
+    .eq('company_id', params.companyId)
+    .eq('capture_id', params.captureId)
+    .eq('job_type', 'baseline_processed')
+    .limit(1)
+    .maybeSingle()
+
+  if (existingError) {
+    console.warn('Baseline processed job check skipped:', existingError.message)
+    return
+  }
+
+  if (existing) return
+
+  const { error } = await supabase
+    .from('photo_processing_jobs')
+    .insert({
+      company_id: params.companyId,
+      station_id: params.stationId,
+      source_id: params.sourceId,
+      session_id: params.sessionId,
+      capture_id: params.captureId,
+      job_type: 'baseline_processed',
+      status: 'queued',
+      processing_source: 'jpeg_camera_original',
+      options: {
+        purpose: 'permanent_no_edit_revert_copy',
+      },
+    })
+
+  if (error) {
+    console.warn('Baseline processed job skipped:', error.message)
+  }
+}
+
 async function nextImageOrder(companyId: string, itemId: string) {
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
@@ -264,6 +311,15 @@ export async function POST(request: Request) {
     }
 
     const supabase = getSupabaseAdmin()
+    const photoSettings = await loadCompanyPhotoSettings(supabase, source.company_id)
+    const maxUploadBytes = megabytesToBytes(photoSettings.station_upload_max_file_mb)
+
+    if (buffer.length > maxUploadBytes) {
+      return failure(
+        413,
+        `Photo is too large. Station uploads are limited to ${photoSettings.station_upload_max_file_mb}MB.`
+      )
+    }
 
     const { data: existingCapture, error: existingError } = await supabase
       .from('photo_captures')
@@ -325,6 +381,11 @@ export async function POST(request: Request) {
           company_id: source.company_id,
           item_id: itemId,
           original_url: publicUrl,
+          original_storage_bucket: 'item-images',
+          original_storage_path: storagePath,
+          original_file_size_bytes: buffer.length,
+          original_retention_status: 'active',
+          upload_source: 'photography_session',
           image_order: order,
         })
         .select('id, item_id, original_url, image_order')
@@ -393,6 +454,16 @@ export async function POST(request: Request) {
       sourceId: source.id,
       rawMetadata,
     })
+
+    if (capture.item_image_id && capture.capture_status === 'assigned') {
+      await queueBaselineProcessedJob({
+        companyId: source.company_id,
+        stationId: source.station_id,
+        sourceId: source.id,
+        sessionId: capture.session_id || null,
+        captureId: capture.id,
+      })
+    }
 
     if (capture.session_id && capture.capture_status === 'assigned') {
       await designatePhotoMeasurementSource({
