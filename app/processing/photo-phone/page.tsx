@@ -145,6 +145,7 @@ export default function PhotoPhonePage() {
   const [busy, setBusy] = useState(false)
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
   const libraryInputRef = useRef<HTMLInputElement | null>(null)
+  const previousSessionIdRef = useRef<string | null>(null)
 
   const session = station?.active_session || null
   const item = Array.isArray(session?.item) ? session.item[0] : session?.item || null
@@ -179,6 +180,32 @@ export default function PhotoPhonePage() {
     const timer = window.setInterval(() => fetchStation(false), 2500)
     return () => window.clearInterval(timer)
   }, [pairing?.source_token])
+
+  useEffect(() => {
+    if (!pairing) return
+
+    const previousSessionId = previousSessionIdRef.current
+    const nextSessionId = session?.status === 'active' ? session.id : null
+
+    if (!previousSessionId && nextSessionId) {
+      previousSessionIdRef.current = nextSessionId
+      setPhotoRole('front')
+      setMessage(item?.sku ? `Ready for ${item.sku}.` : 'Ready for active photo session.')
+      return
+    }
+
+    if (previousSessionId && !nextSessionId) {
+      previousSessionIdRef.current = null
+      setMessage('Session complete. Waiting for the next SKU from the station.')
+      return
+    }
+
+    if (previousSessionId && nextSessionId && previousSessionId !== nextSessionId) {
+      previousSessionIdRef.current = nextSessionId
+      setPhotoRole('front')
+      setMessage(item?.sku ? `Now capturing ${item.sku}.` : 'New photo session active.')
+    }
+  }, [pairing, session?.id, session?.status, item?.sku])
 
   useEffect(() => {
     refreshPendingCount()
@@ -367,7 +394,7 @@ export default function PhotoPhonePage() {
   const statusText = useMemo(() => {
     if (!ready) return 'Not paired'
     if (session?.status === 'active' && item) return `${item.sku} - ${itemTitle(item)}`
-    return 'Waiting for active photo session'
+    return 'Paired. Waiting for the next SKU.'
   }, [ready, session?.status, item])
 
   return (
@@ -422,6 +449,9 @@ export default function PhotoPhonePage() {
               <p className="text-xs font-black uppercase tracking-wide text-zinc-500">Current item</p>
               <p className="mt-1 text-3xl font-black">{item?.sku || 'No active SKU'}</p>
               <p className="mt-1 text-sm font-bold text-zinc-400">{item ? itemTitle(item) : 'Start a session from the station.'}</p>
+              <p className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs font-bold text-zinc-300">
+                Keep this page open. When the station starts the next SKU, this phone updates automatically.
+              </p>
             </div>
 
             <input
