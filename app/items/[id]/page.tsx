@@ -246,6 +246,42 @@ const measurementLabels: Record<string, string> = {
   hem_width_in: 'Leg Opening',
 }
 
+type PhotoStation = {
+  id: string
+  name: string
+  code: string
+  status: string
+  active_photo_session_id?: string | null
+  active_session?: any
+}
+
+type PhotoSessionHistory = {
+  id: string
+  status: string | null
+  start_method: string | null
+  qc_status?: string | null
+  qc_notes?: string | null
+  started_at: string | null
+  ended_at: string | null
+  completed_at?: string | null
+  station?: any
+}
+
+type MeasurementSuggestion = {
+  id: string
+  measurement_type: string
+  raw_value_mm?: number | string | null
+  raw_value_in?: number | string | null
+  proposed_value_in?: number | string | null
+  accepted_value_in?: number | string | null
+  confidence?: number | string | null
+  status: string
+  processing_version?: string | null
+  created_at?: string | null
+  capture?: any
+  session?: any
+}
+
 function Field({ label, value, onChange }: any) {
   return (
     <label className="block">
@@ -466,6 +502,18 @@ function getExportDescription(item: any) {
   return item.final_description || item.ai_description || item.basic_description || ''
 }
 
+function formatShortDateTime(value: string | null | undefined) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
   const payload: any = {
     id: item.id,
@@ -547,11 +595,28 @@ export default function ItemPage() {
   const [ebayCategorySuggestions, setEbayCategorySuggestions] = useState<any[]>([])
   const [searchingEbayCategories, setSearchingEbayCategories] = useState(false)
   const [subCategoryOptions, setSubCategoryOptions] = useState<string[]>([])
+  const [photoStations, setPhotoStations] = useState<PhotoStation[]>([])
+  const [selectedPhotoStationId, setSelectedPhotoStationId] = useState('')
+  const [photoStationMessage, setPhotoStationMessage] = useState('')
+  const [photoScanValue, setPhotoScanValue] = useState('')
+  const [photoSessionBusy, setPhotoSessionBusy] = useState(false)
+  const [photoSessionHistory, setPhotoSessionHistory] = useState<PhotoSessionHistory[]>([])
+  const [measurementSuggestions, setMeasurementSuggestions] = useState<MeasurementSuggestion[]>([])
+  const [measurementSuggestionBusyId, setMeasurementSuggestionBusyId] = useState('')
 
   const originalItemRef = useRef<any>(null)
 
   useEffect(() => {
     fetchItem()
+  }, [id, activeCompanyId, schemaReady])
+
+  useEffect(() => {
+    fetchPhotoStations()
+  }, [activeCompanyId, schemaReady])
+
+  useEffect(() => {
+    fetchPhotoSessionHistory()
+    fetchMeasurementSuggestions()
   }, [id, activeCompanyId, schemaReady])
 
   useEffect(() => {
@@ -615,6 +680,165 @@ export default function ItemPage() {
     setSubCategoryOptions(
       Array.from(new Set((data || []).map((row: any) => text(row.sub_category)).filter(Boolean))).sort()
     )
+  }
+
+  async function fetchPhotoStations() {
+    if (schemaReady && !activeCompanyId) return
+
+    try {
+      setPhotoStationMessage('')
+      const response = await fetch('/api/photography/stations')
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        setPhotoStations([])
+        setPhotoStationMessage(data?.message || 'Photography stations could not be loaded.')
+        return
+      }
+
+      const stations = (data.stations || []) as PhotoStation[]
+      setPhotoStations(stations)
+      setPhotoStationMessage(stations.length === 0 ? 'No photography station found for this company.' : '')
+
+      setSelectedPhotoStationId((current) => {
+        if (current && stations.some((station) => station.id === current)) return current
+        return stations[0]?.id || ''
+      })
+    } catch (error: any) {
+      setPhotoStations([])
+      setPhotoStationMessage(error.message || 'Photography stations could not be loaded.')
+    }
+  }
+
+  async function fetchPhotoSessionHistory() {
+    if (!id) return
+
+    let query = supabase
+      .from('photo_sessions')
+      .select(
+        `id, status, start_method, qc_status, qc_notes, started_at, ended_at, completed_at,
+        station:photography_stations!photo_sessions_station_id_fkey(id, name, code)`
+      )
+      .eq('item_id', id)
+      .order('started_at', { ascending: false })
+      .limit(8)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query
+
+    if (error) {
+      setPhotoSessionHistory([])
+      return
+    }
+
+    setPhotoSessionHistory((data || []) as PhotoSessionHistory[])
+  }
+
+  async function fetchMeasurementSuggestions() {
+    if (!id) return
+
+    try {
+      const response = await fetch(
+        `/api/photography/measurement-suggestions?item_id=${encodeURIComponent(id)}`
+      )
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        setMeasurementSuggestions([])
+        return
+      }
+
+      setMeasurementSuggestions((data.suggestions || []) as MeasurementSuggestion[])
+    } catch {
+      setMeasurementSuggestions([])
+    }
+  }
+
+  async function startPhotoSession() {
+    if (!item?.id) return
+    if (!selectedPhotoStationId) {
+      setMessage('No photography station found. Run the photography SQL migration first.')
+      return
+    }
+
+    setPhotoSessionBusy(true)
+    setMessage('Starting photo session...')
+
+    try {
+      const response = await fetch('/api/photography/sessions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          station_id: selectedPhotoStationId,
+          item_id: item.id,
+          start_method: 'manual_button',
+          staff_id: staff?.id || null,
+        }),
+      })
+
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Photo session failed to start.')
+      }
+
+      await fetchPhotoStations()
+      await fetchPhotoSessionHistory()
+      setMessage(`Photo session active for ${item.sku}.`)
+      window.open(`/processing/photo-monitor?station=${selectedPhotoStationId}`, '_blank', 'noopener,noreferrer')
+    } catch (error: any) {
+      setMessage(error.message || 'Photo session failed to start.')
+    } finally {
+      setPhotoSessionBusy(false)
+    }
+  }
+
+  async function startPhotoSessionFromScan() {
+    const clean = photoScanValue.trim()
+    if (!clean) return
+
+    if (!selectedPhotoStationId) {
+      setMessage('No photography station selected.')
+      return
+    }
+
+    setPhotoSessionBusy(true)
+    setMessage('Starting photo session from scan...')
+
+    try {
+      const response = await fetch('/api/photography/sessions/start-from-scan', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          station_id: selectedPhotoStationId,
+          scan_value: clean,
+          staff_id: staff?.id || null,
+        }),
+      })
+
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Photo session failed to start from scan.')
+      }
+
+      setPhotoScanValue('')
+      await fetchPhotoStations()
+      await fetchPhotoSessionHistory()
+
+      if (data.item?.id && data.item.id !== item.id) {
+        window.location.href = `/items/${data.item.id}`
+        return
+      }
+
+      setMessage(`Photo session active for ${data.item?.sku || item.sku}.`)
+      window.open(`/processing/photo-monitor?station=${selectedPhotoStationId}`, '_blank', 'noopener,noreferrer')
+    } catch (error: any) {
+      setMessage(error.message || 'Photo session failed to start from scan.')
+    } finally {
+      setPhotoSessionBusy(false)
+    }
   }
 
   async function checkEbayReadiness(skuOverride?: string) {
@@ -1508,6 +1732,10 @@ export default function ItemPage() {
       last_saved_by: staff.id,
       sent_to_review_by: staff.id,
       sent_to_review_at: now,
+      review_return_reason: null,
+      review_return_type: null,
+      review_returned_at: null,
+      review_returned_by: null,
       updated_at: now,
     }
 
@@ -1697,6 +1925,76 @@ export default function ItemPage() {
     )
   }
 
+  function latestSuggestionForField(field: string) {
+    return measurementSuggestions.find(
+      (suggestion) =>
+        suggestion.measurement_type === field &&
+        ['suggested', 'low_confidence'].includes(String(suggestion.status || ''))
+    )
+  }
+
+  async function applyMeasurementSuggestion(
+    suggestion: MeasurementSuggestion,
+    action: 'accepted' | 'edited' | 'rejected',
+    value?: unknown
+  ) {
+    const hadUnsavedChanges = hasUnsavedChanges
+    setMeasurementSuggestionBusyId(suggestion.id)
+    setMessage('')
+
+    try {
+      const acceptedValue =
+        action === 'edited'
+          ? value
+          : action === 'accepted'
+            ? suggestion.proposed_value_in
+            : null
+
+      const response = await fetch('/api/photography/measurement-suggestions', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: suggestion.id,
+          action,
+          accepted_value_in: acceptedValue,
+          staff_id: staff?.id || null,
+        }),
+      })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not update measurement suggestion.')
+      }
+
+      if (data.applied_field) {
+        const updatedItem = {
+          ...item,
+          [data.applied_field]: data.applied_value,
+        }
+        setItem(updatedItem)
+        if (hadUnsavedChanges) {
+          setHasUnsavedChanges(
+            JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+          )
+        } else {
+          originalItemRef.current = updatedItem
+          setHasUnsavedChanges(false)
+        }
+      }
+
+      await fetchMeasurementSuggestions()
+      setMessage(
+        action === 'rejected'
+          ? 'Measurement suggestion rejected.'
+          : `${measurementLabels[suggestion.measurement_type] || 'Measurement'} applied.`
+      )
+    } catch (error: any) {
+      setMessage(error.message || 'Could not update measurement suggestion.')
+    } finally {
+      setMeasurementSuggestionBusyId('')
+    }
+  }
+
   function updateSubCategory(value: string) {
     const updatedItem = {
       ...item,
@@ -1739,6 +2037,18 @@ export default function ItemPage() {
   const ebayMessages = ebayReadinessMessages()
   const ebayReady = Boolean(ebayReadiness?.ok && ebayReadiness?.ready)
   const ebayPreviewHtml = ebayReadiness?.listing_draft?.description_html || ''
+  const selectedPhotoStation =
+    photoStations.find((station) => station.id === selectedPhotoStationId) || photoStations[0] || null
+  const activePhotoSession = selectedPhotoStation?.active_session || null
+  const photoSessionMatchesItem = activePhotoSession?.item_id === item.id
+  const reviewReturnLabel =
+    item.review_return_type === 'needs_reshoot'
+      ? 'Needs reshoot'
+      : item.review_return_type === 'needs_edit'
+        ? 'Needs edit'
+        : item.review_return_reason
+          ? 'Returned from review'
+          : ''
 
   return (
     <StaffPermissionGate permission="working">
@@ -1771,6 +2081,69 @@ export default function ItemPage() {
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-3">
+            {photoStations.length > 0 ? (
+              <div className="flex flex-wrap items-center justify-end gap-2 rounded-xl border border-zinc-800 bg-zinc-950 p-2">
+                <select
+                  value={selectedPhotoStationId}
+                  onChange={(event) => setSelectedPhotoStationId(event.target.value)}
+                  className="h-9 rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                  title="Photography station"
+                >
+                  {photoStations.map((station) => (
+                    <option key={station.id} value={station.id}>
+                      {station.name}
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  value={photoScanValue}
+                  onChange={(event) => setPhotoScanValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      startPhotoSessionFromScan()
+                    }
+                  }}
+                  placeholder="Scan barcode/RFID"
+                  className="h-9 w-40 rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                />
+
+                <button
+                  type="button"
+                  onClick={startPhotoSessionFromScan}
+                  disabled={photoSessionBusy || !photoScanValue.trim()}
+                  className="h-9 rounded-lg bg-emerald-700 px-3 text-xs font-black text-white disabled:opacity-50"
+                >
+                  Scan Start
+                </button>
+
+                <button
+                  type="button"
+                  onClick={startPhotoSession}
+                  disabled={photoSessionBusy}
+                  className={`h-9 rounded-lg px-3 text-xs font-black text-white disabled:opacity-50 ${
+                    photoSessionMatchesItem ? 'bg-green-700' : 'bg-emerald-600'
+                  }`}
+                >
+                  {photoSessionBusy
+                    ? 'Starting...'
+                    : photoSessionMatchesItem
+                      ? 'Session Active'
+                      : item.review_return_type === 'needs_reshoot'
+                        ? 'Start Reshoot'
+                        : 'Start Photo Session'}
+                </button>
+
+              </div>
+            ) : (
+              photoStationMessage && (
+                <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-xs font-black text-yellow-200">
+                  {photoStationMessage}
+                </span>
+              )
+            )}
+
             {message && (
               <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
                 {message}
@@ -1845,6 +2218,12 @@ export default function ItemPage() {
             </button>
           </div>
         </div>
+
+        {item.review_return_reason && (
+          <div className="mb-5 rounded-xl border border-yellow-600 bg-yellow-950 px-4 py-3 text-sm font-bold text-yellow-100">
+            <span className="font-black">{reviewReturnLabel}:</span> {item.review_return_reason}
+          </div>
+        )}
 
         <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
           <div className="space-y-4">
@@ -2042,14 +2421,80 @@ export default function ItemPage() {
                 </h2>
 
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-                  {visibleMeasurements.map((field) => (
-                    <Field
-                      key={field}
-                      label={measurementLabels[field]}
-                      value={item[field]}
-                      onChange={(v: string) => updateField(field, v)}
-                    />
-                  ))}
+                  {visibleMeasurements.map((field) => {
+                    const suggestion = latestSuggestionForField(field)
+                    const busySuggestion = suggestion?.id === measurementSuggestionBusyId
+                    const confidence =
+                      suggestion?.confidence === null || suggestion?.confidence === undefined
+                        ? null
+                        : Math.round(Number(suggestion.confidence) * 100)
+
+                    return (
+                      <div key={field} className="space-y-2">
+                        <Field
+                          label={measurementLabels[field]}
+                          value={item[field]}
+                          onChange={(v: string) => updateField(field, v)}
+                        />
+
+                        {suggestion && (
+                          <div className="rounded-lg border border-emerald-900 bg-emerald-950/50 p-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="text-[10px] font-black uppercase tracking-wide text-emerald-300">
+                                  Photo suggestion
+                                </p>
+                                <p className="mt-0.5 text-sm font-black text-white">
+                                  {suggestion.proposed_value_in || suggestion.raw_value_in || '-'}"
+                                </p>
+                              </div>
+                              {confidence !== null && Number.isFinite(confidence) && (
+                                <span
+                                  className={`rounded px-1.5 py-0.5 text-[10px] font-black ${
+                                    confidence >= 80
+                                      ? 'bg-green-600 text-white'
+                                      : confidence >= 55
+                                        ? 'bg-yellow-600 text-black'
+                                        : 'bg-red-700 text-white'
+                                  }`}
+                                >
+                                  {confidence}%
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="mt-2 grid grid-cols-3 gap-1">
+                              <button
+                                type="button"
+                                onClick={() => applyMeasurementSuggestion(suggestion, 'accepted')}
+                                disabled={busySuggestion}
+                                className="rounded bg-emerald-600 px-2 py-1 text-[10px] font-black text-white disabled:opacity-50"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => applyMeasurementSuggestion(suggestion, 'edited', item[field])}
+                                disabled={busySuggestion || !String(item[field] || '').trim()}
+                                className="rounded bg-zinc-700 px-2 py-1 text-[10px] font-black text-white disabled:opacity-50"
+                                title="Save the currently typed value against this suggestion."
+                              >
+                                Use Field
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => applyMeasurementSuggestion(suggestion, 'rejected')}
+                                disabled={busySuggestion}
+                                className="rounded bg-red-700 px-2 py-1 text-[10px] font-black text-white disabled:opacity-50"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
 
                   <Field
                     label="Weight (g)"
@@ -2139,6 +2584,77 @@ export default function ItemPage() {
               >
                 Upload / Edit Photos
               </button>
+            </section>
+
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+                  Photo Sessions
+                </h2>
+                <button
+                  type="button"
+                  onClick={fetchPhotoSessionHistory}
+                  className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-black text-white"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {photoSessionHistory.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-zinc-700 p-3 text-center text-xs font-bold text-zinc-500">
+                  No photo sessions yet.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {photoSessionHistory.map((session) => {
+                    const station = Array.isArray(session.station) ? session.station[0] : session.station
+                    const qcStatus = session.qc_status || 'pending'
+                    return (
+                      <div key={session.id} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black">
+                              {station?.name || 'Photo station'}
+                            </p>
+                            <p className="text-xs font-bold text-zinc-500">
+                              {formatShortDateTime(session.started_at)} - {session.start_method || 'manual'}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <span
+                              className={`rounded px-2 py-1 text-[10px] font-black ${
+                                session.status === 'active'
+                                  ? 'bg-green-600 text-white'
+                                  : 'bg-zinc-800 text-zinc-300'
+                              }`}
+                            >
+                              {session.status || 'unknown'}
+                            </span>
+                            {qcStatus !== 'pending' && (
+                              <span
+                                className={`rounded px-2 py-1 text-[10px] font-black ${
+                                  qcStatus === 'complete'
+                                    ? 'bg-emerald-600 text-white'
+                                    : qcStatus === 'needs_reshoot'
+                                      ? 'bg-yellow-600 text-black'
+                                      : 'bg-zinc-700 text-zinc-200'
+                                }`}
+                              >
+                                {qcStatus.replace(/_/g, ' ')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {session.qc_notes && (
+                          <p className="mt-2 rounded bg-black p-2 text-xs font-bold text-zinc-400">
+                            {session.qc_notes}
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </section>
 
             <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">

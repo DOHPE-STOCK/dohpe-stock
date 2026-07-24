@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { useStaff } from '@/app/context/StaffContext'
 import { supabase } from '@/lib/supabase'
 
 type ReviewPanelProps = {
@@ -17,10 +18,15 @@ export default function ReviewPanel({
   embedded = false,
   onChanged,
 }: ReviewPanelProps) {
+  const { staff } = useStaff()
   const [items, setItems] = useState<any[]>([])
   const [imagesByItem, setImagesByItem] = useState<Record<string, string>>({})
+  const [photoSummaryByItem, setPhotoSummaryByItem] = useState<Record<string, any>>({})
   const [ebayReadinessBySku, setEbayReadinessBySku] = useState<Record<string, any>>({})
   const [message, setMessage] = useState('')
+  const [returningItem, setReturningItem] = useState<any | null>(null)
+  const [returnReason, setReturnReason] = useState('')
+  const [returnType, setReturnType] = useState<'needs_reshoot' | 'needs_edit' | 'other'>('needs_reshoot')
 
   useEffect(() => {
     fetchReviewItems()
@@ -47,6 +53,7 @@ export default function ReviewPanel({
     const reviewItems = data || []
     setItems(reviewItems)
     fetchThumbnails(reviewItems)
+    fetchPhotoSummaries(reviewItems)
     fetchEbayReadiness(reviewItems)
   }
 
@@ -92,6 +99,31 @@ export default function ReviewPanel({
     )
 
     setEbayReadinessBySku(readinessMap)
+  }
+
+  async function fetchPhotoSummaries(reviewItems: any[]) {
+    if (reviewItems.length === 0) {
+      setPhotoSummaryByItem({})
+      return
+    }
+
+    const itemIds = reviewItems.map((item) => item.id).filter(Boolean)
+    let query = supabase
+      .from('photo_sessions')
+      .select('id, item_id, status, qc_status, qc_notes, started_at, completed_at')
+      .in('item_id', itemIds)
+      .order('started_at', { ascending: false })
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data } = await query
+    const summary: Record<string, any> = {}
+
+    for (const session of data || []) {
+      if (!summary[session.item_id]) summary[session.item_id] = session
+    }
+
+    setPhotoSummaryByItem(summary)
   }
 
   function ebayMissingMessages(readiness: any) {
@@ -148,6 +180,57 @@ export default function ReviewPanel({
     onChanged?.()
   }
 
+  async function returnItemToWorking() {
+    if (!returningItem) return
+
+    const reason = returnReason.trim()
+    if (!reason) {
+      window.alert('Enter a reason before sending this item back to Working.')
+      return
+    }
+
+    const label =
+      returnType === 'needs_reshoot'
+        ? 'Needs reshoot'
+        : returnType === 'needs_edit'
+          ? 'Needs edit'
+          : 'Other'
+
+    const confirmed = window.confirm(`Send SKU ${returningItem.sku} back to Working?\n\nReason: ${label} - ${reason}`)
+    if (!confirmed) return
+
+    const now = new Date().toISOString()
+    let query = supabase
+      .from('items')
+      .update({
+        status: 'working',
+        sent_to_review_at: null,
+        sent_to_review_by: null,
+        review_return_reason: reason,
+        review_return_type: returnType,
+        review_returned_at: now,
+        review_returned_by: staff?.id || null,
+        updated_at: now,
+      })
+      .eq('id', returningItem.id)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { error } = await query
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    setMessage(`SKU ${returningItem.sku} sent back to Working.`)
+    setReturningItem(null)
+    setReturnReason('')
+    setReturnType('needs_reshoot')
+    await fetchReviewItems()
+    onChanged?.()
+  }
+
   return (
     <div className={embedded ? 'space-y-4' : ''}>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -188,6 +271,7 @@ export default function ReviewPanel({
               : ebayReadiness?.category_id
                 ? `${ebayReadiness?.mapping?.ebay_category_name || ebayReadiness?.item?.ebay_category_name || 'eBay category'} (${ebayReadiness.category_id})`
                 : '-'
+            const photoSummary = photoSummaryByItem[item.id]
 
             return (
               <section key={item.id} className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-4">
@@ -228,6 +312,18 @@ export default function ReviewPanel({
                             </span>
                           ))}
                         </div>
+                      )}
+                    </div>
+
+                    <div className="mt-3">
+                      <h3 className="mb-1 text-xs font-bold uppercase text-zinc-500">Latest Photo Session</h3>
+                      {photoSummary ? (
+                        <p className="text-xs font-bold text-zinc-400">
+                          {String(photoSummary.qc_status || photoSummary.status || 'pending').replace(/_/g, ' ')}
+                          {photoSummary.qc_notes ? ` - ${photoSummary.qc_notes}` : ''}
+                        </p>
+                      ) : (
+                        <p className="text-xs font-bold text-zinc-500">No photo session recorded.</p>
                       )}
                     </div>
                   </div>
@@ -285,11 +381,91 @@ export default function ReviewPanel({
                     >
                       Approve / Finalise
                     </button>
+
+                    <button
+                      onClick={() => {
+                        setReturningItem(item)
+                        setReturnType('needs_reshoot')
+                        setReturnReason('Needs reshoot')
+                      }}
+                      className="rounded-lg bg-yellow-600 px-4 py-2 text-sm font-bold text-black hover:bg-yellow-500"
+                    >
+                      Send Back
+                    </button>
                   </div>
                 </div>
               </section>
             )
           })}
+        </div>
+      )}
+
+      {returningItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black text-white">Send Back To Working</h2>
+                <p className="text-sm font-bold text-zinc-400">SKU {returningItem.sku}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReturningItem(null)}
+                className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                ['needs_reshoot', 'Needs Reshoot'],
+                ['needs_edit', 'Needs Edit'],
+                ['other', 'Other'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setReturnType(value as 'needs_reshoot' | 'needs_edit' | 'other')
+                    if (value === 'needs_reshoot' && !returnReason.trim()) setReturnReason('Needs reshoot')
+                  }}
+                  className={`rounded-lg px-3 py-2 text-xs font-black ${
+                    returnType === value ? 'bg-yellow-600 text-black' : 'bg-zinc-800 text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <label className="mt-4 block text-xs font-black uppercase tracking-wide text-zinc-400">
+              Reason
+              <textarea
+                value={returnReason}
+                onChange={(event) => setReturnReason(event.target.value)}
+                className="mt-2 min-h-28 w-full resize-none rounded-lg border border-zinc-700 bg-black p-3 text-sm font-bold normal-case tracking-normal text-white outline-none focus:border-white"
+                placeholder="What needs fixing before this item can be approved?"
+              />
+            </label>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setReturningItem(null)}
+                className="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-black text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={returnItemToWorking}
+                className="rounded-lg bg-yellow-600 px-4 py-2 text-sm font-black text-black"
+              >
+                Send Back
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

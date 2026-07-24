@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
@@ -209,11 +210,20 @@ export default function ProcessingPage() {
             <AppNav current="processing" />
           </div>
 
-          {message && (
-            <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
-              {message}
-            </span>
-          )}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {message && (
+              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+                {message}
+              </span>
+            )}
+
+            <Link
+              href="/processing/photo-monitor"
+              className="rounded-lg bg-white px-4 py-2 text-sm font-black text-black"
+            >
+              Photo Monitor
+            </Link>
+          </div>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[260px_1fr]">

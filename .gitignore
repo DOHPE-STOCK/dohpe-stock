@@ -36,6 +36,12 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local photography worker state
+tools/photo-ingest-worker/config.local.json
+tools/photo-ingest-worker/*.sqlite3
+tools/photo-ingest-worker/*.sqlite3-*
+tools/photo-ingest-worker/__pycache__/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

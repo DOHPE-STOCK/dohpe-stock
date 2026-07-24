@@ -1,0 +1,19 @@
+{
+  "app_url": "http://localhost:3000",
+  "database_path": "photo_ingest_worker.sqlite3",
+  "scan_interval_seconds": 2,
+  "stable_seconds": 3,
+  "max_upload_attempts": 20,
+  "enable_processing_jobs": true,
+  "sources": [
+    {
+      "name": "Example Camera Incoming",
+      "token": "phsrc_live_replace_me",
+      "watch_folder": "C:\\Photography\\Incoming",
+      "processed_folder": "C:\\Photography\\Processed",
+      "trash_folder": "C:\\Photography\\Trash",
+      "extensions": [".jpg", ".jpeg"],
+      "raw_extensions": [".nef", ".arw", ".cr2", ".cr3", ".raf", ".dng"]
+    }
+  ]
+}

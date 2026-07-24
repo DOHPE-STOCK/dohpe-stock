@@ -153,7 +153,7 @@ export default function PhotosPage() {
           .from('item-images')
           .getPublicUrl(storagePath)
 
-      await supabase
+      const { data: insertedImage, error: insertError } = await supabase
         .from('item_images')
         .insert({
           ...(schemaReady ? { company_id: activeCompanyId } : {}),
@@ -161,6 +161,25 @@ export default function PhotosPage() {
           original_url: publicUrlData.publicUrl,
           image_order: images.length + i + 1,
         })
+        .select('id, item_id')
+        .single()
+
+      if (insertError) {
+        setMessage(insertError.message)
+        continue
+      }
+
+      if (insertedImage?.id) {
+        await fetch('/api/photography/captures/attach-image', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            item_image_id: insertedImage.id,
+            item_id: id,
+            original_filename: file.name,
+          }),
+        }).catch(() => null)
+      }
     }
 
     await touchItemLastSavedBy()

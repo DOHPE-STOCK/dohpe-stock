@@ -8,6 +8,9 @@ import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useCompany } from '@/app/context/CompanyContext'
 
+const WAREHOUSE_LOCATION = 'LOCATION-1'
+const DEFAULT_BIN = 'Default'
+
 type ImportImage = {
   id: string
   group_id: string
@@ -184,8 +187,8 @@ export default function PhotoImportGroupPage() {
         status: 'working',
         stock_level: 1,
         location_status: 'stored',
-        current_location: 'WAREHOUSE',
-        current_bin: 'Default',
+        current_location: WAREHOUSE_LOCATION,
+        current_bin: DEFAULT_BIN,
         ebay_status: 'not_listed',
         linnworks_status: 'not_synced',
         shopify_status: 'not_listed',

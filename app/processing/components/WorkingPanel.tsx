@@ -20,6 +20,9 @@ type WorkingItem = {
   inbound_batch_id?: string | null
   inbound_batch_code?: string | null
   rfid_tid?: string | null
+  review_return_reason?: string | null
+  review_return_type?: string | null
+  review_returned_at?: string | null
 }
 
 type BatchStats = {
@@ -565,6 +568,16 @@ export default function WorkingPanel({
                               <p className="mt-1 line-clamp-1 text-sm text-zinc-500">
                                 {item.basic_title || item.ai_title || item.rfid_tid || '-'}
                               </p>
+                              {item.review_return_reason && (
+                                <p className="mt-2 rounded-lg border border-yellow-700 bg-yellow-950 px-3 py-2 text-xs font-bold text-yellow-200">
+                                  {item.review_return_type === 'needs_reshoot'
+                                    ? 'Needs reshoot'
+                                    : item.review_return_type === 'needs_edit'
+                                      ? 'Needs edit'
+                                      : 'Returned from review'}
+                                  : {item.review_return_reason}
+                                </p>
+                              )}
                             </div>
 
                             <div className="grid grid-cols-2 gap-2">
