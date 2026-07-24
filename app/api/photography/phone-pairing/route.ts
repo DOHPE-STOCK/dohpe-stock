@@ -115,7 +115,7 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   const body = await request.json().catch(() => ({}))
   const pairToken = text(body.pair_token || body.pairToken)
-  const deviceLabel = text(body.device_label || body.deviceLabel) || 'Phone camera'
+  const deviceLabel = (text(body.device_label || body.deviceLabel) || 'Phone camera').slice(0, 120)
 
   if (!pairToken) return failure(400, 'Pairing token is required.')
 
@@ -140,21 +140,47 @@ export async function PUT(request: Request) {
   }
 
   const sourceToken = makeSourceToken()
-  const { data: source, error: sourceError } = await supabase
+  const sourceFields = {
+    source_type: 'phone',
+    enabled: true,
+    source_file_policy: 'keep_source_file',
+    token_hash: tokenHash(sourceToken),
+    token_last_four: sourceToken.slice(-4),
+    token_created_at: now,
+    token_revoked_at: null,
+    last_activity_at: now,
+  }
+
+  const { data: existingSource, error: existingSourceError } = await supabase
     .from('photo_sources')
-    .insert({
-      company_id: pairing.company_id,
-      station_id: pairing.station_id,
-      name: deviceLabel,
-      source_type: 'phone',
-      enabled: true,
-      source_file_policy: 'keep_source_file',
-      token_hash: tokenHash(sourceToken),
-      token_last_four: sourceToken.slice(-4),
-      token_created_at: now,
-    })
-    .select('id, company_id, station_id, name, source_type')
-    .single()
+    .select('id')
+    .eq('company_id', pairing.company_id)
+    .eq('station_id', pairing.station_id)
+    .eq('name', deviceLabel)
+    .maybeSingle()
+
+  if (existingSourceError) return failure(500, existingSourceError.message)
+
+  const sourceResponse = existingSource?.id
+    ? await supabase
+      .from('photo_sources')
+      .update(sourceFields)
+      .eq('id', existingSource.id)
+      .eq('company_id', pairing.company_id)
+      .select('id, company_id, station_id, name, source_type')
+      .single()
+    : await supabase
+      .from('photo_sources')
+      .insert({
+        company_id: pairing.company_id,
+        station_id: pairing.station_id,
+        name: deviceLabel,
+        ...sourceFields,
+      })
+      .select('id, company_id, station_id, name, source_type')
+      .single()
+
+  const { data: source, error: sourceError } = sourceResponse
 
   if (sourceError) return failure(500, sourceError.message)
 
