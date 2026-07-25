@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
@@ -94,6 +95,49 @@ const conditionOptions = [
 
 const genderOptions = ['Male', 'Female', 'Unisex', 'Kids']
 
+const vatRuleOptions = [
+  { value: 'channel_default', label: 'Channel default' },
+  { value: 'standard', label: 'Standard VAT' },
+  { value: 'zero', label: 'Zero rated' },
+  { value: 'exempt', label: 'Exempt' },
+  { value: 'custom', label: 'Custom rate' },
+]
+
+const countryOptions = [
+  'United Kingdom',
+  'United States',
+  'France',
+  'Germany',
+  'Italy',
+  'Spain',
+  'Portugal',
+  'Netherlands',
+  'Belgium',
+  'Poland',
+  'Romania',
+  'Turkey',
+  'China',
+  'India',
+  'Pakistan',
+  'Bangladesh',
+  'Vietnam',
+  'Cambodia',
+  'Indonesia',
+  'Thailand',
+  'Japan',
+  'South Korea',
+  'Mexico',
+  'Canada',
+  'Other',
+]
+
+const itemKindOptions = [
+  { value: 'standard', label: 'Standard SKU' },
+  { value: 'parent', label: 'Parent SKU' },
+  { value: 'variation_child', label: 'Variation child SKU' },
+  { value: 'composite', label: 'Composite / bundle SKU' },
+]
+
 const WAREHOUSE_LOCATION = 'LOCATION-1'
 const DEFAULT_BIN = 'Default'
 
@@ -156,25 +200,83 @@ const CHANNEL_UPDATE_REGISTRY = [
     label: 'Linnworks',
     statusField: 'linnworks_status',
     updateHandler: 'linnworks',
-    liveStatuses: ['synced', 'active'],
-    isLive: (item: any) => item?.linnworks_managed === true || String(item?.linnworks_status || '').toLowerCase() === 'synced',
+    liveStatuses: ['synced', 'active', 'pending_update', 'failed'],
+    isLive: (item: any) =>
+      item?.linnworks_managed === true ||
+      ['synced', 'active', 'pending_update', 'failed'].includes(String(item?.linnworks_status || '').toLowerCase()),
   },
   {
     key: 'ebay',
     label: 'eBay',
     statusField: 'ebay_status',
     updateHandler: 'ebay',
-    liveStatuses: ['listed', 'active'],
+    liveStatuses: ['listed', 'active', 'pending_update', 'failed'],
   },
-  { key: 'shopify', label: 'Shopify', statusField: 'shopify_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
-  { key: 'square', label: 'Square', statusField: 'square_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
-  { key: 'grailed', label: 'Grailed', statusField: 'grailed_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
-  { key: 'vestiaire_collective', label: 'Vestiaire Collective', statusField: 'vestiaire_collective_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
-  { key: 'whatnot', label: 'Whatnot', statusField: 'whatnot_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
-  { key: 'vinted', label: 'Vinted', statusField: 'vinted_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
-  { key: 'depop', label: 'Depop', statusField: 'depop_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
-  { key: 'tiktok_shop', label: 'TikTok Shop', statusField: 'tiktok_shop_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active'] },
+  { key: 'shopify', label: 'Shopify', statusField: 'shopify_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
+  { key: 'square', label: 'Square', statusField: 'square_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
+  { key: 'grailed', label: 'Grailed', statusField: 'grailed_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
+  { key: 'vestiaire_collective', label: 'Vestiaire Collective', statusField: 'vestiaire_collective_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
+  { key: 'whatnot', label: 'Whatnot', statusField: 'whatnot_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
+  { key: 'vinted', label: 'Vinted', statusField: 'vinted_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
+  { key: 'depop', label: 'Depop', statusField: 'depop_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
+  { key: 'tiktok_shop', label: 'TikTok Shop', statusField: 'tiktok_shop_status', updateHandler: null, liveStatuses: ['listed', 'synced', 'active', 'pending_update', 'failed'] },
 ] as const
+
+type ExportedChannel = {
+  key: string
+  label: string
+  statusField: string
+  supported: boolean
+  updateHandler: string | null
+}
+
+function channelPendingUpdates(channels: ExportedChannel[]) {
+  return channels.reduce((updates: Record<string, unknown>, channel) => {
+    updates[channel.statusField] = 'pending_update'
+    return updates
+  }, {})
+}
+
+const dataEntryFieldKeys = [
+  'item_type',
+  'sku',
+  'barcode_number',
+  'reporting_category',
+  'sub_category',
+  'brand',
+  'gender',
+  'tagged_size',
+  'colour_primary',
+  'colour_secondary',
+  'condition',
+  'material',
+  'era',
+  'style',
+  'pit_to_pit_in',
+  'collar_to_hem_in',
+  'pit_to_cuff_in',
+  'sleeve_in',
+  'waist_in',
+  'inside_leg_in',
+  'rise_in',
+  'hem_width_in',
+  'weight_grams',
+  'basic_title',
+  'flaws',
+] as const
+
+const titleCaseItemDetailFields = new Set([
+  'brand',
+  'reporting_category',
+  'sub_category',
+  'colour_primary',
+  'colour_secondary',
+  'material',
+  'era',
+  'style',
+  'flaws',
+  'staff_notes',
+])
 
 const measurementMap: Record<string, string[]> = {
   'T-Shirt': sleevedTopMeasurements,
@@ -263,18 +365,6 @@ type PhotoStation = {
   active_session?: any
 }
 
-type PhotoSessionHistory = {
-  id: string
-  status: string | null
-  start_method: string | null
-  qc_status?: string | null
-  qc_notes?: string | null
-  started_at: string | null
-  ended_at: string | null
-  completed_at?: string | null
-  station?: any
-}
-
 type MeasurementSuggestion = {
   id: string
   measurement_type: string
@@ -290,14 +380,34 @@ type MeasurementSuggestion = {
   session?: any
 }
 
-function Field({ label, value, onChange }: any) {
+type CompositionComponentRow = {
+  id?: string
+  component_item_id?: string
+  component_sku: string
+  quantity: string
+  notes?: string
+}
+
+type ChildSkuRow = {
+  id?: string
+  sku: string
+  size?: string
+  colour?: string
+  custom_name?: string
+  custom_value?: string
+}
+
+function Field({ label, value, onChange, onKeyDown, inputId, placeholder }: any) {
   return (
     <label className="block">
       <span className="mb-1 block text-xs font-medium text-zinc-400">{label}</span>
 
       <input
+        id={inputId}
         value={value || ''}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder || ''}
         className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-white"
       />
     </label>
@@ -316,11 +426,16 @@ function SelectField({ label, value, onChange, options }: any) {
       >
         <option value="">Select...</option>
 
-        {options.map((option: string) => (
-          <option key={option} value={option}>
-            {option}
+        {options.map((option: any) => {
+          const value = typeof option === 'string' ? option : option.value
+          const label = typeof option === 'string' ? option : option.label
+
+          return (
+          <option key={value} value={value}>
+            {label}
           </option>
-        ))}
+          )
+        })}
       </select>
     </label>
   )
@@ -510,18 +625,6 @@ function getExportDescription(item: any) {
   return item.final_description || item.ai_description || item.basic_description || ''
 }
 
-function formatShortDateTime(value: string | null | undefined) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
-  return date.toLocaleString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
 function buildLinnworksPayload(item: any, processedImageUrls: string[]) {
   const payload: any = {
     id: item.id,
@@ -596,23 +699,29 @@ export default function ItemPage() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0)
   const [ebayReadiness, setEbayReadiness] = useState<any>(null)
-  const [checkingEbayReadiness, setCheckingEbayReadiness] = useState(false)
-  const [showEbayReadinessDetails, setShowEbayReadinessDetails] = useState(false)
   const [showEbayHtmlPreview, setShowEbayHtmlPreview] = useState(false)
   const [ebayCategorySearch, setEbayCategorySearch] = useState('')
   const [ebayCategorySuggestions, setEbayCategorySuggestions] = useState<any[]>([])
   const [searchingEbayCategories, setSearchingEbayCategories] = useState(false)
+  const [brandOptions, setBrandOptions] = useState<string[]>([])
   const [subCategoryOptions, setSubCategoryOptions] = useState<string[]>([])
   const [photoStations, setPhotoStations] = useState<PhotoStation[]>([])
   const [selectedPhotoStationId, setSelectedPhotoStationId] = useState('')
   const [photoStationMessage, setPhotoStationMessage] = useState('')
-  const [photoScanValue, setPhotoScanValue] = useState('')
   const [photoSessionBusy, setPhotoSessionBusy] = useState(false)
-  const [photoSessionHistory, setPhotoSessionHistory] = useState<PhotoSessionHistory[]>([])
   const [measurementSuggestions, setMeasurementSuggestions] = useState<MeasurementSuggestion[]>([])
   const [measurementSuggestionBusyId, setMeasurementSuggestionBusyId] = useState('')
+  const [activeTab, setActiveTab] = useState<'catalogue' | 'internal'>('catalogue')
+  const [dataEntryMode, setDataEntryMode] = useState(false)
+  const [dataEntryIndex, setDataEntryIndex] = useState(0)
+  const [compositionComponents, setCompositionComponents] = useState<CompositionComponentRow[]>([])
+  const [childSkuRows, setChildSkuRows] = useState<ChildSkuRow[]>([])
+  const [componentMessage, setComponentMessage] = useState('')
 
   const originalItemRef = useRef<any>(null)
+  const autoStartPhotoRef = useRef(false)
+  const dataEntrySnapshotRef = useRef('')
+  const dataEntryHadUnsavedRef = useRef(false)
 
   useEffect(() => {
     fetchItem()
@@ -620,16 +729,31 @@ export default function ItemPage() {
 
   useEffect(() => {
     fetchPhotoStations()
+    fetchBrandOptions()
   }, [activeCompanyId, schemaReady])
 
   useEffect(() => {
-    fetchPhotoSessionHistory()
     fetchMeasurementSuggestions()
+    fetchCompositionComponents()
+    fetchChildSkuRows()
   }, [id, activeCompanyId, schemaReady])
 
   useEffect(() => {
     fetchSubCategoryOptions(item?.reporting_category)
   }, [item?.reporting_category])
+
+  useEffect(() => {
+    if (!item?.id || photoStations.length === 0 || autoStartPhotoRef.current) return
+
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('start_photo') !== '1') return
+
+    autoStartPhotoRef.current = true
+    startPhotoSession()
+    params.delete('start_photo')
+    const nextQuery = params.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`)
+  }, [item?.id, photoStations.length])
 
   useEffect(() => {
     if (!message) return
@@ -661,9 +785,114 @@ export default function ItemPage() {
       return
     }
 
-    setItem(data)
-    originalItemRef.current = data
+    let hydratedItem: any = data
+
+    if (!text(hydratedItem.barcode_number)) {
+      let identifierQuery = supabase
+        .from('item_identifiers')
+        .select('identifier_value')
+        .eq('item_id', id)
+        .eq('identifier_type', 'barcode')
+        .eq('is_active', true)
+        .limit(1)
+
+      if (schemaReady) identifierQuery = identifierQuery.eq('company_id', activeCompanyId)
+
+      const { data: barcodeIdentifier } = await identifierQuery.maybeSingle()
+
+      if (barcodeIdentifier?.identifier_value) {
+        hydratedItem = {
+          ...hydratedItem,
+          barcode_number: barcodeIdentifier.identifier_value,
+        }
+      } else if (
+        /^\d+$/.test(text(hydratedItem.sku)) &&
+        text(hydratedItem.sku_type).toLowerCase() !== 'reusable'
+      ) {
+        hydratedItem = {
+          ...hydratedItem,
+          barcode_number: hydratedItem.sku,
+        }
+      }
+    }
+
+    setItem(hydratedItem)
+    originalItemRef.current = hydratedItem
     setHasUnsavedChanges(false)
+  }
+
+  async function fetchCompositionComponents() {
+    if (!id) return
+
+    try {
+      setComponentMessage('')
+
+      let query = supabase
+        .from('item_composition_components')
+        .select(
+          `id, component_item_id, quantity, notes,
+          component:items!item_composition_components_component_item_id_fkey(id, sku, final_title, basic_title, brand)`
+        )
+        .eq('composite_item_id', id)
+        .order('created_at', { ascending: true })
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
+
+      if (error) {
+        setCompositionComponents([])
+        setComponentMessage(error.message)
+        return
+      }
+
+      setCompositionComponents(
+        (data || []).map((row: any) => ({
+          id: row.id,
+          component_item_id: row.component_item_id,
+          component_sku: row.component?.sku || '',
+          quantity: String(row.quantity || 1),
+          notes: row.notes || '',
+        }))
+      )
+    } catch (error: any) {
+      setCompositionComponents([])
+      setComponentMessage(error.message || 'Composite components could not be loaded.')
+    }
+  }
+
+  async function fetchChildSkuRows() {
+    if (!id) return
+
+    try {
+      let query = supabase
+        .from('items')
+        .select('id, sku, variation_options')
+        .eq('parent_item_id', id)
+        .order('sku', { ascending: true })
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data, error } = await query
+
+      if (error) {
+        setChildSkuRows([])
+        return
+      }
+
+      setChildSkuRows(
+        (data || []).map((row: any) => ({
+          id: row.id,
+          sku: row.sku || '',
+          size: row.variation_options?.size || '',
+          colour: row.variation_options?.colour || '',
+          custom_name: row.variation_options?.custom_name || '',
+          custom_value: row.variation_options?.custom_value || '',
+        }))
+      )
+    } catch {
+      setChildSkuRows([])
+    }
   }
 
   async function fetchSubCategoryOptions(category: string | null | undefined) {
@@ -685,9 +914,21 @@ export default function ItemPage() {
 
     const { data } = await query
 
-    setSubCategoryOptions(
-      Array.from(new Set((data || []).map((row: any) => text(row.sub_category)).filter(Boolean))).sort()
-    )
+    setSubCategoryOptions(normaliseOptionList((data || []).map((row: any) => row.sub_category)))
+  }
+
+  async function fetchBrandOptions() {
+    let query = supabase
+      .from('items')
+      .select('brand')
+      .not('brand', 'is', null)
+      .limit(1000)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data } = await query
+
+    setBrandOptions(normaliseOptionList((data || []).map((row: any) => row.brand)))
   }
 
   async function fetchPhotoStations() {
@@ -718,31 +959,6 @@ export default function ItemPage() {
     }
   }
 
-  async function fetchPhotoSessionHistory() {
-    if (!id) return
-
-    let query = supabase
-      .from('photo_sessions')
-      .select(
-        `id, status, start_method, qc_status, qc_notes, started_at, ended_at, completed_at,
-        station:photography_stations!photo_sessions_station_id_fkey(id, name, code)`
-      )
-      .eq('item_id', id)
-      .order('started_at', { ascending: false })
-      .limit(8)
-
-    if (schemaReady) query = query.eq('company_id', activeCompanyId)
-
-    const { data, error } = await query
-
-    if (error) {
-      setPhotoSessionHistory([])
-      return
-    }
-
-    setPhotoSessionHistory((data || []) as PhotoSessionHistory[])
-  }
-
   async function fetchMeasurementSuggestions() {
     if (!id) return
 
@@ -765,11 +981,37 @@ export default function ItemPage() {
 
   async function startPhotoSession() {
     if (!item?.id) return
-    if (!selectedPhotoStationId) {
+    if (photoStations.length === 0) {
       setMessage('No photography station found. Run the photography SQL migration first.')
       return
     }
 
+    let stationId = selectedPhotoStationId || photoStations[0]?.id || ''
+
+    if (photoStations.length > 1) {
+      const stationList = photoStations
+        .map((station, index) => `${index + 1}. ${station.name}`)
+        .join('\n')
+      const choice = window.prompt(`Choose photography station:\n\n${stationList}`, '1')
+      if (choice === null) return
+
+      const selectedIndex = Number(choice) - 1
+      const selectedStation = photoStations[selectedIndex]
+
+      if (!selectedStation) {
+        setMessage('Photo session cancelled. Station choice was not valid.')
+        return
+      }
+
+      stationId = selectedStation.id
+    }
+
+    if (!stationId) {
+      setMessage('No photography station selected.')
+      return
+    }
+
+    setSelectedPhotoStationId(stationId)
     setPhotoSessionBusy(true)
     setMessage('Starting photo session...')
 
@@ -778,7 +1020,7 @@ export default function ItemPage() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          station_id: selectedPhotoStationId,
+          station_id: stationId,
           item_id: item.id,
           start_method: 'manual_button',
           staff_id: staff?.id || null,
@@ -792,58 +1034,10 @@ export default function ItemPage() {
       }
 
       await fetchPhotoStations()
-      await fetchPhotoSessionHistory()
       setMessage(`Photo session active for ${item.sku}.`)
-      window.open(`/processing/photo-monitor?station=${selectedPhotoStationId}`, '_blank', 'noopener,noreferrer')
+      window.open(`/processing/photo-monitor?station=${stationId}`, '_blank', 'noopener,noreferrer')
     } catch (error: any) {
       setMessage(error.message || 'Photo session failed to start.')
-    } finally {
-      setPhotoSessionBusy(false)
-    }
-  }
-
-  async function startPhotoSessionFromScan() {
-    const clean = photoScanValue.trim()
-    if (!clean) return
-
-    if (!selectedPhotoStationId) {
-      setMessage('No photography station selected.')
-      return
-    }
-
-    setPhotoSessionBusy(true)
-    setMessage('Starting photo session from scan...')
-
-    try {
-      const response = await fetch('/api/photography/sessions/start-from-scan', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          station_id: selectedPhotoStationId,
-          scan_value: clean,
-          staff_id: staff?.id || null,
-        }),
-      })
-
-      const data = await response.json().catch(() => null)
-
-      if (!response.ok || !data?.ok) {
-        throw new Error(data?.message || 'Photo session failed to start from scan.')
-      }
-
-      setPhotoScanValue('')
-      await fetchPhotoStations()
-      await fetchPhotoSessionHistory()
-
-      if (data.item?.id && data.item.id !== item.id) {
-        window.location.href = `/items/${data.item.id}`
-        return
-      }
-
-      setMessage(`Photo session active for ${data.item?.sku || item.sku}.`)
-      window.open(`/processing/photo-monitor?station=${selectedPhotoStationId}`, '_blank', 'noopener,noreferrer')
-    } catch (error: any) {
-      setMessage(error.message || 'Photo session failed to start from scan.')
     } finally {
       setPhotoSessionBusy(false)
     }
@@ -852,8 +1046,6 @@ export default function ItemPage() {
   async function checkEbayReadiness(skuOverride?: string) {
     const sku = text(skuOverride || item?.sku)
     if (!sku) return
-
-    setCheckingEbayReadiness(true)
 
     try {
       const response = await fetch(`/api/integrations/ebay/listing-readiness?sku=${encodeURIComponent(sku)}`)
@@ -866,19 +1058,7 @@ export default function ItemPage() {
         ready: false,
         message: error.message || 'Could not check eBay readiness.',
       })
-    } finally {
-      setCheckingEbayReadiness(false)
     }
-  }
-
-  function ebayReadinessMessages() {
-    if (!ebayReadiness) return ['eBay readiness has not been checked yet.']
-    if (!ebayReadiness.ok) return [ebayReadiness.message || 'Could not check eBay readiness.']
-
-    const missing = Array.isArray(ebayReadiness.missing) ? ebayReadiness.missing : []
-    if (missing.length === 0) return ['eBay listing requirements passed.']
-
-    return missing.map((check: any) => `${check.label}: ${check.message}`)
   }
 
   async function getImageCount() {
@@ -951,6 +1131,48 @@ export default function ItemPage() {
   function text(value: any) {
     if (value === null || value === undefined) return ''
     return String(value).trim()
+  }
+
+  function titleCaseWords(value: any) {
+    return text(value)
+      .toLowerCase()
+      .replace(/\b([a-z])/g, (match) => match.toUpperCase())
+  }
+
+  function normaliseOptionList(values: any[]) {
+    const byKey = new Map<string, string>()
+
+    for (const value of values) {
+      const display = titleCaseWords(value)
+      const key = display.toLowerCase()
+      if (display && !byKey.has(key)) byKey.set(key, display)
+    }
+
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b))
+  }
+
+  function itemDetailValue(field: string, value: any) {
+    if (!titleCaseItemDetailFields.has(field)) return value
+    return titleCaseWords(value)
+  }
+
+  function cleanTags(value: any) {
+    const rawTags = Array.isArray(value)
+      ? value
+      : String(value || '')
+          .split(',')
+
+    return Array.from(
+      new Set(
+        rawTags
+          .map((tag: any) => String(tag || '').replace(/^#+/, '').trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 10)
+  }
+
+  function tagsText(value: any) {
+    return cleanTags(value).join(', ')
   }
 
   function ebayCategoryQuery(source: any = item) {
@@ -1174,8 +1396,9 @@ export default function ItemPage() {
 
   function updateReportingCategory(newCategory: string) {
     if (!item) return
+    const formattedCategory = itemDetailValue('reporting_category', newCategory)
 
-    const allowedMeasurements = measurementMap[newCategory] || []
+    const allowedMeasurements = measurementMap[formattedCategory] || []
     const measurementsToClear = allMeasurementFields.filter(
       (field) => !allowedMeasurements.includes(field) && hasValue(item[field])
     )
@@ -1186,7 +1409,7 @@ export default function ItemPage() {
       )
 
       const confirmed = window.confirm(
-        `Changing category to ${newCategory || 'blank'} will remove these measurement value(s):\n\n${labels.join(
+        `Changing category to ${formattedCategory || 'blank'} will remove these measurement value(s):\n\n${labels.join(
           ', '
         )}\n\nContinue?`
       )
@@ -1196,7 +1419,7 @@ export default function ItemPage() {
 
     const updatedItem: any = {
       ...item,
-      reporting_category: newCategory,
+      reporting_category: formattedCategory,
     }
 
     for (const field of measurementsToClear) {
@@ -1369,7 +1592,401 @@ export default function ItemPage() {
       ai_title: result.ai_title || '',
       ai_description: result.ai_description || '',
       website_title: result.website_title || '',
+      marketplace_tags: cleanTags(result.marketplace_tags),
     }
+  }
+
+  async function syncItemIdentifiers(savedItem: any) {
+    const companyId = schemaReady ? activeCompanyId : savedItem.company_id
+    const identifiers = [
+      { type: 'sku', value: text(savedItem.sku) },
+      { type: 'barcode', value: text(savedItem.barcode_number) },
+    ].filter((identifier) => identifier.value)
+
+    if (companyId) {
+      await supabase
+        .from('item_identifiers')
+        .update({ is_active: false })
+        .eq('company_id', companyId)
+        .eq('item_id', id)
+        .in('identifier_type', ['sku', 'barcode'])
+    }
+
+    for (const identifier of identifiers) {
+      const normalized = identifier.value.toUpperCase().replace(/\s+/g, '')
+      const row: Record<string, unknown> = {
+        item_id: id,
+        sku: savedItem.sku,
+        identifier_type: identifier.type,
+        identifier_value: identifier.value,
+        identifier_value_normalized: normalized,
+        is_active: true,
+        assigned_by: staff?.id || null,
+      }
+
+      if (companyId) row.company_id = companyId
+
+      let existingQuery = supabase
+        .from('item_identifiers')
+        .select('id')
+        .eq('item_id', id)
+        .eq('identifier_type', identifier.type)
+        .eq('identifier_value_normalized', normalized)
+        .limit(1)
+
+      if (companyId) existingQuery = existingQuery.eq('company_id', companyId)
+
+      const { data: existing, error: existingError } = await existingQuery.maybeSingle()
+      if (existingError) throw new Error(existingError.message)
+
+      if (existing?.id) {
+        const { error } = await supabase
+          .from('item_identifiers')
+          .update(row)
+          .eq('id', existing.id)
+
+        if (error) throw new Error(error.message)
+      } else {
+        const { error } = await supabase
+          .from('item_identifiers')
+          .insert(row)
+
+        if (error) throw new Error(error.message)
+      }
+    }
+  }
+
+  async function generateBarcodeNumber() {
+    if (!item) return
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const candidate = `26${Date.now().toString().slice(-8)}${attempt ? String(attempt).padStart(2, '0') : ''}`
+      const normalized = candidate.toUpperCase()
+
+      let itemQuery = supabase
+        .from('items')
+        .select('id')
+        .eq('barcode_number', candidate)
+        .limit(1)
+
+      if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
+
+      const { data: itemMatch } = await itemQuery.maybeSingle()
+      if (itemMatch?.id) continue
+
+      let identifierQuery = supabase
+        .from('item_identifiers')
+        .select('id')
+        .eq('identifier_type', 'barcode')
+        .eq('identifier_value_normalized', normalized)
+        .eq('is_active', true)
+        .limit(1)
+
+      if (schemaReady) identifierQuery = identifierQuery.eq('company_id', activeCompanyId)
+
+      const { data: identifierMatch } = await identifierQuery.maybeSingle()
+      if (identifierMatch?.id) continue
+
+      updateField('barcode_number', candidate)
+      setMessage('Generated barcode. Save item to keep it.')
+      return
+    }
+
+    setMessage('Could not generate a unique barcode. Try again.')
+  }
+
+  async function resolveComponentItemId(component: CompositionComponentRow) {
+    if (component.component_item_id) return component.component_item_id
+
+    const cleanSku = text(component.component_sku)
+    if (!cleanSku) return ''
+
+    let query = supabase
+      .from('items')
+      .select('id')
+      .eq('sku', cleanSku)
+      .neq('id', id)
+      .limit(1)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.maybeSingle()
+    if (error) throw new Error(error.message)
+    if (!data?.id) throw new Error(`Component SKU ${cleanSku} was not found for this company.`)
+
+    return data.id
+  }
+
+  async function saveCompositionComponents(savedItem: any) {
+    const cleaned = compositionComponents
+      .map((component) => ({
+        ...component,
+        component_sku: text(component.component_sku),
+        quantity: String(component.quantity || '').trim(),
+      }))
+      .filter((component) => component.component_sku)
+
+    let deleteQuery = supabase
+      .from('item_composition_components')
+      .delete()
+      .eq('composite_item_id', id)
+
+    if (schemaReady) deleteQuery = deleteQuery.eq('company_id', activeCompanyId)
+
+    const { error: deleteError } = await deleteQuery
+    if (deleteError) throw new Error(deleteError.message)
+
+    if (cleaned.length === 0) {
+      setCompositionComponents([])
+      return
+    }
+
+    const rows = []
+
+    for (const component of cleaned) {
+      const componentItemId = await resolveComponentItemId(component)
+      const quantity = Number(component.quantity)
+
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error(`Component quantity for ${component.component_sku} must be greater than 0.`)
+      }
+
+      rows.push({
+        company_id: schemaReady ? activeCompanyId : savedItem.company_id,
+        composite_item_id: id,
+        component_item_id: componentItemId,
+        quantity,
+        notes: text(component.notes) || null,
+      })
+    }
+
+    const { error: insertError } = await supabase
+      .from('item_composition_components')
+      .insert(rows)
+
+    if (insertError) throw new Error(insertError.message)
+
+    await fetchCompositionComponents()
+  }
+
+  async function saveChildSkuRows(savedItem: any) {
+    const cleaned = childSkuRows
+      .map((child) => ({
+        ...child,
+        sku: text(child.sku).toUpperCase(),
+        size: text(child.size),
+        colour: text(child.colour),
+        custom_name: text(child.custom_name),
+        custom_value: text(child.custom_value),
+      }))
+      .filter((child) => child.sku)
+
+    let existingQuery = supabase
+      .from('items')
+      .select('id')
+      .eq('parent_item_id', id)
+
+    if (schemaReady) existingQuery = existingQuery.eq('company_id', activeCompanyId)
+
+    const { data: existingRows, error: existingError } = await existingQuery
+    if (existingError) throw new Error(existingError.message)
+
+    const keepIds = new Set(cleaned.map((child) => child.id).filter(Boolean))
+    const removeIds = (existingRows || [])
+      .map((row: any) => row.id)
+      .filter((childId: string) => !keepIds.has(childId))
+
+    if (removeIds.length > 0) {
+      let clearQuery = supabase
+        .from('items')
+        .update({
+          parent_item_id: null,
+          item_kind: 'standard',
+          variation_options: {},
+          updated_at: new Date().toISOString(),
+        })
+        .in('id', removeIds)
+
+      if (schemaReady) clearQuery = clearQuery.eq('company_id', activeCompanyId)
+
+      const { error } = await clearQuery
+      if (error) throw new Error(error.message)
+    }
+
+    for (const child of cleaned) {
+      const variationOptions = {
+        size: child.size || null,
+        colour: child.colour || null,
+        custom_name: child.custom_name || null,
+        custom_value: child.custom_value || null,
+      }
+
+      if (child.id) {
+        let updateQuery = supabase
+          .from('items')
+          .update({
+            sku: child.sku,
+            parent_item_id: id,
+            item_kind: 'variation_child',
+            variation_group_key: text(savedItem.sku) || null,
+            variation_options: variationOptions,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', child.id)
+
+        if (schemaReady) updateQuery = updateQuery.eq('company_id', activeCompanyId)
+
+        const { error } = await updateQuery
+        if (error) throw new Error(error.message)
+        continue
+      }
+
+      let matchQuery = supabase
+        .from('items')
+        .select('id')
+        .eq('sku', child.sku)
+        .neq('id', id)
+        .limit(1)
+
+      if (schemaReady) matchQuery = matchQuery.eq('company_id', activeCompanyId)
+
+      const { data: matchedChild, error: matchError } = await matchQuery.maybeSingle()
+      if (matchError) throw new Error(matchError.message)
+
+      if (matchedChild?.id) {
+        let linkQuery = supabase
+          .from('items')
+          .update({
+            parent_item_id: id,
+            item_kind: 'variation_child',
+            variation_group_key: text(savedItem.sku) || null,
+            variation_options: variationOptions,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', matchedChild.id)
+
+        if (schemaReady) linkQuery = linkQuery.eq('company_id', activeCompanyId)
+
+        const { error: linkError } = await linkQuery
+        if (linkError) throw new Error(linkError.message)
+        continue
+      }
+
+      const now = new Date().toISOString()
+      const childInsert: Record<string, unknown> = {
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
+        sku: child.sku,
+        status: savedItem.status || 'working',
+        stock_level: 0,
+        sku_type: savedItem.sku_type || 'single_use',
+        location_status: 'stored',
+        current_location: canonicalLocationKey(savedItem.current_location) || WAREHOUSE_LOCATION,
+        current_bin: text(savedItem.current_bin) || DEFAULT_BIN,
+        loan_status: 'not_on_loan',
+        ebay_status: 'not_listed',
+        linnworks_status: 'not_synced',
+        shopify_status: 'not_listed',
+        square_status: 'not_listed',
+        grailed_status: 'not_listed',
+        vestiaire_collective_status: 'not_listed',
+        whatnot_status: 'not_listed',
+        vinted_status: 'not_listed',
+        depop_status: 'not_listed',
+        tiktok_shop_status: 'not_listed',
+        parent_item_id: id,
+        item_kind: 'variation_child',
+        variation_group_key: text(savedItem.sku) || null,
+        variation_options: variationOptions,
+        brand: blankToNull(savedItem.brand),
+        reporting_category: blankToNull(savedItem.reporting_category),
+        sub_category: blankToNull(savedItem.sub_category),
+        sub_type: blankToNull(savedItem.sub_category),
+        item_type: blankToNull(savedItem.item_type),
+        gender: blankToNull(savedItem.gender),
+        condition: blankToNull(savedItem.condition),
+        material: blankToNull(savedItem.material),
+        colour_primary: child.colour || blankToNull(savedItem.colour_primary),
+        colour_secondary: blankToNull(savedItem.colour_secondary),
+        tagged_size: child.size || blankToNull(savedItem.tagged_size),
+        era: blankToNull(savedItem.era),
+        style: blankToNull(savedItem.style),
+        flaws: blankToNull(savedItem.flaws),
+        cost_price: blankToNull(savedItem.cost_price),
+        selling_price: blankToNull(savedItem.selling_price),
+        hs_code: blankToNull(savedItem.hs_code),
+        country_of_origin: blankToNull(savedItem.country_of_origin),
+        composition: blankToNull(savedItem.composition),
+        shipping_size_identifier: blankToNull(savedItem.shipping_size_identifier),
+        package_weight_grams: blankToNull(savedItem.package_weight_grams),
+        package_length_cm: blankToNull(savedItem.package_length_cm),
+        package_width_cm: blankToNull(savedItem.package_width_cm),
+        package_height_cm: blankToNull(savedItem.package_height_cm),
+        vat_rule: savedItem.vat_rule || 'channel_default',
+        vat_rate: savedItem.vat_rule === 'custom' ? blankToNull(savedItem.vat_rate) : null,
+        last_saved_by: staff?.id || null,
+        updated_at: now,
+      }
+
+      const { data: createdChild, error: createError } = await supabase
+        .from('items')
+        .insert(childInsert)
+        .select('id, sku')
+        .single()
+
+      if (createError) throw new Error(createError.message)
+
+      const childStockRow: Record<string, unknown> = {
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
+        item_id: createdChild.id,
+        sku: createdChild.sku,
+        location_name: canonicalLocationKey(savedItem.current_location) || WAREHOUSE_LOCATION,
+        location_id: null,
+        bin_code: text(savedItem.current_bin) || DEFAULT_BIN,
+        stock_level: 0,
+        source: 'variation_child_created',
+        updated_at: now,
+      }
+
+      const { error: stockError } = await supabase
+        .from('item_stock_locations')
+        .upsert(childStockRow, { onConflict: 'company_id,item_id,location_name,bin_code' })
+
+      if (stockError) throw new Error(stockError.message)
+
+      const childIdentifierRow: Record<string, unknown> = {
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
+        item_id: createdChild.id,
+        sku: createdChild.sku,
+        identifier_type: 'sku',
+        identifier_value: createdChild.sku,
+        identifier_value_normalized: createdChild.sku.toUpperCase().replace(/\s+/g, ''),
+        is_active: true,
+        assigned_by: staff?.id || null,
+      }
+
+      const { error: identifierError } = await supabase
+        .from('item_identifiers')
+        .insert(childIdentifierRow)
+
+      if (identifierError) throw new Error(identifierError.message)
+    }
+
+    if (cleaned.length > 0) {
+      let parentQuery = supabase
+        .from('items')
+        .update({
+          item_kind: 'parent',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+
+      if (schemaReady) parentQuery = parentQuery.eq('company_id', activeCompanyId)
+
+      const { error } = await parentQuery
+      if (error) throw new Error(error.message)
+    }
+
+    await fetchChildSkuRows()
   }
 
   function needsAiCopy(itemToCheck: any) {
@@ -1481,9 +2098,10 @@ export default function ItemPage() {
       if ('isLive' in channel && channel.isLive?.(source)) return true
       const status = text(source?.[channel.statusField]).toLowerCase()
       return channel.liveStatuses.includes(status as any)
-    }).map((channel) => ({
+    }).map((channel): ExportedChannel => ({
       key: channel.key,
       label: channel.label,
+      statusField: channel.statusField,
       supported: Boolean(channel.updateHandler),
       updateHandler: channel.updateHandler,
     }))
@@ -1542,7 +2160,30 @@ export default function ItemPage() {
   async function offerExportUpdatesAfterFinalisedSave(savedItem: any, previouslyExportedChannels: ReturnType<typeof exportedChannelsForItem>) {
     const supportedChannels = previouslyExportedChannels.filter((channel) => channel.supported)
 
-    if (supportedChannels.length === 0) return savedItem
+    if (previouslyExportedChannels.length === 0) return savedItem
+
+    async function markPendingUpdate() {
+      const updates = {
+        ...channelPendingUpdates(previouslyExportedChannels),
+        channel_pending_update_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+
+      await supabase
+        .from('items')
+        .update(updates)
+        .eq('id', id)
+        .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
+
+      const pendingItem = { ...savedItem, ...updates }
+      setItem(pendingItem)
+      originalItemRef.current = pendingItem
+      setHasUnsavedChanges(false)
+      setMessage('Saved item. Published channel changes are marked as pending update.')
+      return pendingItem
+    }
+
+    if (supportedChannels.length === 0) return markPendingUpdate()
 
     const supportedText = supportedChannels.map((channel) => channel.label).join(', ')
     const promptLines = [
@@ -1552,7 +2193,7 @@ export default function ItemPage() {
     ]
 
     if (!window.confirm(promptLines.join('\n'))) {
-      return savedItem
+      return markPendingUpdate()
     }
 
     let nextItem = savedItem
@@ -1570,18 +2211,26 @@ export default function ItemPage() {
 
         results.push(`${channel.label}: complete`)
       } catch (error: any) {
+        const errorMessage = error.message || 'Unknown error'
         if (channel.updateHandler === 'ebay') {
           await supabase
             .from('items')
             .update({
               ebay_status: 'failed',
+              ebay_sync_error: errorMessage,
               updated_at: new Date().toISOString(),
             })
             .eq('id', id)
             .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : id)
+
+          nextItem = {
+            ...nextItem,
+            ebay_status: 'failed',
+            ebay_sync_error: errorMessage,
+          }
         }
 
-        results.push(`${channel.label}: failed - ${error.message || 'Unknown error'}`)
+        results.push(`${channel.label}: failed - ${errorMessage}`)
       }
     }
 
@@ -1600,8 +2249,9 @@ export default function ItemPage() {
       return null
     }
 
+    const hadUnsavedChanges = hasUnsavedChanges
     const previouslyExportedChannels =
-      options.promptChannelExport && text(originalItemRef.current?.status).toLowerCase() === 'finalised'
+      options.promptChannelExport && hadUnsavedChanges && text(originalItemRef.current?.status).toLowerCase() === 'finalised'
         ? exportedChannelsForItem(originalItemRef.current)
         : []
 
@@ -1620,10 +2270,23 @@ export default function ItemPage() {
     const isLinnworksManaged =
       originalItemRef.current?.linnworks_managed === true || item.linnworks_managed === true
 
+    const skuChanged =
+      text(originalItemRef.current?.sku).toUpperCase() !== text(item.sku).toUpperCase()
+
+    if (skuChanged && isLinnworksManaged) {
+      const confirmed = window.confirm(
+        'This item is already managed by Linnworks. Linnworks may not allow the SKU/item number to be changed safely.\n\nSave the SKU change in Loopbase anyway?'
+      )
+
+      if (!confirmed) return null
+    }
+
     const shouldQueueStockSync = stockLevelChanged && isLinnworksManaged
 
     const cleanedItem = {
       ...item,
+      sku: text(item.sku).toUpperCase(),
+      barcode_number: blankToNull(item.barcode_number),
       status: item.status === 'processed' ? 'finalised' : item.status,
 
       cost_price: blankToNull(item.cost_price),
@@ -1644,6 +2307,27 @@ export default function ItemPage() {
       sleeve_in: blankToNull(item.sleeve_in),
 
       weight_grams: blankToNull(item.weight_grams),
+      marketplace_tags: cleanTags(item.marketplace_tags),
+      hs_code: blankToNull(item.hs_code),
+      country_of_origin: blankToNull(item.country_of_origin),
+      composition: blankToNull(item.composition),
+      shipping_size_identifier: blankToNull(item.shipping_size_identifier),
+      package_length_cm: blankToNull(item.package_length_cm),
+      package_width_cm: blankToNull(item.package_width_cm),
+      package_height_cm: blankToNull(item.package_height_cm),
+      package_weight_grams: blankToNull(item.package_weight_grams),
+      vat_rule: item.vat_rule || 'channel_default',
+      vat_rate: item.vat_rule === 'custom' ? blankToNull(item.vat_rate) : null,
+      item_kind: compositionComponents.some((component) => text(component.component_sku))
+        ? 'composite'
+        : item.item_kind || 'standard',
+      variation_group_key: blankToNull(item.variation_group_key),
+      variation_options: item.variation_options && typeof item.variation_options === 'object'
+        ? item.variation_options
+        : {},
+      extended_properties: item.extended_properties && typeof item.extended_properties === 'object'
+        ? item.extended_properties
+        : {},
       location_status: item.location_status || 'stored',
       current_location: canonicalLocationKey(item.current_location) || WAREHOUSE_LOCATION,
       current_bin: text(item.current_bin) || DEFAULT_BIN,
@@ -1673,8 +2357,11 @@ export default function ItemPage() {
 
     try {
       await upsertPrimaryStockLocation(cleanedItem)
+      await syncItemIdentifiers(cleanedItem)
+      await saveCompositionComponents(cleanedItem)
+      await saveChildSkuRows(cleanedItem)
     } catch (stockError: any) {
-      setMessage(`Saved item, but stock-location row failed: ${stockError.message}`)
+      setMessage(`Saved item, but linked stock/identifier/composite/child SKU row failed: ${stockError.message}`)
       originalItemRef.current = cleanedItem
       setItem(cleanedItem)
       setHasUnsavedChanges(false)
@@ -1725,7 +2412,7 @@ export default function ItemPage() {
       )
     }
 
-    if (options.promptChannelExport && previouslyExportedChannels.length > 0) {
+    if (options.promptChannelExport && hadUnsavedChanges && previouslyExportedChannels.length > 0) {
       return offerExportUpdatesAfterFinalisedSave(savedItem, previouslyExportedChannels)
     }
 
@@ -1936,9 +2623,10 @@ export default function ItemPage() {
   }
 
   function updateField(field: string, value: any) {
+    const nextValue = itemDetailValue(field, value)
     const updatedItem = {
       ...item,
-      [field]: value,
+      [field]: nextValue,
     }
 
     setItem(updatedItem)
@@ -2019,10 +2707,11 @@ export default function ItemPage() {
   }
 
   function updateSubCategory(value: string) {
+    const nextValue = itemDetailValue('sub_category', value)
     const updatedItem = {
       ...item,
-      sub_category: value,
-      sub_type: value,
+      sub_category: nextValue,
+      sub_type: nextValue,
     }
 
     setItem(updatedItem)
@@ -2057,8 +2746,6 @@ export default function ItemPage() {
   const visibleMeasurements = measurementMap[item.reporting_category] || []
   const visibleConditionOptions =
     item.item_type === 'Clothing' ? clothingConditionOptions : conditionOptions
-  const ebayMessages = ebayReadinessMessages()
-  const ebayReady = Boolean(ebayReadiness?.ok && ebayReadiness?.ready)
   const ebayPreviewHtml = ebayReadiness?.listing_draft?.description_html || ''
   const selectedPhotoStation =
     photoStations.find((station) => station.id === selectedPhotoStationId) || photoStations[0] || null
@@ -2072,12 +2759,84 @@ export default function ItemPage() {
         : item.review_return_reason
           ? 'Returned from review'
           : ''
+  const dataEntryFields = dataEntryFieldKeys
+    .filter((field) => {
+      if (allMeasurementFields.includes(field)) return visibleMeasurements.includes(field)
+      return true
+    })
+    .map((field) => ({
+      key: field,
+      label:
+        field === 'sku'
+          ? 'SKU'
+          : field === 'barcode_number'
+            ? 'Barcode'
+            : measurementLabels[field] ||
+              field
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    }))
+  const activeDataEntryField = dataEntryFields[dataEntryIndex] || dataEntryFields[0]
+  const activeDataEntrySuggestions =
+    activeDataEntryField?.key === 'brand'
+      ? brandOptions
+      : activeDataEntryField?.key === 'reporting_category'
+        ? reportingCategories
+        : activeDataEntryField?.key === 'sub_category'
+          ? subCategoryOptions
+          : []
+
+  function initialDataEntryIndex() {
+    if (item?.inbound_batch_id || item?.inbound_batch_code) {
+      const firstMissingInboundDefault = ['reporting_category', 'sub_category', 'brand'].find(
+        (field) => !text(item?.[field])
+      )
+
+      if (firstMissingInboundDefault) {
+        const index = dataEntryFields.findIndex((field) => field.key === firstMissingInboundDefault)
+        return index >= 0 ? index : 0
+      }
+
+      const afterBrandIndex = dataEntryFields.findIndex((field) => field.key === 'gender')
+      return afterBrandIndex >= 0 ? afterBrandIndex : 0
+    }
+
+    const brandIndex = dataEntryFields.findIndex((field) => field.key === 'brand')
+    return brandIndex >= 0 ? brandIndex : 0
+  }
+
+  function moveDataEntry(delta: number) {
+    setDataEntryIndex((current) => {
+      const next = Math.min(Math.max(current + delta, 0), dataEntryFields.length - 1)
+      window.setTimeout(() => document.getElementById(`data-entry-${dataEntryFields[next]?.key}`)?.focus(), 0)
+      return next
+    })
+  }
+
+  function handleDataEntryKeyDown(event: any) {
+    if (event.key !== 'Enter' && event.key !== 'Tab') return
+    event.preventDefault()
+    moveDataEntry(event.shiftKey ? -1 : 1)
+  }
+
+  function closeDataEntryMode() {
+    const currentSnapshot = JSON.stringify(item)
+    setDataEntryMode(false)
+    if (currentSnapshot === dataEntrySnapshotRef.current) {
+      setHasUnsavedChanges(dataEntryHadUnsavedRef.current)
+      return
+    }
+
+    setHasUnsavedChanges(
+      JSON.stringify(originalItemRef.current) !== currentSnapshot
+    )
+  }
 
   return (
     <StaffPermissionGate permission="working">
       <main className="min-h-screen bg-zinc-950 p-5 text-white">
-        <div className="app-header mb-5 flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
+        <div className="app-header mb-5 flex flex-col gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-black tracking-normal">SKU: {item.sku}</h1>
 
@@ -2103,106 +2862,29 @@ export default function ItemPage() {
             <AppNav current={undefined} onNavigate={confirmNavigation} />
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            {photoStations.length > 0 ? (
-              <div className="flex flex-wrap items-center justify-end gap-2 rounded-xl border border-zinc-800 bg-zinc-950 p-2">
-                <select
-                  value={selectedPhotoStationId}
-                  onChange={(event) => setSelectedPhotoStationId(event.target.value)}
-                  className="h-9 rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
-                  title="Photography station"
-                >
-                  {photoStations.map((station) => (
-                    <option key={station.id} value={station.id}>
-                      {station.name}
-                    </option>
-                  ))}
-                </select>
-
-                <input
-                  value={photoScanValue}
-                  onChange={(event) => setPhotoScanValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      startPhotoSessionFromScan()
-                    }
-                  }}
-                  placeholder="Scan barcode/RFID"
-                  className="h-9 w-40 rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
-                />
-
-                <button
-                  type="button"
-                  onClick={startPhotoSessionFromScan}
-                  disabled={photoSessionBusy || !photoScanValue.trim()}
-                  className="h-9 rounded-lg bg-emerald-700 px-3 text-xs font-black text-white disabled:opacity-50"
-                >
-                  Scan Start
-                </button>
-
-                <button
-                  type="button"
-                  onClick={startPhotoSession}
-                  disabled={photoSessionBusy}
-                  className={`h-9 rounded-lg px-3 text-xs font-black text-white disabled:opacity-50 ${
-                    photoSessionMatchesItem ? 'bg-green-700' : 'bg-emerald-600'
-                  }`}
-                >
-                  {photoSessionBusy
-                    ? 'Starting...'
-                    : photoSessionMatchesItem
-                      ? 'Session Active'
-                      : item.review_return_type === 'needs_reshoot'
-                        ? 'Start Reshoot'
-                        : 'Start Photo Session'}
-                </button>
-
-              </div>
-            ) : (
-              photoStationMessage && (
-                <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-xs font-black text-yellow-200">
-                  {photoStationMessage}
-                </span>
-              )
-            )}
-
+          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-800 pt-3">
             {message && (
-              <span className="rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
+              <span className="mr-auto rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
                 {message}
               </span>
             )}
 
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowEbayReadinessDetails((current) => !current)}
-                title={ebayMessages.join('\n')}
-                className={`rounded-xl px-4 py-2 text-sm font-black ${
-                  ebayReady ? 'bg-green-600 text-white' : 'bg-red-700 text-white'
-                }`}
-              >
-                eBay {checkingEbayReadiness ? '...' : ebayReady ? 'OK' : 'X'}
-              </button>
-
-              {showEbayReadinessDetails && (
-                <div className="absolute right-0 top-full z-30 mt-2 w-80 rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-xs font-bold text-zinc-200 shadow-xl">
-                  <div className="space-y-1">
-                    {ebayMessages.map((line: string, index: number) => (
-                      <p key={`${line}-${index}`}>{line}</p>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
             <button
               type="button"
-              onClick={() => setShowEbayHtmlPreview(true)}
-              disabled={!ebayPreviewHtml}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={startPhotoSession}
+              disabled={photoSessionBusy || photoStations.length === 0}
+              title={photoStations.length === 0 ? photoStationMessage || 'No photography station found.' : ''}
+              className={`rounded-lg px-5 py-2 text-sm font-bold text-white disabled:opacity-40 ${
+                photoSessionMatchesItem ? 'bg-green-700' : 'bg-emerald-600 hover:bg-emerald-500'
+              }`}
             >
-              HTML Preview
+              {photoSessionBusy
+                ? 'Starting...'
+                : photoSessionMatchesItem
+                  ? 'Session Active'
+                  : item.review_return_type === 'needs_reshoot'
+                    ? 'Start Reshoot'
+                    : 'Start Photo Session'}
             </button>
 
             <button
@@ -2213,20 +2895,11 @@ export default function ItemPage() {
               Save Item
             </button>
 
-            <button
-              type="button"
-              onClick={() => checkEbayReadiness()}
-              disabled={checkingEbayReadiness}
-              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-bold text-white hover:bg-zinc-800 disabled:opacity-40"
-            >
-              {checkingEbayReadiness ? 'Checking eBay' : 'Refresh eBay'}
-            </button>
-
             {item.sku_type !== 'reusable' && (
               <button
                 onClick={sendToReview}
                 disabled={!staff || processingImages || exportingLinnworks}
-                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
+                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-40"
               >
                 Send to Review
               </button>
@@ -2235,7 +2908,7 @@ export default function ItemPage() {
             <button
               onClick={finaliseItem}
               disabled={!staff || processingImages || exportingLinnworks}
-              className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold disabled:opacity-40"
+              className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-40"
             >
               {processingImages ? 'Finalising...' : 'Finalise'}
             </button>
@@ -2248,6 +2921,177 @@ export default function ItemPage() {
           </div>
         )}
 
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: 'catalogue', label: 'Catalogue' },
+              { key: 'internal', label: 'Internal / Logistics' },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key as any)}
+                className={`rounded-lg px-4 py-2 text-sm font-black ${
+                  activeTab === tab.key
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-zinc-800 text-white hover:bg-zinc-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+
+            <button
+              type="button"
+              onClick={() => {
+                const nextIndex = initialDataEntryIndex()
+                const nextField = dataEntryFields[nextIndex]
+                dataEntrySnapshotRef.current = JSON.stringify(item)
+                dataEntryHadUnsavedRef.current = hasUnsavedChanges
+                setDataEntryIndex(nextIndex)
+                setDataEntryMode(true)
+                window.setTimeout(
+                  () => document.getElementById(`data-entry-${nextField?.key || 'brand'}`)?.focus(),
+                  0
+                )
+              }}
+              className={`rounded-lg px-4 py-2 text-sm font-black text-white ${
+                dataEntryMode ? 'bg-emerald-600' : 'bg-zinc-800 hover:bg-zinc-700'
+              }`}
+            >
+              Data Entry
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowEbayHtmlPreview(true)}
+            disabled={!ebayPreviewHtml}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            HTML Preview
+          </button>
+        </div>
+
+        {dataEntryMode && activeDataEntryField && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+            <section className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-700 bg-zinc-950 shadow-2xl">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-800 bg-emerald-950 p-4">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wide text-emerald-300">
+                    Data Entry Mode
+                  </p>
+                  <h2 className="text-2xl font-black text-white">
+                    {activeDataEntryField.label}
+                  </h2>
+                  <p className="mt-1 text-xs font-bold text-emerald-100">
+                    {dataEntryIndex + 1} / {dataEntryFields.length} · Enter or Tab moves next. Shift+Tab moves back.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => moveDataEntry(-1)}
+                    className="rounded-lg bg-zinc-900 px-3 py-2 text-xs font-black text-white disabled:opacity-40"
+                    disabled={dataEntryIndex === 0}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveDataEntry(1)}
+                    className="rounded-lg bg-zinc-900 px-3 py-2 text-xs font-black text-white disabled:opacity-40"
+                    disabled={dataEntryIndex >= dataEntryFields.length - 1}
+                  >
+                    Next
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeDataEntryMode}
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-black text-white hover:bg-emerald-500"
+                  >
+                    Submit
+                  </button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-auto p-4">
+                <div className="rounded-xl border border-emerald-700 bg-black p-4">
+                  <label
+                    htmlFor={`data-entry-${activeDataEntryField.key}`}
+                    className="mb-2 block text-xs font-black uppercase tracking-wide text-emerald-300"
+                  >
+                    Current Field
+                  </label>
+                  <input
+                    id={`data-entry-${activeDataEntryField.key}`}
+                    list={activeDataEntrySuggestions.length > 0 ? 'data-entry-field-suggestions' : undefined}
+                    value={item[activeDataEntryField.key] || ''}
+                    onChange={(event) => {
+                      if (activeDataEntryField.key === 'reporting_category') {
+                        updateReportingCategory(event.target.value)
+                      } else if (activeDataEntryField.key === 'sub_category') {
+                        updateSubCategory(event.target.value)
+                      } else {
+                        updateField(activeDataEntryField.key, event.target.value)
+                      }
+                    }}
+                    onKeyDown={handleDataEntryKeyDown}
+                    autoFocus
+                    className="h-20 w-full rounded-xl border-2 border-emerald-400 bg-white px-4 text-3xl font-black text-zinc-950 outline-none focus:border-white"
+                  />
+
+                  {activeDataEntrySuggestions.length > 0 && (
+                    <datalist id="data-entry-field-suggestions">
+                      {activeDataEntrySuggestions.map((option) => (
+                        <option key={option} value={option} />
+                      ))}
+                    </datalist>
+                  )}
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+                  {dataEntryFields.map((field, index) => {
+                    const active = index === dataEntryIndex
+
+                    return (
+                      <button
+                        key={field.key}
+                        type="button"
+                        onClick={() => {
+                          setDataEntryIndex(index)
+                          window.setTimeout(
+                            () => document.getElementById(`data-entry-${field.key}`)?.focus(),
+                            0
+                          )
+                        }}
+                        className={`min-h-20 rounded-xl border p-3 text-left ${
+                          active
+                            ? 'border-emerald-300 bg-emerald-600'
+                            : 'border-zinc-800 bg-zinc-900 hover:border-zinc-600'
+                        }`}
+                      >
+                        <span className={`block text-[11px] font-black uppercase tracking-wide ${
+                          active ? 'text-white' : 'text-zinc-400'
+                        }`}>
+                          {field.label}
+                        </span>
+                        <span className={`mt-2 block truncate text-sm font-black ${
+                          active ? 'text-white' : 'text-zinc-100'
+                        }`}>
+                          {text(item[field.key]) || '-'}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'catalogue' ? (
         <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
           <div className="space-y-4">
             <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
@@ -2256,10 +3100,11 @@ export default function ItemPage() {
               </h2>
 
               <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-                <Field
-                  label="Brand"
-                  value={item.brand}
-                  onChange={(v: string) => updateField('brand', v)}
+                <SelectField
+                  label="Item Type"
+                  value={item.item_type}
+                  onChange={(v: string) => updateField('item_type', v)}
+                  options={itemTypeOptions}
                 />
 
                 <DatalistField
@@ -2280,11 +3125,13 @@ export default function ItemPage() {
                   placeholder="Type or select sub category"
                 />
 
-                <SelectField
-                  label="Item Type"
-                  value={item.item_type}
-                  onChange={(v: string) => updateField('item_type', v)}
-                  options={itemTypeOptions}
+                <DatalistField
+                  label="Brand"
+                  value={item.brand || ''}
+                  onChange={(v: string) => updateField('brand', v)}
+                  options={brandOptions}
+                  listId="brand-options"
+                  placeholder="Type or select brand"
                 />
 
                 <SelectField
@@ -2364,7 +3211,7 @@ export default function ItemPage() {
                   type="button"
                   onClick={suggestEbayCategory}
                   disabled={searchingEbayCategories}
-                  className="rounded-lg border border-zinc-700 px-4 py-2 text-xs font-black text-white hover:bg-zinc-800 disabled:opacity-40"
+                  className="rounded-lg bg-zinc-900 px-4 py-2 text-xs font-black text-white hover:bg-zinc-800 disabled:opacity-40"
                 >
                   {searchingEbayCategories ? 'Searching' : 'Suggest'}
                 </button>
@@ -2384,7 +3231,7 @@ export default function ItemPage() {
                 <button
                   type="button"
                   onClick={clearEbayCategory}
-                  className="mt-5 rounded-lg border border-zinc-700 px-4 py-2 text-xs font-black text-white hover:bg-zinc-800"
+                  className="mt-5 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-black text-white hover:bg-zinc-800"
                 >
                   Clear Category
                 </button>
@@ -2588,6 +3435,12 @@ export default function ItemPage() {
                     onChange={(v: string) => updateField('ai_description', v)}
                   />
                 </div>
+
+                <TextArea
+                  label="AI Marketplace Tags"
+                  value={tagsText(item.marketplace_tags)}
+                  onChange={(v: string) => updateField('marketplace_tags', cleanTags(v))}
+                />
               </div>
             </section>
           </div>
@@ -2607,77 +3460,6 @@ export default function ItemPage() {
               >
                 Upload / Edit Photos
               </button>
-            </section>
-
-            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
-                  Photo Sessions
-                </h2>
-                <button
-                  type="button"
-                  onClick={fetchPhotoSessionHistory}
-                  className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-black text-white"
-                >
-                  Refresh
-                </button>
-              </div>
-
-              {photoSessionHistory.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-zinc-700 p-3 text-center text-xs font-bold text-zinc-500">
-                  No photo sessions yet.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {photoSessionHistory.map((session) => {
-                    const station = Array.isArray(session.station) ? session.station[0] : session.station
-                    const qcStatus = session.qc_status || 'pending'
-                    return (
-                      <div key={session.id} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-black">
-                              {station?.name || 'Photo station'}
-                            </p>
-                            <p className="text-xs font-bold text-zinc-500">
-                              {formatShortDateTime(session.started_at)} - {session.start_method || 'manual'}
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 flex-col items-end gap-1">
-                            <span
-                              className={`rounded px-2 py-1 text-[10px] font-black ${
-                                session.status === 'active'
-                                  ? 'bg-green-600 text-white'
-                                  : 'bg-zinc-800 text-zinc-300'
-                              }`}
-                            >
-                              {session.status || 'unknown'}
-                            </span>
-                            {qcStatus !== 'pending' && (
-                              <span
-                                className={`rounded px-2 py-1 text-[10px] font-black ${
-                                  qcStatus === 'complete'
-                                    ? 'bg-emerald-600 text-white'
-                                    : qcStatus === 'needs_reshoot'
-                                      ? 'bg-yellow-600 text-black'
-                                      : 'bg-zinc-700 text-zinc-200'
-                                }`}
-                              >
-                                {qcStatus.replace(/_/g, ' ')}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {session.qc_notes && (
-                          <p className="mt-2 rounded bg-black p-2 text-xs font-bold text-zinc-400">
-                            {session.qc_notes}
-                          </p>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
             </section>
 
             <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
@@ -2714,6 +3496,379 @@ export default function ItemPage() {
 
           </aside>
         </div>
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
+            <div className="space-y-4">
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
+                  SKU / Identifiers
+                </h2>
+
+                <div className="grid gap-3 md:grid-cols-[1fr_1.4fr_1fr]">
+                  <Field
+                    label="SKU"
+                    value={item.sku}
+                    onChange={(v: string) => updateField('sku', v)}
+                  />
+
+                  <div>
+                    <Field
+                      label="Barcode"
+                      value={item.barcode_number}
+                      onChange={(v: string) => updateField('barcode_number', v)}
+                      placeholder="Scan or type barcode"
+                    />
+                    <button
+                      type="button"
+                      onClick={generateBarcodeNumber}
+                      className="mt-2 rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white hover:bg-zinc-700"
+                    >
+                      Generate Barcode
+                    </button>
+                  </div>
+
+                  <Field
+                    label="Variation Group"
+                    value={item.variation_group_key}
+                    onChange={(v: string) => updateField('variation_group_key', v)}
+                    placeholder="e.g. CARHARTT-JACKET"
+                  />
+                </div>
+
+                <p className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs font-bold text-zinc-400">
+                  SKU and barcode are unique identifiers for this company. Changing SKU after external export can be risky where a channel does not support SKU rename.
+                </p>
+              </section>
+
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
+                  Customs / Shipping
+                </h2>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  <Field
+                    label="HS Code"
+                    value={item.hs_code}
+                    onChange={(v: string) => updateField('hs_code', v)}
+                  />
+
+                  <DatalistField
+                    label="Country of Origin"
+                    value={item.country_of_origin || ''}
+                    onChange={(v: string) => updateField('country_of_origin', v)}
+                    options={countryOptions}
+                    listId="country-origin-options"
+                    placeholder="Select or type country"
+                  />
+
+                  <Field
+                    label="Shipping Size ID"
+                    value={item.shipping_size_identifier}
+                    onChange={(v: string) => updateField('shipping_size_identifier', v)}
+                    placeholder="Small parcel, RM Large Letter..."
+                  />
+
+                  <Field
+                    label="Package Weight (g)"
+                    value={item.package_weight_grams}
+                    onChange={(v: string) => updateField('package_weight_grams', v)}
+                  />
+
+                  <Field
+                    label="Length (cm)"
+                    value={item.package_length_cm}
+                    onChange={(v: string) => updateField('package_length_cm', v)}
+                  />
+
+                  <Field
+                    label="Width (cm)"
+                    value={item.package_width_cm}
+                    onChange={(v: string) => updateField('package_width_cm', v)}
+                  />
+
+                  <Field
+                    label="Height (cm)"
+                    value={item.package_height_cm}
+                    onChange={(v: string) => updateField('package_height_cm', v)}
+                  />
+
+                  <SelectField
+                    label="VAT Rule"
+                    value={item.vat_rule || 'channel_default'}
+                    onChange={(v: string) => updateField('vat_rule', v)}
+                    options={vatRuleOptions}
+                  />
+
+                  {item.vat_rule === 'custom' && (
+                    <Field
+                      label="VAT Rate (%)"
+                      value={item.vat_rate}
+                      onChange={(v: string) => updateField('vat_rate', v)}
+                    />
+                  )}
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+                      Child SKUs / Variations
+                    </h2>
+                    <p className="mt-1 text-xs font-bold text-zinc-500">
+                      Link existing child SKUs and define their variation values.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setChildSkuRows((current) => [
+                        ...current,
+                        { sku: '', size: '', colour: '', custom_name: '', custom_value: '' },
+                      ])
+                    }
+                    className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500"
+                  >
+                    Add Child SKU
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {childSkuRows.length === 0 && (
+                    <p className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs font-bold text-zinc-500">
+                      No child SKUs linked yet.
+                    </p>
+                  )}
+
+                  {childSkuRows.map((child, index) => (
+                    <div
+                      key={child.id || index}
+                      className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3 md:grid-cols-[1fr_120px_120px_140px_140px_auto]"
+                    >
+                      <Field
+                        label="Child SKU"
+                        value={child.sku}
+                        onChange={(value: string) =>
+                          setChildSkuRows((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, sku: value } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <Field
+                        label="Size"
+                        value={child.size || ''}
+                        onChange={(value: string) =>
+                          setChildSkuRows((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, size: value } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <Field
+                        label="Colour"
+                        value={child.colour || ''}
+                        onChange={(value: string) =>
+                          setChildSkuRows((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, colour: value } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <Field
+                        label="Custom Name"
+                        value={child.custom_name || ''}
+                        onChange={(value: string) =>
+                          setChildSkuRows((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, custom_name: value } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <Field
+                        label="Custom Entry"
+                        value={child.custom_value || ''}
+                        onChange={(value: string) =>
+                          setChildSkuRows((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, custom_value: value } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setChildSkuRows((current) =>
+                            current.filter((_, rowIndex) => rowIndex !== index)
+                          )
+                        }
+                        className="mt-5 h-9 rounded-lg bg-red-600 px-3 text-xs font-black text-white hover:bg-red-500"
+                      >
+                        Remove
+                      </button>
+
+                      {child.id && (
+                        <Link
+                          href={`/items/${child.id}`}
+                          className="md:col-span-6 rounded-lg border border-zinc-700 px-3 py-2 text-center text-xs font-black text-white hover:bg-zinc-800"
+                        >
+                          Open child SKU
+                        </Link>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+                      Composite Components
+                    </h2>
+                    <p className="mt-1 text-xs font-bold text-zinc-500">
+                      Add component SKUs and quantities. Saving with components makes this a composite SKU.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCompositionComponents((current) => [
+                        ...current,
+                        { component_sku: '', quantity: '1', notes: '' },
+                      ])
+                    }
+                    className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500"
+                  >
+                    Add Component
+                  </button>
+                </div>
+
+                {componentMessage && (
+                  <p className="mb-3 rounded-lg border border-yellow-800 bg-yellow-950 p-3 text-xs font-bold text-yellow-200">
+                    {componentMessage}
+                  </p>
+                )}
+
+                <div className="space-y-2">
+                  {compositionComponents.length === 0 && (
+                    <p className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs font-bold text-zinc-500">
+                      No component SKUs yet.
+                    </p>
+                  )}
+
+                  {compositionComponents.map((component, index) => (
+                    <div
+                      key={component.id || index}
+                      className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3 md:grid-cols-[1fr_120px_1fr_auto]"
+                    >
+                      <Field
+                        label="Component SKU"
+                        value={component.component_sku}
+                        onChange={(value: string) =>
+                          setCompositionComponents((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, component_sku: value, component_item_id: '' } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <Field
+                        label="Quantity"
+                        value={component.quantity}
+                        onChange={(value: string) =>
+                          setCompositionComponents((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, quantity: value } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <Field
+                        label="Notes"
+                        value={component.notes || ''}
+                        onChange={(value: string) =>
+                          setCompositionComponents((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, notes: value } : row
+                            )
+                          )
+                        }
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCompositionComponents((current) =>
+                            current.filter((_, rowIndex) => rowIndex !== index)
+                          )
+                        }
+                        className="mt-5 h-9 rounded-lg bg-red-600 px-3 text-xs font-black text-white hover:bg-red-500"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
+                  Composition Notes / Extended Properties
+                </h2>
+
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <TextArea
+                    label="Composition"
+                    value={item.composition}
+                    onChange={(v: string) => updateField('composition', v)}
+                  />
+
+                  <TextArea
+                    label="Extended Properties"
+                    value={JSON.stringify(item.extended_properties || {}, null, 2)}
+                    onChange={(v: string) => {
+                      try {
+                        updateField('extended_properties', v.trim() ? JSON.parse(v) : {})
+                      } catch {
+                        updateField('extended_properties', { raw: v })
+                      }
+                    }}
+                  />
+                </div>
+              </section>
+            </div>
+
+            <aside className="space-y-4">
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
+                  Quick Save
+                </h2>
+                <button
+                  onClick={() => saveItem({ promptChannelExport: true })}
+                  disabled={!staff || processingImages || exportingLinnworks}
+                  className="w-full rounded-xl bg-green-600 px-5 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
+                >
+                  Save Item
+                </button>
+              </section>
+            </aside>
+          </div>
+        )}
 
         {showEbayHtmlPreview && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">

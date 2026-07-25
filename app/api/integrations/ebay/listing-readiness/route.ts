@@ -105,6 +105,12 @@ function fieldValue(item: any, fieldOrValue: string) {
     tagged_size: item.tagged_size,
     colour: item.colour_primary || item.colour_secondary,
     color: item.colour_primary || item.colour_secondary,
+    'main colour': item.colour_primary,
+    'main color': item.colour_primary,
+    'primary colour': item.colour_primary,
+    'primary color': item.colour_primary,
+    'secondary colour': item.colour_secondary,
+    'secondary color': item.colour_secondary,
     colour_primary: item.colour_primary,
     colour_secondary: item.colour_secondary,
     department: item.gender,
@@ -121,6 +127,10 @@ function fieldValue(item: any, fieldOrValue: string) {
     pit_to_cuff_in: item.pit_to_cuff_in,
     sleeve_in: item.sleeve_in,
     waist_in: item.waist_in,
+    'waist size': item.waist_in,
+    waist: item.waist_in,
+    'inside leg': item.inside_leg_in,
+    inseam: item.inside_leg_in,
     inside_leg_in: item.inside_leg_in,
     rise_in: item.rise_in,
     hem_width_in: item.hem_width_in,
@@ -171,7 +181,7 @@ export async function GET(request: NextRequest) {
         tagged_size, colour_primary, colour_secondary, condition, material, era, style, flaws,
         pit_to_pit_in, collar_to_hem_in, pit_to_cuff_in, sleeve_in, waist_in, inside_leg_in, rise_in, hem_width_in,
         basic_title, ai_title, final_title, basic_description, ai_description, final_description,
-        selling_price, stock_level, ebay_category_id, ebay_category_name,
+        selling_price, stock_level, ebay_category_id, ebay_category_name, marketplace_tags,
         item_images(id, original_url, processed_url, image_order)`
       )
       .eq('sku', sku)

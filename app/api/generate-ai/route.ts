@@ -87,7 +87,8 @@ Return JSON with exactly these keys:
 {
   "ai_title": "SEO marketplace title under 80 characters",
   "ai_description": "Main generated description only, with no condition notes or measurements sections",
-  "website_title": "Cleaner professional website product title, not keyword stuffed"
+  "website_title": "Cleaner professional website product title, not keyword stuffed",
+  "marketplace_tags": ["10 short searchable marketplace tags, no hashtags"]
 }`,
             },
             ...(imageUrls || []).slice(0, 2).map((url: string) => ({
@@ -106,7 +107,17 @@ Return JSON with exactly these keys:
 
     const parsed = JSON.parse(cleanedText)
 
-    return Response.json(parsed)
+    const tags = Array.isArray(parsed.marketplace_tags)
+      ? parsed.marketplace_tags
+          .map((tag: unknown) => String(tag || '').trim())
+          .filter(Boolean)
+          .slice(0, 10)
+      : []
+
+    return Response.json({
+      ...parsed,
+      marketplace_tags: tags,
+    })
   } catch (error: any) {
     return Response.json(
       { error: error.message || 'AI generation failed' },

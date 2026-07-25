@@ -709,6 +709,7 @@ export default function SkuSearchPage() {
     }
 
     let itemData = data
+    let createdFromScan = false
 
     if (!itemData) {
       let identifierQuery = supabase
@@ -795,6 +796,7 @@ export default function SkuSearchPage() {
         }
 
         itemData = createdItem
+        createdFromScan = true
         setMessage(`Created item ${rawSku} by ${staff.name}`)
       }
     }
@@ -813,6 +815,18 @@ export default function SkuSearchPage() {
 
     const firstImage =
       firstImageRecord?.processed_url || firstImageRecord?.original_url || null
+
+    if (itemData?.id && !firstImage && createdFromScan) {
+      const startPhoto = window.confirm(
+        `Created item ${itemData.sku || rawSku}.\n\nStart a photography session for it now?`
+      )
+
+      if (startPhoto) {
+        setScanValue('')
+        router.push(`/items/${itemData.id}?start_photo=1`)
+        return
+      }
+    }
 
     const stockLocations = itemData ? await ensurePrimaryStockLocationRow(itemData, itemData.sku || rawSku) : []
 

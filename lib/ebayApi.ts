@@ -39,6 +39,24 @@ function text(value: any) {
   return String(value).trim()
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function ebayErrorId(data: any) {
+  const firstError = Array.isArray(data?.errors) ? data.errors[0] : null
+  return text(firstError?.errorId)
+}
+
+function ebayErrorMessage(path: string, data: any) {
+  return `${path} failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`
+}
+
+function shouldRetryEbayRequest(status: number, data: any) {
+  const errorId = ebayErrorId(data)
+  return status >= 500 || errorId === '25001'
+}
+
 function ebayClientCredentials() {
   const clientId = process.env.EBAY_CLIENT_ID || process.env.EBAY_APP_ID
   const clientSecret = process.env.EBAY_CLIENT_SECRET || process.env.EBAY_CERT_ID
@@ -161,32 +179,43 @@ export async function getEbayUserProfile(settings: EbaySettings, accessToken?: s
 
 export async function ebayRequest(settings: EbaySettings, path: string, options: RequestInit = {}) {
   const token = await getEbayAccessToken(settings)
-  const response = await fetch(`${ebayBaseUrl(settings)}${path}`, {
-    ...options,
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      authorization: `Bearer ${token}`,
-      'accept-language': settings.locale || 'en-GB',
-      'x-ebay-c-marketplace-id': settings.marketplace_id || 'EBAY_GB',
-      ...(options.headers || {}),
-    },
-  })
+  let lastError = ''
 
-  const responseText = await response.text()
-  let data: any = null
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(`${ebayBaseUrl(settings)}${path}`, {
+      ...options,
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+        'accept-language': settings.locale || 'en-GB',
+        'x-ebay-c-marketplace-id': settings.marketplace_id || 'EBAY_GB',
+        ...(options.headers || {}),
+      },
+    })
 
-  try {
-    data = responseText ? JSON.parse(responseText) : null
-  } catch {
-    data = responseText
+    const responseText = await response.text()
+    let data: any = null
+
+    try {
+      data = responseText ? JSON.parse(responseText) : null
+    } catch {
+      data = responseText
+    }
+
+    if (response.ok) return data
+
+    lastError = ebayErrorMessage(path, data)
+
+    if (attempt < 2 && shouldRetryEbayRequest(response.status, data)) {
+      await wait(700 * (attempt + 1))
+      continue
+    }
+
+    throw new Error(lastError)
   }
 
-  if (!response.ok) {
-    throw new Error(`${path} failed: ${typeof data === 'string' ? data : JSON.stringify(data)}`)
-  }
-
-  return data
+  throw new Error(lastError || `${path} failed.`)
 }
 
 export async function getDefaultCategoryTreeId(settings: EbaySettings) {

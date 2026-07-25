@@ -44,12 +44,21 @@ function toAspectArrays(aspects: Record<string, any>) {
   return Object.fromEntries(
     Object.entries(aspects || {})
       .map(([key, value]) => {
-        const values = Array.isArray(value)
+        const rawValues = Array.isArray(value)
           ? value.map(text).filter(Boolean)
           : text(value)
               .split(',')
               .map((part) => part.trim())
               .filter(Boolean)
+        const byKey = new Map<string, string>()
+
+        for (const rawValue of rawValues) {
+          const cleanValue = text(rawValue)
+          const normalised = cleanValue.toLowerCase()
+          if (cleanValue && !byKey.has(normalised)) byKey.set(normalised, cleanValue)
+        }
+
+        const values = Array.from(byKey.values())
 
         return [key, values]
       })

@@ -17,10 +17,36 @@ type InventoryItem = {
   reporting_category: string | null
   sub_category: string | null
   sub_type: string | null
+  item_type?: string | null
+  gender?: string | null
   colour_primary: string | null
+  colour_secondary?: string | null
   tagged_size: string | null
+  condition?: string | null
+  material?: string | null
+  era?: string | null
+  style?: string | null
+  flaws?: string | null
+  cost_price?: number | null
   waist_in: number | null
+  pit_to_pit_in?: number | null
+  collar_to_hem_in?: number | null
+  pit_to_cuff_in?: number | null
+  sleeve_in?: number | null
+  inside_leg_in?: number | null
+  rise_in?: number | null
+  hem_width_in?: number | null
   selling_price: number | null
+  hs_code?: string | null
+  country_of_origin?: string | null
+  composition?: string | null
+  shipping_size_identifier?: string | null
+  package_weight_grams?: number | null
+  package_length_cm?: number | null
+  package_width_cm?: number | null
+  package_height_cm?: number | null
+  vat_rule?: string | null
+  vat_rate?: number | null
   stock_level: number | null
   shop_floor_stock: number | null
   warehouse_stock: number | null
@@ -37,6 +63,8 @@ type InventoryItem = {
   vinted_status: string | null
   depop_status: string | null
   tiktok_shop_status: string | null
+  linnworks_sync_error?: string | null
+  ebay_sync_error?: string | null
   updated_at: string | null
 }
 
@@ -80,6 +108,48 @@ const CHANNEL_ICONS = [
 ] as const
 
 type ChannelKey = (typeof CHANNEL_ICONS)[number]['key']
+
+const BATCH_EDIT_FIELDS = [
+  { group: 'Catalogue', key: 'brand', label: 'Brand', mode: 'text' },
+  { group: 'Catalogue', key: 'reporting_category', label: 'Reporting Category', mode: 'text' },
+  { group: 'Catalogue', key: 'sub_category', label: 'Sub Category', mode: 'text' },
+  { group: 'Catalogue', key: 'item_type', label: 'Item Type', mode: 'text' },
+  { group: 'Catalogue', key: 'gender', label: 'Gender', mode: 'text' },
+  { group: 'Catalogue', key: 'tagged_size', label: 'Tagged Size', mode: 'text' },
+  { group: 'Catalogue', key: 'condition', label: 'Condition', mode: 'text' },
+  { group: 'Catalogue', key: 'material', label: 'Material', mode: 'text' },
+  { group: 'Catalogue', key: 'colour_primary', label: 'Primary Colour', mode: 'text' },
+  { group: 'Catalogue', key: 'colour_secondary', label: 'Secondary Colour', mode: 'text' },
+  { group: 'Catalogue', key: 'era', label: 'Era', mode: 'text' },
+  { group: 'Catalogue', key: 'style', label: 'Style', mode: 'text' },
+  { group: 'Catalogue', key: 'flaws', label: 'Flaws', mode: 'text' },
+  { group: 'Pricing', key: 'cost_price', label: 'Cost Price', mode: 'number' },
+  { group: 'Pricing', key: 'selling_price', label: 'Selling Price', mode: 'number' },
+  { group: 'Status', key: 'status', label: 'Status', mode: 'text' },
+  { group: 'Measurements', key: 'pit_to_pit_in', label: 'Pit to Pit', mode: 'number' },
+  { group: 'Measurements', key: 'collar_to_hem_in', label: 'Collar to Hem', mode: 'number' },
+  { group: 'Measurements', key: 'pit_to_cuff_in', label: 'Pit to Cuff', mode: 'number' },
+  { group: 'Measurements', key: 'sleeve_in', label: 'Sleeve', mode: 'number' },
+  { group: 'Measurements', key: 'waist_in', label: 'Waist', mode: 'number' },
+  { group: 'Measurements', key: 'inside_leg_in', label: 'Inside Leg', mode: 'number' },
+  { group: 'Measurements', key: 'rise_in', label: 'Rise', mode: 'number' },
+  { group: 'Measurements', key: 'hem_width_in', label: 'Leg Opening', mode: 'number' },
+  { group: 'Logistics', key: 'hs_code', label: 'HS Code', mode: 'text' },
+  { group: 'Logistics', key: 'country_of_origin', label: 'Country of Origin', mode: 'text' },
+  { group: 'Logistics', key: 'composition', label: 'Composition', mode: 'text' },
+  { group: 'Logistics', key: 'shipping_size_identifier', label: 'Shipping Size ID', mode: 'text' },
+  { group: 'Logistics', key: 'package_weight_grams', label: 'Package Weight (g)', mode: 'number' },
+  { group: 'Logistics', key: 'package_length_cm', label: 'Package Length (cm)', mode: 'number' },
+  { group: 'Logistics', key: 'package_width_cm', label: 'Package Width (cm)', mode: 'number' },
+  { group: 'Logistics', key: 'package_height_cm', label: 'Package Height (cm)', mode: 'number' },
+  { group: 'Logistics', key: 'vat_rule', label: 'VAT Rule', mode: 'text' },
+  { group: 'Logistics', key: 'vat_rate', label: 'VAT Rate', mode: 'number' },
+] as const
+
+const BATCH_EDIT_GROUPS = Array.from(new Set(BATCH_EDIT_FIELDS.map((field) => field.group)))
+
+const LIVE_CHANNEL_STATUSES = ['listed', 'synced', 'active']
+const RETRYABLE_CHANNEL_STATUSES = ['pending_update', 'failed', 'error']
 
 function text(value: any) {
   if (value === null || value === undefined) return ''
@@ -128,6 +198,7 @@ function channelIconClass(status?: string | null) {
   if (!value || value === 'not_listed' || value === 'not_synced') return 'opacity-20 grayscale'
   if (value === 'listed' || value === 'synced' || value === 'active') return 'opacity-100'
   if (value === 'error' || value === 'failed') return 'opacity-90 grayscale ring-1 ring-red-500'
+  if (value === 'pending_update') return 'opacity-100'
   if (value === 'queued' || value === 'pending' || value === 'syncing') return 'animate-pulse opacity-60 grayscale'
   return 'opacity-40 grayscale'
 }
@@ -135,6 +206,25 @@ function channelIconClass(status?: string | null) {
 function isChannelLive(status?: string | null) {
   const value = text(status).toLowerCase()
   return value === 'listed' || value === 'synced' || value === 'active'
+}
+
+function isChannelPendingUpdate(status?: string | null) {
+  return text(status).toLowerCase() === 'pending_update'
+}
+
+function isChannelRetryable(status?: string | null) {
+  return RETRYABLE_CHANNEL_STATUSES.includes(text(status).toLowerCase())
+}
+
+function channelErrorField(statusField: ChannelKey) {
+  if (statusField === 'linnworks_status') return 'linnworks_sync_error'
+  if (statusField === 'ebay_status') return 'ebay_sync_error'
+  return ''
+}
+
+function channelStatusAfterSuccess(statusField: ChannelKey) {
+  if (statusField === 'linnworks_status') return 'synced'
+  return 'listed'
 }
 
 function isNumericUniqueSku(item: InventoryItem) {
@@ -165,10 +255,15 @@ export default function InventoryPage() {
   const [skuTypeFilter, setSkuTypeFilter] = useState('ALL')
   const [stockFilter, setStockFilter] = useState('ALL')
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
-  const [exportChannel, setExportChannel] = useState('linnworks')
   const [exporting, setExporting] = useState(false)
   const [message, setMessage] = useState('')
   const [enabledIntegrationChannels, setEnabledIntegrationChannels] = useState<string[]>([])
+  const [showBatchEdit, setShowBatchEdit] = useState(false)
+  const [batchField, setBatchField] = useState<(typeof BATCH_EDIT_FIELDS)[number]['key']>('brand')
+  const [batchMode, setBatchMode] = useState<'set' | 'replace'>('set')
+  const [batchFind, setBatchFind] = useState('')
+  const [batchValue, setBatchValue] = useState('')
+  const [batchBusy, setBatchBusy] = useState(false)
 
   useEffect(() => {
     fetchInventory()
@@ -190,10 +285,36 @@ export default function InventoryPage() {
         reporting_category,
         sub_category,
         sub_type,
+        item_type,
+        gender,
         colour_primary,
+        colour_secondary,
         tagged_size,
+        condition,
+        material,
+        era,
+        style,
+        flaws,
+        cost_price,
+        pit_to_pit_in,
+        collar_to_hem_in,
+        pit_to_cuff_in,
+        sleeve_in,
         waist_in,
+        inside_leg_in,
+        rise_in,
+        hem_width_in,
         selling_price,
+        hs_code,
+        country_of_origin,
+        composition,
+        shipping_size_identifier,
+        package_weight_grams,
+        package_length_cm,
+        package_width_cm,
+        package_height_cm,
+        vat_rule,
+        vat_rate,
         stock_level,
         shop_floor_stock,
         warehouse_stock,
@@ -201,7 +322,9 @@ export default function InventoryPage() {
         current_bin,
         linnworks_managed,
         linnworks_status,
+        linnworks_sync_error,
         ebay_status,
+        ebay_sync_error,
         shopify_status,
         square_status,
         grailed_status,
@@ -497,6 +620,283 @@ export default function InventoryPage() {
     })
   }
 
+  function liveChannelsForItem(item: InventoryItem) {
+    return CHANNEL_ICONS.filter((channel) =>
+      LIVE_CHANNEL_STATUSES.includes(text(item[channel.key]).toLowerCase())
+    )
+  }
+
+  function pendingChannelUpdatesForItems(targetItems: InventoryItem[]) {
+    const updates: Record<string, unknown> = {}
+    let hasPending = false
+
+    for (const item of targetItems) {
+      for (const channel of liveChannelsForItem(item)) {
+        updates[channel.key] = 'pending_update'
+        hasPending = true
+      }
+    }
+
+    if (hasPending) updates.channel_pending_update_at = new Date().toISOString()
+    return updates
+  }
+
+  async function updateItemChannelStatus(
+    itemId: string,
+    updates: Record<string, unknown>
+  ) {
+    let query = supabase
+      .from('items')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', itemId)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { error } = await query
+    if (error) throw new Error(error.message)
+  }
+
+  async function fetchFullItem(itemId: string) {
+    let query = supabase
+      .from('items')
+      .select('*')
+      .eq('id', itemId)
+
+    if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+    const { data, error } = await query.maybeSingle()
+    if (error) throw new Error(error.message)
+    if (!data) throw new Error('Item not found for active company.')
+    return data
+  }
+
+  async function publishEbayChanges(item: InventoryItem) {
+    const readinessResponse = await fetch(
+      `/api/integrations/ebay/listing-readiness?sku=${encodeURIComponent(item.sku)}`
+    )
+    const readiness = await readinessResponse.json().catch(() => null)
+    if (!readinessResponse.ok || !readiness?.ok) {
+      throw new Error(readiness?.message || 'eBay readiness check failed.')
+    }
+
+    const draftResponse = await fetch('/api/integrations/ebay/shadow-draft', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ readiness }),
+    })
+    const draft = await draftResponse.json().catch(() => null)
+    if (!draftResponse.ok || !draft?.ok) {
+      throw new Error(draft?.message || 'Could not save eBay draft.')
+    }
+
+    const publishResponse = await fetch('/api/integrations/ebay/publish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sku: item.sku }),
+    })
+    const published = await publishResponse.json().catch(() => null)
+    if (!publishResponse.ok || !published?.ok) {
+      throw new Error(published?.message || 'Could not publish eBay changes.')
+    }
+  }
+
+  async function publishLinnworksChanges(item: InventoryItem) {
+    const fullItem = await fetchFullItem(item.id)
+    const response = await fetch('/api/integrations/linnworks/export-item', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(fullItem),
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok || data?.ok === false) {
+      throw new Error(data?.message || 'Linnworks export failed.')
+    }
+  }
+
+  async function publishChannelUpdate(item: InventoryItem, channel: (typeof CHANNEL_ICONS)[number]) {
+    const status = item[channel.key as ChannelKey]
+    if (!isChannelRetryable(status)) return
+
+    const channelKey = channel.key.replace(/_status$/, '')
+    const errorField = channelErrorField(channel.key)
+
+    if (!['ebay', 'linnworks'].includes(channelKey)) {
+      setMessage(`${channel.name} update route is not wired yet.`)
+      return
+    }
+
+    const retryText = isChannelPendingUpdate(status) ? 'unpublished changes' : 'failed update'
+    const confirmed = window.confirm(`Publish ${retryText} for ${item.sku} to ${channel.name}?`)
+    if (!confirmed) return
+
+    setExporting(true)
+    setMessage(`Publishing ${item.sku} changes to ${channel.name}...`)
+
+    try {
+      await updateItemChannelStatus(item.id, {
+        [channel.key]: 'pending',
+        ...(errorField ? { [errorField]: null } : {}),
+      })
+
+      setItems((current) =>
+        current.map((row) => (row.id === item.id ? { ...row, [channel.key]: 'pending' } : row))
+      )
+
+      if (channelKey === 'ebay') await publishEbayChanges(item)
+      if (channelKey === 'linnworks') await publishLinnworksChanges(item)
+
+      const successStatus = channelStatusAfterSuccess(channel.key)
+      await updateItemChannelStatus(item.id, {
+        [channel.key]: successStatus,
+        ...(errorField ? { [errorField]: null } : {}),
+      })
+
+      setItems((current) =>
+        current.map((row) =>
+          row.id === item.id
+            ? { ...row, [channel.key]: successStatus, ...(errorField ? { [errorField]: null } : {}) }
+            : row
+        )
+      )
+      setMessage(`${channel.name} updated for ${item.sku}.`)
+    } catch (error: any) {
+      const message = error.message || `${channel.name} update failed.`
+      await updateItemChannelStatus(item.id, {
+        [channel.key]: 'failed',
+        ...(errorField ? { [errorField]: message } : {}),
+      }).catch(() => null)
+
+      setItems((current) =>
+        current.map((row) =>
+          row.id === item.id
+            ? { ...row, [channel.key]: 'failed', ...(errorField ? { [errorField]: message } : {}) }
+            : row
+        )
+      )
+      setMessage(message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function applyBatchEdit() {
+    if (selectedItems.length < 2) {
+      setMessage('Select at least 2 items before using batch edit.')
+      return
+    }
+
+    const field = BATCH_EDIT_FIELDS.find((row) => row.key === batchField)
+    if (!field) return
+
+    if (batchMode === 'replace' && !batchFind) {
+      setMessage('Enter text to find before using find and replace.')
+      return
+    }
+
+    const liveCount = selectedItems.filter((item) => liveChannelsForItem(item).length > 0).length
+    const confirmed = window.confirm(
+      `Apply batch edit to ${selectedItems.length} item(s)?${
+        liveCount
+          ? `\n\n${liveCount} item(s) are already published. Their channel icons will be marked with unpublished changes.`
+          : ''
+      }`
+    )
+
+    if (!confirmed) return
+
+    setBatchBusy(true)
+    setMessage(`Applying batch edit to ${selectedItems.length} item(s)...`)
+
+    try {
+      let markedPending = false
+      let changedCount = 0
+
+      for (const item of selectedItems) {
+        const currentValue = text((item as any)[batchField])
+        let nextValue: any = batchValue
+
+        if (batchMode === 'replace') {
+          if (!currentValue.includes(batchFind)) continue
+          nextValue = currentValue.replaceAll(batchFind, batchValue)
+        }
+
+        if (field.mode === 'number') {
+          const numberValue = Number(nextValue)
+          nextValue = Number.isFinite(numberValue) ? numberValue : null
+        } else {
+          nextValue = text(nextValue) || null
+        }
+
+        const itemPendingUpdates = pendingChannelUpdatesForItems([item])
+        if (Object.keys(itemPendingUpdates).length) markedPending = true
+
+        let query = supabase
+          .from('items')
+          .update({
+            [batchField]: nextValue,
+            ...(batchField === 'sub_category' ? { sub_type: nextValue } : {}),
+            ...itemPendingUpdates,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', item.id)
+
+        if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+        const { error } = await query
+        if (error) throw new Error(error.message)
+        changedCount += 1
+      }
+
+      setItems((current) =>
+        current.map((item) => {
+          if (!selectedItemIds.includes(item.id)) return item
+          const currentValue = text((item as any)[batchField])
+          let nextValue: any = batchValue
+
+          if (batchMode === 'replace') {
+            if (!currentValue.includes(batchFind)) return item
+            nextValue = currentValue.replaceAll(batchFind, batchValue)
+          }
+
+          if (field.mode === 'number') {
+            const numberValue = Number(nextValue)
+            nextValue = Number.isFinite(numberValue) ? numberValue : null
+          } else {
+            nextValue = text(nextValue) || null
+          }
+
+          const itemPendingUpdates = pendingChannelUpdatesForItems([item])
+
+          return {
+            ...item,
+            [batchField]: nextValue,
+            ...(batchField === 'sub_category' ? { sub_type: nextValue } : {}),
+            ...itemPendingUpdates,
+          }
+        })
+      )
+
+      setShowBatchEdit(false)
+      setBatchFind('')
+      setBatchValue('')
+      setMessage(
+        `Batch edit applied to ${changedCount} item(s).${
+          markedPending ? ' Published channels were marked with unpublished changes.' : ''
+        }`
+      )
+
+      if (markedPending) {
+        window.alert(
+          'Batch edit saved. Published channel icons now show unpublished changes. Use the warning icons in Inventory to publish the updates.'
+        )
+      }
+    } catch (error: any) {
+      setMessage(error.message || 'Batch edit failed.')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
   async function deleteSelectedItems() {
     if (selectedItemIds.length === 0) return
 
@@ -551,11 +951,6 @@ export default function InventoryPage() {
 
   async function exportSelectedItems() {
     if (selectedItems.length === 0) return
-
-    if (exportChannel !== 'linnworks') {
-      setMessage(`${exportChannel} bulk export is not wired yet. Linnworks is available now.`)
-      return
-    }
 
     const confirmed = window.confirm(`Export ${selectedItems.length} selected item(s) to Linnworks?`)
     if (!confirmed) return
@@ -923,26 +1318,23 @@ export default function InventoryPage() {
                 {selectedItemIds.length} selected
               </span>
 
-              <select
-                value={exportChannel}
-                onChange={(e) => setExportChannel(e.target.value)}
-                className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs font-bold"
-              >
-                <option value="linnworks">Linnworks</option>
-                <option value="ebay">eBay</option>
-                <option value="depop">Depop</option>
-                <option value="vinted">Vinted</option>
-                <option value="shopify">Shopify</option>
-                <option value="tiktok_shop">TikTok Shop</option>
-              </select>
-
               <button
                 type="button"
                 onClick={exportSelectedItems}
                 disabled={exporting}
                 className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
               >
-                {exporting ? 'Exporting...' : 'Export to...'}
+                {exporting ? 'Exporting...' : 'Export to Linnworks'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowBatchEdit(true)}
+                disabled={exporting || selectedItemIds.length < 2}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
+                title={selectedItemIds.length < 2 ? 'Select at least 2 items for batch edit.' : 'Batch edit selected items.'}
+              >
+                Batch Edit
               </button>
 
               <button
@@ -1082,22 +1474,52 @@ export default function InventoryPage() {
                     <div className="flex flex-wrap items-center gap-1">
                       {visibleChannelIcons.map((channel) => {
                         const status = item[channel.key as ChannelKey]
+                        const pendingUpdate = isChannelPendingUpdate(status)
+                        const retryable = isChannelRetryable(status)
+                        const errorField = channelErrorField(channel.key)
+                        const errorMessage = errorField ? text((item as any)[errorField]) : ''
+                        const title = pendingUpdate
+                          ? `${channel.name}: unpublished changes pending. Click to publish changes.`
+                          : retryable
+                            ? `${channel.name}: failed update. Click to retry.${errorMessage ? ` ${errorMessage}` : ''}`
+                          : errorMessage
+                            ? `${channel.name}: ${statusText(status)} - ${errorMessage}`
+                            : `${channel.name}: ${statusText(status)}`
 
                         return (
-                          <img
+                          <button
                             key={channel.key}
-                            src={channel.src}
-                            alt={channel.name}
-                            title={`${channel.name}: ${statusText(status)}`}
-                            className={`h-4 w-4 rounded-sm ${channelIconClass(status)}`}
-                          />
+                            type="button"
+                            onClick={() => publishChannelUpdate(item, channel)}
+                            disabled={!retryable || exporting}
+                            title={title}
+                            className={`relative h-5 w-5 rounded-sm ${
+                              retryable ? 'cursor-pointer hover:bg-amber-500/20' : 'cursor-default'
+                            } disabled:cursor-default`}
+                          >
+                            <img
+                              src={channel.src}
+                              alt={channel.name}
+                              className={`h-4 w-4 rounded-sm ${channelIconClass(status)}`}
+                            />
+                            {pendingUpdate && (
+                              <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-400 text-[9px] font-black leading-none text-black ring-1 ring-black">
+                                ◷
+                              </span>
+                            )}
+                            {!pendingUpdate && retryable && (
+                              <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[9px] font-black leading-none text-white ring-1 ring-black">
+                                !
+                              </span>
+                            )}
+                          </button>
                         )
                       })}
                     </div>
 
                     <div className="text-right">
                       <Link
-                        href={`/working/items/${item.id}`}
+                        href={`/items/${item.id}`}
                         className="rounded-lg bg-white px-3 py-1 text-[11px] font-black text-black"
                       >
                         Edit
@@ -1109,6 +1531,101 @@ export default function InventoryPage() {
             </div>
           )}
         </section>
+
+        {showBatchEdit && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+            <div className="w-full max-w-xl rounded-2xl border border-neutral-700 bg-neutral-950 p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-black text-white">Batch Edit</h2>
+                  <p className="mt-1 text-sm font-bold text-neutral-400">
+                    {selectedItemIds.length} selected item(s). SKU, barcode, RFID and unique identifiers are kept out of batch edits for safety.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBatchEdit(false)}
+                  className="rounded-lg bg-neutral-800 px-3 py-2 text-xs font-black text-white hover:bg-neutral-700"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-black uppercase text-neutral-500">Field</span>
+                  <select
+                    value={batchField}
+                    onChange={(event) => setBatchField(event.target.value as any)}
+                    className="h-10 w-full rounded-lg border border-neutral-700 bg-black px-3 text-sm font-bold text-white outline-none"
+                  >
+                    {BATCH_EDIT_GROUPS.map((group) => (
+                      <optgroup key={group} label={group}>
+                        {BATCH_EDIT_FIELDS.filter((field) => field.group === group).map((field) => (
+                          <option key={field.key} value={field.key}>
+                            {field.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-black uppercase text-neutral-500">Mode</span>
+                  <select
+                    value={batchMode}
+                    onChange={(event) => setBatchMode(event.target.value as any)}
+                    className="h-10 w-full rounded-lg border border-neutral-700 bg-black px-3 text-sm font-bold text-white outline-none"
+                  >
+                    <option value="set">Set value</option>
+                    <option value="replace">Find and replace</option>
+                  </select>
+                </label>
+              </div>
+
+              {batchMode === 'replace' && (
+                <label className="mt-3 block">
+                  <span className="mb-1 block text-xs font-black uppercase text-neutral-500">Find</span>
+                  <input
+                    value={batchFind}
+                    onChange={(event) => setBatchFind(event.target.value)}
+                    className="h-10 w-full rounded-lg border border-neutral-700 bg-black px-3 text-sm font-bold text-white outline-none"
+                  />
+                </label>
+              )}
+
+              <label className="mt-3 block">
+                <span className="mb-1 block text-xs font-black uppercase text-neutral-500">
+                  {batchMode === 'replace' ? 'Replace With' : 'New Value'}
+                </span>
+                <input
+                  value={batchValue}
+                  onChange={(event) => setBatchValue(event.target.value)}
+                  className="h-12 w-full rounded-lg border border-neutral-700 bg-black px-3 text-lg font-black text-white outline-none"
+                />
+              </label>
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBatchEdit(false)}
+                  className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-black text-white hover:bg-neutral-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={applyBatchEdit}
+                  disabled={batchBusy}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-black text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {batchBusy ? 'Applying...' : 'Apply Batch Edit'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </StaffPermissionGate>
   )
