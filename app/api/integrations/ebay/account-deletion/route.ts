@@ -92,6 +92,7 @@ async function logDeletionEvent(params: {
   payload: any
   actionTaken: string
   processed?: boolean
+  companyId?: string | null
 }) {
   const supabase = getSupabaseAdmin()
   const payload = params.payload || {}
@@ -110,6 +111,7 @@ async function logDeletionEvent(params: {
       raw_payload: payload,
       action_taken: params.actionTaken,
       processed_at: params.processed ? new Date().toISOString() : null,
+      company_id: params.companyId || null,
     })
 
   if (error) {
@@ -122,11 +124,12 @@ async function logDeletionEvent(params: {
   }
 }
 
-async function disconnectEbayIntegration() {
+async function disconnectEbayIntegration(companyId: string) {
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
     .from('integration_settings')
     .select('id, settings')
+    .eq('company_id', companyId)
     .eq('channel', 'ebay')
     .maybeSingle()
 
@@ -159,6 +162,7 @@ async function disconnectEbayIntegration() {
       settings: nextSettings,
       updated_at: new Date().toISOString(),
     })
+    .eq('company_id', companyId)
     .eq('channel', 'ebay')
 }
 
@@ -189,30 +193,34 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseAdmin()
     const { data, error } = await supabase
       .from('integration_settings')
-      .select('settings')
+      .select('company_id, settings')
       .eq('channel', 'ebay')
-      .maybeSingle()
 
     if (error) throw new Error(error.message)
 
-    if (!deletionPayloadMatchesConnectedAccount(data?.settings || {}, payload)) {
+    const matchingIntegration = (data || []).find((row: any) =>
+      deletionPayloadMatchesConnectedAccount(row?.settings || {}, payload)
+    )
+
+    if (!matchingIntegration?.company_id) {
       await logDeletionEvent({
         payload,
         actionTaken: 'ignored_notification_did_not_match_connected_ebay_account',
         processed: true,
       })
 
-      return new NextResponse(null, { status: 204 })
+      return new NextResponse(null, { status: 200 })
     }
 
-    await disconnectEbayIntegration()
+    await disconnectEbayIntegration(matchingIntegration.company_id)
     await logDeletionEvent({
       payload,
       actionTaken: 'ebay_integration_disconnected_token_and_account_metadata_removed',
       processed: true,
+      companyId: matchingIntegration.company_id,
     })
 
-    return new NextResponse(null, { status: 204 })
+    return new NextResponse(null, { status: 200 })
   } catch (error: any) {
     try {
       await logDeletionEvent({
@@ -224,6 +232,6 @@ export async function POST(request: NextRequest) {
       // eBay requires fast acknowledgement; avoid cascading logging errors.
     }
 
-    return new NextResponse(null, { status: 202 })
+    return new NextResponse(null, { status: 200 })
   }
 }
