@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Loopbase Station Agent",
+  "version": "0.1.0",
+  "identifier": "io.loopbase.station-agent",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Loopbase Station Agent",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "publisher": "Loopbase",
+    "shortDescription": "Loopbase local hardware station companion",
+    "longDescription": "Local hardware companion for Loopbase remote printing, photography stations, file watchers, RFID reader/writers and RFID zone monitors.",
+    "resources": ["Loopbase Station Agent.exe"],
+    "externalBin": []
+  }
+}

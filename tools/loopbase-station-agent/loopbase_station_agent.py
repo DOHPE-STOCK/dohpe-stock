@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
 import os
@@ -9,6 +10,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -137,6 +139,11 @@ def default_config() -> dict[str, Any]:
             "enabled": True,
             "mode": "windows",
             "windows_printer_name": "",
+            "remote_enabled": True,
+            "remote_poll_enabled": False,
+            "station_token": "",
+            "poll_interval_seconds": 5,
+            "allowed_printers": [],
             "network_host": "",
             "network_port": 9100,
             "default_label_width_mm": 60,
@@ -359,6 +366,8 @@ class StationAgent:
         self.update_cache: dict[str, Any] = {}
         self.update_checked_at = 0.0
         self.update_error = ""
+        self.remote_print_reports: list[dict[str, Any]] = []
+        self.stop_event = threading.Event()
 
     def reload(self) -> None:
         self.config = load_config(self.config_path)
@@ -427,8 +436,21 @@ class StationAgent:
 
         printer = cfg["printer"]
         printer["enabled"] = bool_value(fields.get("printer_enabled"))
+        printer["remote_enabled"] = bool_value(fields.get("printer_remote_enabled"))
+        printer["remote_poll_enabled"] = bool_value(fields.get("printer_remote_poll_enabled"))
+        printer["station_token"] = fields.get("printer_station_token", printer.get("station_token") or "")
+        printer["poll_interval_seconds"] = int_value(
+            fields.get("printer_poll_interval_seconds"),
+            int(printer.get("poll_interval_seconds") or 5),
+        )
         printer["mode"] = fields.get("printer_mode", printer["mode"])
         printer["windows_printer_name"] = fields.get("windows_printer_name", printer["windows_printer_name"])
+        allowed_printers_raw = fields.get("allowed_printers_json", "")
+        if allowed_printers_raw:
+            parsed_printers = json.loads(allowed_printers_raw)
+            if not isinstance(parsed_printers, list):
+                raise RuntimeError("Allowed remote printers must be a JSON array.")
+            printer["allowed_printers"] = [text(name) for name in parsed_printers if text(name)]
         printer["network_host"] = fields.get("network_host", printer["network_host"])
         printer["network_port"] = int_value(fields.get("network_port"), int(printer["network_port"]))
         printer["default_label_width_mm"] = int_value(fields.get("label_width_mm"), int(printer["default_label_width_mm"]))
@@ -599,6 +621,7 @@ class StationAgent:
             "config_path": str(self.config_path),
             "app_url": self.config.get("app_url"),
             "update": self.check_for_updates(force=False),
+            "printers": list_windows_printers(),
             "processes": {key: process.status() for key, process in self.processes.items()},
         }
 
@@ -653,9 +676,75 @@ class StationAgent:
         return payload
 
     def stop_all(self) -> None:
+        self.stop_event.set()
         with self.lock:
             for process in self.processes.values():
                 process.stop()
+
+    def drain_remote_print_reports(self) -> list[dict[str, Any]]:
+        with self.lock:
+            reports = list(self.remote_print_reports)
+            self.remote_print_reports = []
+        return reports
+
+    def add_remote_print_report(self, report: dict[str, Any]) -> None:
+        with self.lock:
+            self.remote_print_reports.append(report)
+
+    def remote_print_poll_payload(self) -> dict[str, Any]:
+        return {
+            "station_token": deep_merge(default_config(), self.config)["printer"].get("station_token") or "",
+            "printers": list_windows_printers(),
+            "services": {key: process.status() for key, process in self.processes.items()},
+            "reports": self.drain_remote_print_reports(),
+        }
+
+    def poll_remote_print_jobs_once(self) -> None:
+        printer = deep_merge(default_config(), self.config)["printer"]
+        if not bool_value(printer.get("remote_enabled")) or not bool_value(printer.get("remote_poll_enabled")):
+            return
+        if not text(printer.get("station_token")):
+            return
+
+        url = absolute_app_url(self.config.get("app_url"), "/api/v1/station-print-jobs")
+        payload = json.dumps(self.remote_print_poll_payload()).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": AGENT_VERSION},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8")
+        result = json.loads(body or "{}")
+        for job in result.get("jobs") or []:
+            job_id = text(job.get("id"))
+            if not job_id:
+                continue
+            try:
+                handle_remote_print_job(
+                    self,
+                    {
+                        "printer_name": job.get("printer_name"),
+                        "job_type": job.get("job_type"),
+                        "document_name": job.get("document_name"),
+                        "filename": job.get("filename"),
+                        "content_base64": job.get("content_base64"),
+                        "content": job.get("content_text"),
+                    },
+                )
+                self.add_remote_print_report({"id": job_id, "status": "printed"})
+            except Exception as exc:
+                self.add_remote_print_report({"id": job_id, "status": "failed", "error_message": str(exc)})
+
+    def remote_print_poll_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self.poll_remote_print_jobs_once()
+            except Exception as exc:
+                print(f"Remote print poll failed: {exc}")
+            interval = int_value(deep_merge(default_config(), self.config)["printer"].get("poll_interval_seconds"), 5)
+            self.stop_event.wait(max(2, interval))
 
 
 def zpl_test_label(width_mm: int = 60, height_mm: int = 40) -> str:
@@ -692,6 +781,109 @@ def send_zpl_windows(printer_name: str, zpl: str) -> None:
         win32print.ClosePrinter(handle)
 
 
+def list_windows_printers() -> list[dict[str, Any]]:
+    if os.name != "nt":
+        return []
+    try:
+        import win32print  # type: ignore
+    except Exception:
+        return []
+
+    flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+    printers = []
+    try:
+        default_name = ""
+        try:
+            default_name = win32print.GetDefaultPrinter()
+        except Exception:
+            default_name = ""
+        for row in win32print.EnumPrinters(flags):
+            name = text(row[2] if len(row) > 2 else "")
+            if name:
+                printers.append({"name": name, "default": name == default_name})
+    except Exception:
+        return []
+    return sorted(printers, key=lambda item: (not item.get("default"), text(item.get("name")).lower()))
+
+
+def printer_allowed(agent_config: dict[str, Any], printer_name: str) -> bool:
+    printer = deep_merge(default_config(), agent_config)["printer"]
+    if not bool_value(printer.get("remote_enabled")):
+        return False
+    allowed = [text(name) for name in printer.get("allowed_printers") or [] if text(name)]
+    return not allowed or printer_name in allowed
+
+
+def send_windows_raw(printer_name: str, payload: bytes, document_name: str = "Loopbase Remote Print") -> None:
+    try:
+        import win32print  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("Windows RAW printing needs pywin32 installed: pip install pywin32") from exc
+
+    handle = win32print.OpenPrinter(printer_name)
+    try:
+        job = win32print.StartDocPrinter(handle, 1, (document_name, None, "RAW"))
+        try:
+            win32print.StartPagePrinter(handle)
+            win32print.WritePrinter(handle, payload)
+            win32print.EndPagePrinter(handle)
+        finally:
+            win32print.EndDocPrinter(handle)
+    finally:
+        win32print.ClosePrinter(handle)
+
+
+def print_file_windows(printer_name: str, filename: str, payload: bytes) -> Path:
+    if os.name != "nt":
+        raise RuntimeError("A4/document printing is currently supported on Windows station PCs.")
+    suffix = Path(filename or "loopbase-print.pdf").suffix or ".pdf"
+    temp_dir = Path(tempfile.gettempdir()) / "loopbase-station-agent-print-jobs"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    target = temp_dir / f"loopbase-{int(time.time() * 1000)}{suffix}"
+    target.write_bytes(payload)
+
+    try:
+        import win32api  # type: ignore
+        if printer_name:
+            win32api.ShellExecute(0, "printto", str(target), f'"{printer_name}"', str(temp_dir), 0)
+        else:
+            win32api.ShellExecute(0, "print", str(target), None, str(temp_dir), 0)
+    except Exception:
+        if printer_name:
+            raise RuntimeError("A4 printing to a named printer needs pywin32 installed and a default app that supports printto.")
+        os.startfile(str(target), "print")  # type: ignore[attr-defined]
+    return target
+
+
+def handle_remote_print_job(agent: StationAgent, payload: dict[str, Any]) -> dict[str, Any]:
+    printer_name = text(payload.get("printer_name")) or text(deep_merge(default_config(), agent.config)["printer"].get("windows_printer_name"))
+    if not printer_name:
+        raise RuntimeError("Remote print job needs a printer_name or default Windows printer in Station Agent settings.")
+    if not printer_allowed(agent.config, printer_name):
+        raise RuntimeError(f"Remote printing is not enabled for {printer_name}.")
+
+    job_type = text(payload.get("job_type") or "file_base64")
+    document_name = text(payload.get("document_name") or "Loopbase Remote Print")
+    if job_type == "zpl":
+        content = text(payload.get("content"))
+        if not content:
+            raise RuntimeError("ZPL print job is missing content.")
+        send_windows_raw(printer_name, content.encode("utf-8"), document_name)
+        return {"ok": True, "message": "ZPL print job sent.", "printer_name": printer_name}
+    if job_type in {"raw_text", "raw_base64"}:
+        if job_type == "raw_base64":
+            raw = base64.b64decode(text(payload.get("content_base64")))
+        else:
+            raw = text(payload.get("content")).encode("utf-8")
+        send_windows_raw(printer_name, raw, document_name)
+        return {"ok": True, "message": "Raw print job sent.", "printer_name": printer_name}
+    if job_type == "file_base64":
+        raw = base64.b64decode(text(payload.get("content_base64")))
+        saved_path = print_file_windows(printer_name, text(payload.get("filename") or document_name), raw)
+        return {"ok": True, "message": "Document print job handed to Windows.", "printer_name": printer_name, "local_path": str(saved_path)}
+    raise RuntimeError(f"Unsupported print job type: {job_type}.")
+
+
 def send_zpl_network(host: str, port: int, zpl: str) -> None:
     if not host:
         raise RuntimeError("Network printer host is required.")
@@ -718,6 +910,8 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     zone = cfg["rfid_zone_monitor"]
     printer = cfg["printer"]
     status = agent.status()
+    printers = status.get("printers") or []
+    allowed_printers_json = json.dumps(printer.get("allowed_printers") or [], indent=2)
     update = status.get("update") or {}
     update_available = update.get("available") is True
     update_download_url = text(update.get("download_url"))
@@ -775,6 +969,28 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     rfid_url = f"http://{html_attr(rfid.get('listen_host'))}:{int(rfid.get('listen_port') or 8765)}/status"
     rfid_zone_url = f"http://{html_attr(zone.get('listen_host'))}:{int(zone.get('listen_port') or 8775)}/"
     rfid_zone_antenna_json = json.dumps(zone.get("antenna_ports") or [], indent=2)
+    module_cards = [
+        ("remote-printer", "Remote Printer", "Print ZPL labels, A4 PDFs and local Windows printer jobs from any company PC."),
+        ("photography", "Photography Stations", "Run photography sessions, phone pairing and station capture tools."),
+        ("file-watcher", "File Watcher", "Watch camera, NAS or local folders and upload new session images."),
+        ("rfid-reader", "RFID Reader / Writer", "Use table readers for receiving, TID capture and future tag writing."),
+        ("rfid-zone", "RFID Zone Monitor", "Monitor exits, entrances, changing rooms and stock rooms with threshold readers."),
+        ("updates", "Updates", "Check for newer Station Agent versions while the app is running."),
+    ]
+    module_grid = "".join(
+        f"""
+        <a class="module-card" href="#{html_attr(anchor)}">
+          <span class="module-icon">{index}</span>
+          <strong>{html.escape(title)}</strong>
+          <small>{html.escape(description)}</small>
+        </a>
+        """
+        for index, (anchor, title, description) in enumerate(module_cards, start=1)
+    )
+    printer_options = "".join(
+        f"<option value=\"{html_attr(row.get('name'))}\" {selected(printer.get('windows_printer_name'), text(row.get('name')))}>{html.escape(text(row.get('name')))}{' (default)' if row.get('default') else ''}</option>"
+        for row in printers
+    )
     body = f"""<!doctype html>
 <html>
 <head>
@@ -815,6 +1031,18 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     .eyebrow {{ color: #8ee6bd; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }}
     .muted {{ color: var(--muted); font-weight: 700; margin-top: 6px; }}
     .grid {{ display: grid; grid-template-columns: 1.08fr .92fr; gap: 16px; margin-top: 16px; }}
+    .module-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }}
+    .module-card {{
+      min-height: 150px; display: grid; align-content: start; gap: 9px; text-decoration: none; color: var(--text);
+      border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(145deg, rgba(21,27,32,.96), rgba(10,13,16,.96)); padding: 18px;
+    }}
+    .module-card:hover {{ border-color: #36956a; transform: translateY(-1px); }}
+    .module-card strong {{ font-size: 18px; }}
+    .module-card small {{ color: var(--muted); font-weight: 750; line-height: 1.4; }}
+    .module-icon {{
+      width: 38px; height: 38px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center;
+      background: #153d2b; color: #9cf0c7; font-weight: 950; border: 1px solid #276947;
+    }}
     .panel, .service {{
       border: 1px solid var(--line); border-radius: 16px; background: rgba(16,20,24,.94); padding: 18px;
     }}
@@ -855,7 +1083,8 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     .update-banner.subtle {{ border-color: #394652; background: rgba(16,20,24,.92); }}
     .top-actions {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
     .section-stack {{ display: grid; gap: 16px; }}
-    @media (max-width: 900px) {{ .grid, .form-grid {{ grid-template-columns: 1fr; }} header {{ flex-direction: column; }} }}
+    .printer-list {{ display: grid; gap: 6px; margin-top: 10px; color: #cbd3d9; font-size: 13px; font-weight: 800; }}
+    @media (max-width: 900px) {{ .grid, .form-grid, .module-grid {{ grid-template-columns: 1fr; }} header {{ flex-direction: column; }} }}
   </style>
 </head>
 <body>
@@ -875,9 +1104,12 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     </header>
     {update_banner}
     {f'<div class="message">{html.escape(message)}</div>' if message else ''}
+    <section class="module-grid">
+      {module_grid}
+    </section>
     <div class="grid">
       <section class="section-stack">
-        <div class="panel">
+        <div class="panel" id="photography">
           <h2>Station Config</h2>
           <form method="post" action="/config/save">
             <div class="form-grid">
@@ -885,10 +1117,10 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
               <label class="wide">Update manifest URL<input name="update_manifest_url" value="{html_attr(cfg.get('update_manifest_url'))}" placeholder="Leave blank to use /api/station-agent/releases/latest"></label>
               <label>Update check interval seconds<input name="update_check_interval_seconds" value="{html_attr(cfg.get('update_check_interval_seconds'))}"></label>
               <label class="wide">Python path override<input name="python_path" value="{html_attr(cfg.get('python_path'))}" placeholder="Leave blank to use bundled/current Python"></label>
-              <label class="check">Photo ingest enabled<input type="checkbox" name="photo_enabled" {checked(photo.get('enabled'))}></label>
+              <label class="check" id="file-watcher">Photo ingest / file watcher enabled<input type="checkbox" name="photo_enabled" {checked(photo.get('enabled'))}></label>
               <label>Photo worker config<input name="photo_config_path" value="{html_attr(photo.get('config_path'))}"></label>
               <label>Photo setup port<input name="photo_setup_port" value="{html_attr(photo.get('setup_port'))}"></label>
-              <label class="check">RFID enabled<input type="checkbox" name="rfid_enabled" {checked(rfid.get('enabled'))}></label>
+              <label class="check" id="rfid-reader">RFID reader / writer enabled<input type="checkbox" name="rfid_enabled" {checked(rfid.get('enabled'))}></label>
               <label>RFID mode
                 <select name="rfid_mode">
                   <option value="mock" {selected(rfid.get('mode'), 'mock')}>Mock</option>
@@ -903,7 +1135,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
               <label>Serial port<input name="rfid_serial_port" value="{html_attr(rfid.get('serial_port'))}"></label>
               <label>Baud<input name="rfid_baud" value="{html_attr(rfid.get('baud'))}"></label>
               <label>Antenna<input name="rfid_antenna" value="{html_attr(rfid.get('antenna'))}"></label>
-              <label class="check wide">RFID threshold/zone monitor enabled<input type="checkbox" name="rfid_zone_enabled" {checked(zone.get('enabled'))}></label>
+              <label class="check wide" id="rfid-zone">RFID threshold/zone monitor enabled<input type="checkbox" name="rfid_zone_enabled" {checked(zone.get('enabled'))}></label>
               <label>Zone config<input name="rfid_zone_config_path" value="{html_attr(zone.get('config_path'))}"></label>
               <label class="wide">Zone token<input name="rfid_zone_token" value="{html_attr(zone.get('zone_token'))}" placeholder="Paste the token generated in Loopbase RFID zone settings"></label>
               <label>Zone mode
@@ -954,14 +1186,24 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
               <label>Warning min RSSI<input name="rfid_zone_exit_warning_min_rssi" value="{html_attr(zone.get('exit_warning_min_rssi'))}"></label>
               <label>Warning min reads<input name="rfid_zone_exit_warning_min_read_count" value="{html_attr(zone.get('exit_warning_min_read_count'))}"></label>
               <label class="wide">Zone antenna settings JSON<textarea name="rfid_zone_antenna_ports_json">{html.escape(rfid_zone_antenna_json)}</textarea></label>
-              <label class="check">Printer enabled<input type="checkbox" name="printer_enabled" {checked(printer.get('enabled'))}></label>
+              <label class="check" id="remote-printer">Remote printer enabled<input type="checkbox" name="printer_enabled" {checked(printer.get('enabled'))}></label>
+              <label class="check">Accept print jobs from Loopbase<input type="checkbox" name="printer_remote_enabled" {checked(printer.get('remote_enabled'))}></label>
+              <label class="check">Poll Loopbase remote print queue<input type="checkbox" name="printer_remote_poll_enabled" {checked(printer.get('remote_poll_enabled'))}></label>
+              <label class="wide">Station print token<input name="printer_station_token" value="{html_attr(printer.get('station_token'))}" placeholder="Paste the token from this device in Loopbase company settings"></label>
+              <label>Poll interval seconds<input name="printer_poll_interval_seconds" value="{html_attr(printer.get('poll_interval_seconds'))}"></label>
               <label>Printer mode
                 <select name="printer_mode">
                   <option value="windows" {selected(printer.get('mode'), 'windows')}>Windows printer</option>
                   <option value="network" {selected(printer.get('mode'), 'network')}>Network TCP/ZPL</option>
                 </select>
               </label>
-              <label>Windows printer name<input name="windows_printer_name" value="{html_attr(printer.get('windows_printer_name'))}"></label>
+              <label>Default Windows printer
+                <select name="windows_printer_name">
+                  <option value="">Choose local printer</option>
+                  {printer_options}
+                </select>
+              </label>
+              <label class="wide">Allowed remote printers JSON<textarea name="allowed_printers_json">{html.escape(allowed_printers_json)}</textarea></label>
               <label>Network host<input name="network_host" value="{html_attr(printer.get('network_host'))}"></label>
               <label>Network port<input name="network_port" value="{html_attr(printer.get('network_port'))}"></label>
               <label>Label width mm<input name="label_width_mm" value="{html_attr(printer.get('default_label_width_mm'))}"></label>
@@ -972,14 +1214,17 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
         </div>
 
         <div class="panel">
-          <h2>Printer Test</h2>
-          <p class="muted">Sends a simple ZPL test label using the printer settings above.</p>
+          <h2>Remote Printer</h2>
+          <p class="muted">This PC can expose its connected Windows printers to Loopbase users in the same company. ZPL labels are sent raw; A4/PDF-style jobs are handed to Windows using the local default app for that file type.</p>
+          <div class="printer-list">
+            {''.join(f"<span>{'Default: ' if row.get('default') else ''}{html.escape(text(row.get('name')))}</span>" for row in printers) or '<span>No Windows printers detected. Install pywin32 and check Windows printer settings.</span>'}
+          </div>
           <form method="post" action="/printer/test" style="margin-top:12px">
             <button>Print ZPL Test Label</button>
           </form>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="updates">
           <h2>Updates</h2>
           <p class="muted">Installed version: {html.escape(AGENT_VERSION_NUMBER)}. The agent checks Loopbase while this app is running and shows a download banner when a newer build is published.</p>
           <form method="post" action="/update/check" style="margin-top:12px">
@@ -1005,6 +1250,15 @@ def parse_form(handler: BaseHTTPRequestHandler) -> dict[str, str]:
     return {key: values[-1] if values else "" for key, values in parsed.items()}
 
 
+def parse_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    length = int(handler.headers.get("content-length") or 0)
+    raw = handler.rfile.read(length).decode("utf-8") if length else "{}"
+    data = json.loads(raw or "{}")
+    if not isinstance(data, dict):
+        raise RuntimeError("JSON body must be an object.")
+    return data
+
+
 def redirect(handler: BaseHTTPRequestHandler, message: str = "") -> None:
     target = "/"
     if message:
@@ -1022,6 +1276,9 @@ def make_handler(agent: StationAgent):
             if path == "/status":
                 self.send_json(200, agent.status())
                 return
+            if path == "/api/printers":
+                self.send_json(200, {"ok": True, "printers": list_windows_printers()})
+                return
             if path == "/":
                 message = text((query.get("message") or [""])[0]).replace("+", " ")
                 body = render_page(agent, message)
@@ -1036,6 +1293,11 @@ def make_handler(agent: StationAgent):
         def do_POST(self) -> None:
             path = urlparse(self.path).path
             try:
+                if path == "/api/print-job":
+                    payload = parse_json_body(self)
+                    self.send_json(200, handle_remote_print_job(agent, payload))
+                    return
+
                 fields = parse_form(self)
                 if path == "/config/save":
                     agent.write_config_from_form(fields)
@@ -1108,6 +1370,9 @@ def main() -> None:
             save_config(config_path, default_config())
 
     agent = StationAgent(config_path)
+    remote_print_thread = threading.Thread(target=agent.remote_print_poll_loop, name="remote-print-poll", daemon=True)
+    remote_print_thread.start()
+
     host = text(agent.config.get("agent_host")) or "127.0.0.1"
     port = int_value(agent.config.get("agent_port"), 8790)
     server = ThreadingHTTPServer((host, port), make_handler(agent))

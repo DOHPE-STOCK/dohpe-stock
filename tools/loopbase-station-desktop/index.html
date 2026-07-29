@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loopbase Station Agent</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Loopbase Station Agent</p>
+          <h1>Starting Local Hardware Control</h1>
+          <p class="muted">
+            The desktop app is opening the local Station Agent service. If it does not appear automatically, use the button below.
+          </p>
+        </div>
+        <a class="button" href="http://127.0.0.1:8790">Open Station Dashboard</a>
+      </section>
+
+      <section class="grid">
+        <article><span>1</span><strong>Remote Printer</strong><small>ZPL labels and A4 jobs from other company PCs.</small></article>
+        <article><span>2</span><strong>Photography Stations</strong><small>Photo sessions, station setup and phone pairing.</small></article>
+        <article><span>3</span><strong>File Watcher</strong><small>Watch camera, NAS and local folders.</small></article>
+        <article><span>4</span><strong>RFID Reader / Writer</strong><small>RFID table receiving and tag control.</small></article>
+        <article><span>5</span><strong>RFID Zone Monitor</strong><small>Entrances, exits, changing rooms and stock rooms.</small></article>
+      </section>
+
+      <p id="status" class="status">Waiting for the local service...</p>
+    </main>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

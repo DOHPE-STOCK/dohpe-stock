@@ -1,0 +1,17 @@
+{
+  "name": "loopbase-station-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "prepare:dist": "node scripts/prepare-dist.mjs",
+    "build": "npm run prepare:dist && tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.6.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.6.0"
+  }
+}

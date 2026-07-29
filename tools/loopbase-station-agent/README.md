@@ -2,14 +2,16 @@
 
 Local Windows companion for Loopbase station hardware.
 
-It is intentionally a small local web app first, so it can be packaged as an EXE later without changing the workflows.
+It is the local hardware service layer for the Tauri desktop app. It can still be
+opened directly in a browser for debugging.
 
 ## Current Modules
 
 - Photo ingest worker launcher and setup link
 - RFID bridge launcher for mock, TCP, or serial reader modes
 - RFID zone monitor launcher for threshold/doorway RUX2X readers
-- ZPL printer test panel for Windows printer names or network Zebra-compatible printers
+- Remote Printer module for local Windows printers, ZPL labels and A4/document jobs
+- Remote print polling so Loopbase users can print to this PC from another PC/location
 - Config editor saved to `config.local.json`
 
 ## Run During Development
@@ -49,7 +51,7 @@ dist\Loopbase Station Agent.exe
 
 ## Notes
 
-- For early testing, the EXE still launches the same Python worker scripts behind the scenes.
-- For SaaS clients, this can become an auto-updating signed Windows installer.
-- Printer support is first-pass ZPL. Windows RAW spooler requires `pywin32`; network printer mode sends ZPL to TCP port `9100`.
+- The Tauri desktop wrapper lives in `tools/loopbase-station-desktop`.
+- Remote printing works like a virtual printer relay: Loopbase queues jobs, this agent polls, prints locally, and reports success or failure.
+- Windows RAW/ZPL and A4 shell printing need `pywin32`; network printer mode sends ZPL to TCP port `9100`.
 - The RFID table bridge is for receiving tags on a table. The RFID zone monitor is separate and is for continuous doorway/exit monitoring with antenna-side direction inference.
