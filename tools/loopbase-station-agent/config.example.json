@@ -1,0 +1,94 @@
+{
+  "app_url": "https://loopbase.io",
+  "agent_host": "127.0.0.1",
+  "agent_port": 8790,
+  "python_path": "",
+  "photo_worker": {
+    "enabled": true,
+    "script_path": "../photo-ingest-worker/photo_ingest_worker.py",
+    "config_path": "photo-worker.local.json",
+    "setup_port": 8780
+  },
+  "rfid_bridge": {
+    "enabled": false,
+    "script_path": "../rfid-bridge/rfid_bridge.py",
+    "listen_host": "127.0.0.1",
+    "listen_port": 8765,
+    "mode": "mock",
+    "reader_host": "192.168.1.168",
+    "reader_port": 8160,
+    "serial_port": "COM7",
+    "baud": 115200,
+    "antenna": 1
+  },
+  "rfid_zone_monitor": {
+    "enabled": false,
+    "script_path": "../rfid-zone-monitor/rfid_zone_monitor.py",
+    "config_path": "rfid-zone-monitor.local.json",
+    "mode": "mock",
+    "zone_token": "",
+    "listen_host": "127.0.0.1",
+    "listen_port": 8775,
+    "reader_host": "192.168.0.200",
+    "reader_port": 200,
+    "q_value": 5,
+    "algorithm": 2,
+    "read_tid": true,
+    "apply_global_power_on_start": false,
+    "global_power_dbm": 24,
+    "apply_antenna_settings_on_start": false,
+    "antenna_ports": [
+      {
+        "antenna": 1,
+        "enabled": true,
+        "side": "outside",
+        "power_dbm": 24,
+        "inventory_count": 4
+      },
+      {
+        "antenna": 2,
+        "enabled": true,
+        "side": "inside",
+        "power_dbm": 24,
+        "inventory_count": 4
+      },
+      {
+        "antenna": 3,
+        "enabled": false,
+        "side": "outside",
+        "power_dbm": 18,
+        "inventory_count": 2
+      },
+      {
+        "antenna": 4,
+        "enabled": false,
+        "side": "inside",
+        "power_dbm": 18,
+        "inventory_count": 2
+      }
+    ],
+    "dedupe_window_seconds": 1.2,
+    "present_ttl_seconds": 5,
+    "room_stale_alert_seconds": 180,
+    "alarm_output_enabled": false,
+    "alarm_gpo_port": 1,
+    "alarm_active_level": 1,
+    "alarm_pulse_seconds": 3,
+    "alarm_trigger_on_app_alarm": true,
+    "exit_warning_enabled": false,
+    "exit_warning_gpo_port": 2,
+    "exit_warning_active_level": 1,
+    "exit_warning_pulse_seconds": 0.4,
+    "exit_warning_min_rssi": -48,
+    "exit_warning_min_read_count": 4
+  },
+  "printer": {
+    "enabled": true,
+    "mode": "windows",
+    "windows_printer_name": "",
+    "network_host": "",
+    "network_port": 9100,
+    "default_label_width_mm": 60,
+    "default_label_height_mm": 40
+  }
+}

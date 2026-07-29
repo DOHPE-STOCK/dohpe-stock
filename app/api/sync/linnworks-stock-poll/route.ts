@@ -2,6 +2,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 import { getEnabledIntegrationCompanies } from '@/lib/tenantCronCompanies'
+import { recalculateStockSummaryForSku } from '@/lib/stockSummary'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -1049,6 +1050,17 @@ async function processStockPoll(request: Request, companyId?: string | null) {
 
         if (updateError) throw new Error(updateError.message)
 
+        let stockTruthSummary: any = null
+        let stockTruthWarning: string | null = null
+
+        if (companyId) {
+          try {
+            stockTruthSummary = await recalculateStockSummaryForSku(supabase, companyId, sku)
+          } catch (error: any) {
+            stockTruthWarning = error.message || 'Stock truth summary update failed.'
+          }
+        }
+
         results.push({
           ok: true,
           sku,
@@ -1060,6 +1072,8 @@ async function processStockPoll(request: Request, companyId?: string | null) {
           warehouse_stock: updatePayload.warehouse_stock,
           location_rows_reconciled: rows.length,
           app_bin_changes: appBinChanges,
+          stock_truth_summary: debug ? stockTruthSummary : undefined,
+          stock_truth_warning: stockTruthWarning,
           rows: debug ? rows : undefined,
         })
       } catch (error: any) {

@@ -6,6 +6,13 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useCompany } from '@/app/context/CompanyContext'
+import {
+  isDigitalSkuType,
+  isQuantityTrackedSkuType,
+  normaliseSkuType,
+  SKU_TYPE_OPTIONS,
+  skuTypeLabel,
+} from '@/lib/skuTypes'
 
 type InventoryItem = {
   id: string
@@ -78,6 +85,21 @@ type StockLocationRow = {
   synced_at: string | null
 }
 
+type StockAlertRow = {
+  id: string
+  item_id: string | null
+  sku: string | null
+  alert_type: string
+  severity: 'info' | 'warning' | 'critical'
+  status: string
+  location_name: string | null
+  bin_code: string | null
+  quantity: number | null
+  title: string
+  message: string | null
+  created_at: string
+}
+
 type LocationLabelRow = {
   name: string
   label: string | null
@@ -108,6 +130,28 @@ const CHANNEL_ICONS = [
 ] as const
 
 type ChannelKey = (typeof CHANNEL_ICONS)[number]['key']
+type ChannelIcon = (typeof CHANNEL_ICONS)[number]
+type ExportProgress = {
+  open: boolean
+  status: 'working' | 'success' | 'failed'
+  title: string
+  message: string
+  details?: string[]
+}
+
+const SELLING_OR_MANAGEMENT_CHANNELS = new Set([
+  'linnworks',
+  'ebay',
+  'vinted',
+  'depop',
+  'grailed',
+  'vestiaire_collective',
+  'whatnot',
+  'shopify',
+  'tiktok_shop',
+])
+
+const WIRED_EXPORT_CHANNELS = new Set(['linnworks', 'ebay'])
 
 const BATCH_EDIT_FIELDS = [
   { group: 'Catalogue', key: 'brand', label: 'Brand', mode: 'text' },
@@ -227,8 +271,12 @@ function channelStatusAfterSuccess(statusField: ChannelKey) {
   return 'listed'
 }
 
+function channelIntegrationKey(channel: ChannelIcon) {
+  return channel.key.replace(/_status$/, '')
+}
+
 function isNumericUniqueSku(item: InventoryItem) {
-  return /^\d+$/.test(text(item.sku)) && text(item.sku_type).toLowerCase() !== 'reusable'
+  return /^\d+$/.test(text(item.sku)) && !isDigitalSkuType(item.sku_type)
 }
 
 function displayBarcode(item: InventoryItem) {
@@ -249,7 +297,7 @@ export default function InventoryPage() {
   const [locationColumns, setLocationColumns] = useState<LocationColumn[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [itemStatusFilter, setItemStatusFilter] = useState('review')
+  const [itemStatusFilter, setItemStatusFilter] = useState('ALL')
   const [locationFilter, setLocationFilter] = useState('ALL')
   const [binFilter, setBinFilter] = useState('ALL')
   const [skuTypeFilter, setSkuTypeFilter] = useState('ALL')
@@ -258,12 +306,23 @@ export default function InventoryPage() {
   const [exporting, setExporting] = useState(false)
   const [message, setMessage] = useState('')
   const [enabledIntegrationChannels, setEnabledIntegrationChannels] = useState<string[]>([])
+  const [showExportPicker, setShowExportPicker] = useState(false)
+  const [selectedExportChannels, setSelectedExportChannels] = useState<ChannelKey[]>([])
+  const [exportProgress, setExportProgress] = useState<ExportProgress>({
+    open: false,
+    status: 'working',
+    title: '',
+    message: '',
+  })
   const [showBatchEdit, setShowBatchEdit] = useState(false)
   const [batchField, setBatchField] = useState<(typeof BATCH_EDIT_FIELDS)[number]['key']>('brand')
   const [batchMode, setBatchMode] = useState<'set' | 'replace'>('set')
   const [batchFind, setBatchFind] = useState('')
   const [batchValue, setBatchValue] = useState('')
   const [batchBusy, setBatchBusy] = useState(false)
+  const [stockAlerts, setStockAlerts] = useState<StockAlertRow[]>([])
+  const [selectedStockAlertId, setSelectedStockAlertId] = useState('')
+  const [stockAlertBusy, setStockAlertBusy] = useState(false)
 
   useEffect(() => {
     fetchInventory()
@@ -366,20 +425,29 @@ export default function InventoryPage() {
       .select('channel, enabled')
       .eq('enabled', true)
 
+    let stockAlertsQuery = supabase
+      .from('stock_alerts')
+      .select('id, item_id, sku, alert_type, severity, status, location_name, bin_code, quantity, title, message, created_at')
+      .in('status', ['open', 'acknowledged'])
+      .order('created_at', { ascending: false })
+      .limit(100)
+
     if (schemaReady) {
       itemsQuery = itemsQuery.eq('company_id', activeCompanyId)
       stockLocationsQuery = stockLocationsQuery.eq('company_id', activeCompanyId)
       locationLabelsQuery = locationLabelsQuery.eq('company_id', activeCompanyId)
       transferItemsQuery = transferItemsQuery.eq('stock_transfers.company_id', activeCompanyId)
       integrationsQuery = integrationsQuery.eq('company_id', activeCompanyId)
+      stockAlertsQuery = stockAlertsQuery.eq('company_id', activeCompanyId)
     }
 
-    const [itemsResult, locationsResult, locationLabelsResult, transferItemsResult, integrationsResult] = await Promise.all([
+    const [itemsResult, locationsResult, locationLabelsResult, transferItemsResult, integrationsResult, stockAlertsResult] = await Promise.all([
       itemsQuery,
       stockLocationsQuery,
       locationLabelsQuery,
       transferItemsQuery,
       integrationsQuery,
+      stockAlertsQuery,
     ])
 
     if (itemsResult.error) {
@@ -410,6 +478,12 @@ export default function InventoryPage() {
       setMessage(integrationsResult.error.message)
       setLoading(false)
       return
+    }
+
+    if (stockAlertsResult.error) {
+      setStockAlerts([])
+    } else {
+      setStockAlerts((stockAlertsResult.data || []) as StockAlertRow[])
     }
 
     setItems((itemsResult.data || []) as InventoryItem[])
@@ -446,6 +520,10 @@ export default function InventoryPage() {
       ...buildInTransitRows((transferItemsResult.data || []) as any[]),
     ])
     setLoading(false)
+
+    const params = new URLSearchParams(window.location.search)
+    const alertId = text(params.get('stock_alert'))
+    if (alertId) setSelectedStockAlertId(alertId)
   }
 
   const filteredItems = useMemo(() => {
@@ -469,7 +547,7 @@ export default function InventoryPage() {
 
       const matchesSkuType =
         skuTypeFilter === 'ALL' ||
-        text(item.sku_type).toLowerCase() === skuTypeFilter.toLowerCase()
+        normaliseSkuType(item.sku_type) === skuTypeFilter.toLowerCase()
 
       const matchesItemStatus =
         itemStatusFilter === 'ALL' ||
@@ -564,7 +642,7 @@ export default function InventoryPage() {
       0
     )
     const inStock = filteredItems.filter((item) => Number(item.stock_level || 0) > 0).length
-    const reusable = filteredItems.filter((item) => text(item.sku_type).toLowerCase() === 'reusable').length
+    const quantityTracked = filteredItems.filter((item) => isQuantityTrackedSkuType(item.sku_type)).length
     const liveOnAnyChannel = filteredItems.filter((item) =>
       CHANNEL_ICONS.some((channel) => isChannelLive(item[channel.key]))
     ).length
@@ -574,7 +652,7 @@ export default function InventoryPage() {
       totalUnits,
       totalValue,
       inStock,
-      reusable,
+      quantityTracked,
       liveOnAnyChannel,
     }
   }, [filteredItems])
@@ -595,7 +673,7 @@ export default function InventoryPage() {
 
   function clearFilters() {
     setSearch('')
-    setItemStatusFilter('review')
+    setItemStatusFilter('ALL')
     setLocationFilter('ALL')
     setBinFilter('ALL')
     setSkuTypeFilter('ALL')
@@ -713,6 +791,18 @@ export default function InventoryPage() {
     }
   }
 
+  function finishExportProgress(progress: Omit<ExportProgress, 'open'>) {
+    setExportProgress({ ...progress, open: true })
+
+    if (progress.status === 'success') {
+      window.setTimeout(() => {
+        setExportProgress((current) =>
+          current.status === 'success' ? { ...current, open: false } : current
+        )
+      }, 1500)
+    }
+  }
+
   async function publishChannelUpdate(item: InventoryItem, channel: (typeof CHANNEL_ICONS)[number]) {
     const status = item[channel.key as ChannelKey]
     if (!isChannelRetryable(status)) return
@@ -730,7 +820,12 @@ export default function InventoryPage() {
     if (!confirmed) return
 
     setExporting(true)
-    setMessage(`Publishing ${item.sku} changes to ${channel.name}...`)
+    setExportProgress({
+      open: true,
+      status: 'working',
+      title: `Publishing to ${channel.name}`,
+      message: item.sku,
+    })
 
     try {
       await updateItemChannelStatus(item.id, {
@@ -758,7 +853,11 @@ export default function InventoryPage() {
             : row
         )
       )
-      setMessage(`${channel.name} updated for ${item.sku}.`)
+      finishExportProgress({
+        status: 'success',
+        title: `${channel.name} updated`,
+        message: item.sku,
+      })
     } catch (error: any) {
       const message = error.message || `${channel.name} update failed.`
       await updateItemChannelStatus(item.id, {
@@ -773,7 +872,12 @@ export default function InventoryPage() {
             : row
         )
       )
-      setMessage(message)
+      finishExportProgress({
+        status: 'failed',
+        title: `${channel.name} update failed`,
+        message,
+        details: [item.sku],
+      })
     } finally {
       setExporting(false)
     }
@@ -949,54 +1053,117 @@ export default function InventoryPage() {
     setMessage('Selected items deleted.')
   }
 
-  async function exportSelectedItems() {
+  function openExportPicker() {
     if (selectedItems.length === 0) return
 
-    const confirmed = window.confirm(`Export ${selectedItems.length} selected item(s) to Linnworks?`)
+    if (wiredExportChannels.length === 0) {
+      setMessage('No active selling or inventory-management integrations are ready to export yet.')
+      return
+    }
+
+    setSelectedExportChannels(wiredExportChannels.map((channel) => channel.key))
+    setShowExportPicker(true)
+  }
+
+  function toggleExportChannel(channelKey: ChannelKey) {
+    setSelectedExportChannels((current) =>
+      current.includes(channelKey)
+        ? current.filter((key) => key !== channelKey)
+        : [...current, channelKey]
+    )
+  }
+
+  async function exportSelectedItems(channelKeys = selectedExportChannels) {
+    if (selectedItems.length === 0) return
+
+    const channels = wiredExportChannels.filter((channel) => channelKeys.includes(channel.key))
+    if (channels.length === 0) {
+      setMessage('Choose at least one active export channel.')
+      return
+    }
+
+    const channelNames = channels.map((channel) => channel.name).join(', ')
+    const confirmed = window.confirm(
+      `Export ${selectedItems.length} selected item(s) to ${channelNames}?`
+    )
     if (!confirmed) return
 
     setExporting(true)
-    setMessage(`Exporting ${selectedItems.length} item(s) to Linnworks...`)
+    setShowExportPicker(false)
+    setExportProgress({
+      open: true,
+      status: 'working',
+      title: 'Exporting selected items',
+      message: `${selectedItems.length} item(s) to ${channelNames}`,
+    })
 
     let successCount = 0
     let failCount = 0
+    const failures: string[] = []
 
     for (const item of selectedItems) {
-      try {
-        await supabase
-          .from('items')
-          .update({ linnworks_status: 'pending', updated_at: new Date().toISOString() })
-          .eq('id', item.id)
+      for (const channel of channels) {
+        const channelKey = channelIntegrationKey(channel)
+        const errorField = channelErrorField(channel.key)
 
-        const response = await fetch('/api/integrations/linnworks/export-item', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(item),
-        })
+        try {
+          await updateItemChannelStatus(item.id, {
+            [channel.key]: 'pending',
+            ...(errorField ? { [errorField]: null } : {}),
+          })
 
-        const data = await response.json()
-        if (!response.ok || data?.ok === false) {
-          throw new Error(data?.message || 'Linnworks export failed.')
+          setItems((current) =>
+            current.map((row) =>
+              row.id === item.id
+                ? { ...row, [channel.key]: 'pending', ...(errorField ? { [errorField]: null } : {}) }
+                : row
+            )
+          )
+
+          if (channelKey === 'ebay') await publishEbayChanges(item)
+          if (channelKey === 'linnworks') await publishLinnworksChanges(item)
+
+          const successStatus = channelStatusAfterSuccess(channel.key)
+          await updateItemChannelStatus(item.id, {
+            [channel.key]: successStatus,
+            ...(errorField ? { [errorField]: null } : {}),
+          })
+
+          successCount += 1
+          setItems((current) =>
+            current.map((row) =>
+              row.id === item.id
+                ? { ...row, [channel.key]: successStatus, ...(errorField ? { [errorField]: null } : {}) }
+                : row
+            )
+          )
+        } catch (error: any) {
+          const message = error.message || `${channel.name} export failed.`
+          failCount += 1
+          failures.push(`${item.sku} / ${channel.name}: ${message}`)
+          await updateItemChannelStatus(item.id, {
+            [channel.key]: 'failed',
+            ...(errorField ? { [errorField]: message } : {}),
+          }).catch(() => null)
+
+          setItems((current) =>
+            current.map((row) =>
+              row.id === item.id
+                ? { ...row, [channel.key]: 'failed', ...(errorField ? { [errorField]: message } : {}) }
+                : row
+            )
+          )
         }
-
-        successCount += 1
-        setItems((current) =>
-          current.map((row) =>
-            row.id === item.id ? { ...row, linnworks_status: 'synced' } : row
-          )
-        )
-      } catch {
-        failCount += 1
-        setItems((current) =>
-          current.map((row) =>
-            row.id === item.id ? { ...row, linnworks_status: 'failed' } : row
-          )
-        )
       }
     }
 
     setExporting(false)
-    setMessage(`Linnworks export finished: ${successCount} succeeded, ${failCount} failed.`)
+    finishExportProgress({
+      status: failCount > 0 ? 'failed' : 'success',
+      title: failCount > 0 ? 'Channel export failed' : 'Channel export complete',
+      message: `${successCount} succeeded, ${failCount} failed`,
+      details: failures.slice(0, 8),
+    })
   }
 
   function resolveLocationName(locationName: string | null | undefined) {
@@ -1161,6 +1328,85 @@ export default function InventoryPage() {
     return getBinTooltip(item)
   }
 
+  function alertsForItem(item: InventoryItem) {
+    const itemId = text(item.id)
+    const sku = text(item.sku).toUpperCase()
+    return stockAlerts.filter((alert) => {
+      const alertItemId = text(alert.item_id)
+      const alertSku = text(alert.sku).toUpperCase()
+      return (itemId && alertItemId === itemId) || (sku && alertSku === sku)
+    })
+  }
+
+  const selectedStockAlert = useMemo(
+    () => stockAlerts.find((alert) => alert.id === selectedStockAlertId) || null,
+    [stockAlerts, selectedStockAlertId]
+  )
+
+  const selectedStockAlertItem = useMemo(() => {
+    if (!selectedStockAlert) return null
+    return (
+      items.find((item) => text(item.id) === text(selectedStockAlert.item_id)) ||
+      items.find((item) => text(item.sku).toUpperCase() === text(selectedStockAlert.sku).toUpperCase()) ||
+      null
+    )
+  }, [items, selectedStockAlert])
+
+  const selectedStockAlertPositiveRows = useMemo(() => {
+    if (!selectedStockAlertItem) return []
+    return getLocationRows(selectedStockAlertItem)
+      .filter((row) => Number(row.stock_level || 0) > 0)
+      .filter((row) => {
+        const sameLocation =
+          canonicalLocationKey(row.location_name) === canonicalLocationKey(selectedStockAlert?.location_name)
+        const sameBin = text(row.bin_code).toUpperCase() === text(selectedStockAlert?.bin_code).toUpperCase()
+        return !(sameLocation && sameBin)
+      })
+      .sort((a, b) => Number(b.stock_level || 0) - Number(a.stock_level || 0))
+  }, [selectedStockAlertItem, selectedStockAlert, locations, locationLabels])
+
+  async function resolveNegativeStockFromRow(row: StockLocationRow) {
+    if (!selectedStockAlert) return
+
+    const needed = Math.abs(Math.min(0, Number(selectedStockAlert.quantity || 0))) || 1
+    const quantity = Math.min(needed, Number(row.stock_level || 0))
+    if (quantity <= 0) return
+
+    const confirmed = window.confirm(
+      `Move ${quantity} unit(s) from ${displayLocation(row.location_name)} / ${row.bin_code || 'Default'} to cover ${displayLocation(selectedStockAlert.location_name)} / ${selectedStockAlert.bin_code || 'Default'}?`
+    )
+
+    if (!confirmed) return
+
+    setStockAlertBusy(true)
+    setMessage('')
+
+    try {
+      const response = await fetch('/api/stock/alerts/resolve-negative', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          alert_id: selectedStockAlert.id,
+          source_row_id: row.id,
+          quantity,
+        }),
+      })
+      const payload = await response.json().catch(() => null)
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.message || payload?.error || 'Negative stock resolve failed.')
+      }
+
+      setMessage(payload.resolved ? 'Negative stock alert resolved.' : 'Stock moved. Alert still needs more stock.')
+      setSelectedStockAlertId('')
+      await fetchInventory()
+    } catch (error: any) {
+      setMessage(error.message || 'Negative stock resolve failed.')
+    } finally {
+      setStockAlertBusy(false)
+    }
+  }
+
   function displayLocation(locationName: string | null | undefined) {
     const name = resolveLocationName(locationName)
     if (name === IN_TRANSIT_LOCATION) return 'IN TRANSIT'
@@ -1171,7 +1417,19 @@ export default function InventoryPage() {
     locationColumns.length > 0 ? locationColumns : [{ key: 'LOCATION-1', label: 'WAREHOUSE' }]
 
   const visibleChannelIcons = CHANNEL_ICONS.filter((channel) =>
-    enabledIntegrationChannels.includes(channel.key.replace(/_status$/, ''))
+    enabledIntegrationChannels.includes(channelIntegrationKey(channel))
+  )
+
+  const activeExportChannels = CHANNEL_ICONS.filter((channel) => {
+    const integrationKey = channelIntegrationKey(channel)
+    return (
+      SELLING_OR_MANAGEMENT_CHANNELS.has(integrationKey) &&
+      enabledIntegrationChannels.includes(integrationKey)
+    )
+  })
+
+  const wiredExportChannels = activeExportChannels.filter((channel) =>
+    WIRED_EXPORT_CHANNELS.has(channelIntegrationKey(channel))
   )
 
   const tableGridTemplate = '28px 130px 105px 90px 90px minmax(150px,0.9fr) 68px 78px minmax(80px,140px) 96px'
@@ -1218,8 +1476,8 @@ export default function InventoryPage() {
             </div>
 
             <div className="rounded-xl bg-neutral-950 p-4">
-              <p className="text-xs font-black uppercase text-neutral-500">Reusable</p>
-              <p className="mt-1 text-2xl font-black">{summary.reusable}</p>
+              <p className="text-xs font-black uppercase text-neutral-500">Standard</p>
+              <p className="mt-1 text-2xl font-black">{summary.quantityTracked}</p>
             </div>
 
             <div className="rounded-xl bg-neutral-950 p-4">
@@ -1255,8 +1513,11 @@ export default function InventoryPage() {
               className="rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none"
             >
               <option value="ALL">All SKU Types</option>
-              <option value="single_use">Single Use</option>
-              <option value="reusable">Reusable</option>
+              {SKU_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
 
             <select
@@ -1318,23 +1579,32 @@ export default function InventoryPage() {
                 {selectedItemIds.length} selected
               </span>
 
-              <button
-                type="button"
-                onClick={exportSelectedItems}
-                disabled={exporting}
-                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-              >
-                {exporting ? 'Exporting...' : 'Export to Linnworks'}
-              </button>
+              {selectedItemIds.length === 1 ? (
+                <Link
+                  href={`/items/${selectedItemIds[0]}`}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white hover:bg-blue-500"
+                >
+                  Edit
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowBatchEdit(true)}
+                  disabled={exporting}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
+                  title="Batch edit selected items."
+                >
+                  Batch Edit
+                </button>
+              )}
 
               <button
                 type="button"
-                onClick={() => setShowBatchEdit(true)}
-                disabled={exporting || selectedItemIds.length < 2}
-                className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                title={selectedItemIds.length < 2 ? 'Select at least 2 items for batch edit.' : 'Batch edit selected items.'}
+                onClick={openExportPicker}
+                disabled={exporting}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
               >
-                Batch Edit
+                {exporting ? 'Exporting...' : 'Export'}
               </button>
 
               <button
@@ -1391,6 +1661,7 @@ export default function InventoryPage() {
           ) : (
             <div className="divide-y divide-neutral-800">
               {filteredItems.map((item) => {
+                const itemAlerts = alertsForItem(item)
                 return (
                   <div
                     key={item.id}
@@ -1422,7 +1693,7 @@ export default function InventoryPage() {
 
                     <div>
                       <span className="rounded-full bg-neutral-800 px-2 py-1 text-[10px] font-black uppercase text-white">
-                        {item.sku_type || 'single_use'}
+                        {skuTypeLabel(item.sku_type)}
                       </span>
                     </div>
 
@@ -1459,9 +1730,21 @@ export default function InventoryPage() {
                     </div>
 
                     <div className="group relative font-black">
-                      <span className="inline-flex cursor-help rounded-md px-1">
-                        {getTotalStock(item)}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="inline-flex cursor-help rounded-md px-1">
+                          {getTotalStock(item)}
+                        </span>
+                        {itemAlerts.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStockAlertId(itemAlerts[0].id)}
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[11px] font-black text-white hover:bg-red-500"
+                            title={itemAlerts[0].message || itemAlerts[0].title}
+                          >
+                            !
+                          </button>
+                        )}
+                      </div>
                       <div className="pointer-events-none absolute bottom-6 left-0 z-50 hidden min-w-56 whitespace-pre-line rounded-lg border border-neutral-700 bg-black p-3 text-xs font-bold leading-5 text-white shadow-2xl group-hover:block">
                         {getStockTooltip(item, tooltipLocationColumns)}
                       </div>
@@ -1517,7 +1800,13 @@ export default function InventoryPage() {
                       })}
                     </div>
 
-                    <div className="text-right">
+                    <div className="flex justify-end gap-2 text-right">
+                      <Link
+                        href={`/stock-truth?sku=${encodeURIComponent(item.sku)}`}
+                        className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-1 text-[11px] font-black text-white hover:border-white"
+                      >
+                        Truth
+                      </Link>
                       <Link
                         href={`/items/${item.id}`}
                         className="rounded-lg bg-white px-3 py-1 text-[11px] font-black text-black"
@@ -1531,6 +1820,207 @@ export default function InventoryPage() {
             </div>
           )}
         </section>
+
+        {showExportPicker && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+            <div className="w-full max-w-lg rounded-2xl border border-neutral-700 bg-neutral-950 p-5 text-white shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-black text-white">Export Selected Items</h2>
+                  <p className="mt-1 text-sm font-bold text-neutral-400">
+                    {selectedItemIds.length} selected item(s). Choose active selling or inventory-management channels.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowExportPicker(false)}
+                  className="rounded-lg bg-neutral-800 px-3 py-2 text-xs font-black text-white hover:bg-neutral-700"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {wiredExportChannels.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedExportChannels(wiredExportChannels.map((channel) => channel.key))}
+                    className="flex w-full items-center justify-between rounded-xl border border-emerald-700 bg-emerald-950 px-4 py-3 text-left text-sm font-black text-white hover:bg-emerald-900"
+                  >
+                    <span>All available export channels</span>
+                    <span className="text-xs text-emerald-200">{wiredExportChannels.length} channels</span>
+                  </button>
+                )}
+
+                {wiredExportChannels.map((channel) => {
+                  const checked = selectedExportChannels.includes(channel.key)
+
+                  return (
+                    <button
+                      key={channel.key}
+                      type="button"
+                      onClick={() => toggleExportChannel(channel.key)}
+                      className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm font-black text-white ${
+                        checked
+                          ? 'border-emerald-500 bg-emerald-900'
+                          : 'border-neutral-700 bg-black hover:bg-neutral-900'
+                      }`}
+                    >
+                      <span className="flex items-center gap-3">
+                        <img src={channel.src} alt="" className="h-5 w-5 rounded-sm" />
+                        {channel.name}
+                      </span>
+                      <span className={checked ? 'text-emerald-200' : 'text-neutral-500'}>
+                        {checked ? 'Selected' : 'Click to include'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowExportPicker(false)}
+                  className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-black text-white hover:bg-neutral-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportSelectedItems()}
+                  disabled={exporting || selectedExportChannels.length === 0}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-black text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {exporting ? 'Exporting...' : 'Export Now'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {exportProgress.open && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-neutral-700 bg-neutral-950 p-5 text-white shadow-2xl">
+              <div className="flex items-start gap-3">
+                <div
+                  className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-black ${
+                    exportProgress.status === 'success'
+                      ? 'bg-emerald-500 text-black'
+                      : exportProgress.status === 'failed'
+                        ? 'bg-red-600 text-white'
+                        : 'bg-blue-600 text-white'
+                  }`}
+                >
+                  {exportProgress.status === 'success' ? '✓' : exportProgress.status === 'failed' ? '!' : '...'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-lg font-black text-white">{exportProgress.title}</h2>
+                  <p className="mt-1 text-sm font-bold text-neutral-300">{exportProgress.message}</p>
+                  {exportProgress.details && exportProgress.details.length > 0 && (
+                    <div className="mt-3 max-h-40 overflow-auto rounded-xl border border-neutral-800 bg-black p-3 text-xs font-bold leading-5 text-red-200">
+                      {exportProgress.details.map((detail, index) => (
+                        <p key={`${detail}-${index}`}>{detail}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {exportProgress.status === 'failed' && (
+                <div className="mt-5 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setExportProgress((current) => ({ ...current, open: false }))}
+                    className="rounded-lg bg-white px-4 py-2 text-sm font-black text-black hover:bg-neutral-200"
+                  >
+                    Acknowledge
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {selectedStockAlert && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+            <div className="w-full max-w-3xl rounded-2xl border border-red-900 bg-neutral-950 p-5 text-white shadow-2xl">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase text-red-300">Negative Stock Alert</p>
+                  <h2 className="mt-1 text-xl font-black">{selectedStockAlert.sku || 'Unknown SKU'}</h2>
+                  <p className="mt-1 text-sm font-bold text-neutral-400">
+                    {displayLocation(selectedStockAlert.location_name)} / {selectedStockAlert.bin_code || 'Default'}:
+                    {' '}
+                    <span className="text-red-300">{selectedStockAlert.quantity ?? '-'}</span>
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedStockAlertId('')}
+                  className="rounded-lg bg-neutral-800 px-3 py-2 text-xs font-black text-white hover:bg-neutral-700"
+                >
+                  Close
+                </button>
+              </div>
+
+              <p className="mb-4 rounded-xl border border-neutral-800 bg-neutral-900 p-3 text-sm font-bold text-neutral-300">
+                {selectedStockAlert.message || 'Choose a positive source bin below to cover the negative quantity.'}
+              </p>
+
+              {!selectedStockAlertItem ? (
+                <p className="rounded-xl border border-yellow-800 bg-yellow-950 p-4 text-sm font-bold text-yellow-200">
+                  This SKU is not currently visible in the active inventory result set.
+                </p>
+              ) : selectedStockAlertPositiveRows.length === 0 ? (
+                <div className="rounded-xl border border-yellow-800 bg-yellow-950 p-4">
+                  <p className="text-sm font-black text-yellow-100">No positive bins found for this SKU.</p>
+                  <p className="mt-1 text-xs font-bold text-yellow-200">
+                    Use recount mode later, or manually adjust the stock level from the item logistics tab.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-xl border border-neutral-800">
+                  <div className="grid grid-cols-[1fr_1fr_80px_120px] gap-2 bg-neutral-900 px-3 py-2 text-[11px] font-black uppercase text-neutral-500">
+                    <span>Source Location</span>
+                    <span>Source Bin</span>
+                    <span className="text-right">Qty</span>
+                    <span className="text-right">Action</span>
+                  </div>
+
+                  <div className="divide-y divide-neutral-800">
+                    {selectedStockAlertPositiveRows.map((row) => (
+                      <div
+                        key={row.id}
+                        className="grid grid-cols-[1fr_1fr_80px_120px] gap-2 px-3 py-3 text-sm font-bold"
+                      >
+                        <span>{displayLocation(row.location_name)}</span>
+                        <span className="text-neutral-300">{row.bin_code || 'Default'}</span>
+                        <span className="text-right text-white">{row.stock_level}</span>
+                        <button
+                          type="button"
+                          onClick={() => resolveNegativeStockFromRow(row)}
+                          disabled={stockAlertBusy}
+                          className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          Deduct
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-900 p-3">
+                <p className="text-xs font-black uppercase text-neutral-500">Recount QR</p>
+                <p className="mt-1 text-sm font-bold text-neutral-300">
+                  Scanner recount tasks will use this alert as the starting point in the next pass.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showBatchEdit && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">

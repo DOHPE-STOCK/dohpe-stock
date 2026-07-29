@@ -18,11 +18,21 @@ const INTEGRATION_CHANNELS = [
 ]
 
 const DEFAULT_LOCATIONS = [
-  { code: 'LOCATION-1', name: 'LOCATION-1', label: 'Default', type: 'warehouse', bin_mode: 'range', basic_bins: ['Default'] },
-  { code: 'LOCATION-2', name: 'LOCATION-2', label: 'Default', type: 'shop', bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
-  { code: 'LOCATION-3', name: 'LOCATION-3', label: 'Default', type: 'shop', bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
-  { code: 'LOCATION-4', name: 'LOCATION-4', label: 'Default', type: 'shop', bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
-  { code: 'LOCATION-5', name: 'LOCATION-5', label: 'Default', type: 'shop', bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  {
+    code: 'LOCATION-1',
+    name: 'LOCATION-1',
+    label: 'Default',
+    type: 'warehouse',
+    bin_mode: 'range',
+    basic_bins: ['Default'],
+    location_type: 'stock',
+    is_retail: false,
+    floor_bin_code: null,
+    quarantine_bin_code: 'QUARANTINE',
+    default_receiving_bin: 'Default',
+    is_default_receiving: true,
+    sort_order: 1,
+  },
 ]
 
 const STARTER_LIMITS = {
@@ -346,6 +356,40 @@ export async function POST(request: Request) {
         updated_at: now,
       })),
       { onConflict: 'company_id,code' }
+    )
+
+    await supabase.from('warehouse_bins').upsert(
+      DEFAULT_LOCATIONS.map((location) => ({
+        company_id: companyId,
+        location_name: location.name,
+        bin_code: 'Default',
+        label: 'Default',
+        display_name: 'Default',
+        bin_type: 'default',
+        is_floor: false,
+        is_sellable: true,
+        is_pickable: true,
+        is_active: location.code === 'LOCATION-1',
+        updated_at: now,
+      })),
+      { onConflict: 'company_id,location_name,bin_code' }
+    )
+
+    await supabase.from('warehouse_bins').upsert(
+      DEFAULT_LOCATIONS.map((location) => ({
+        company_id: companyId,
+        location_name: location.name,
+        bin_code: location.quarantine_bin_code || 'QUARANTINE',
+        label: location.quarantine_bin_code || 'QUARANTINE',
+        display_name: location.quarantine_bin_code || 'QUARANTINE',
+        bin_type: 'quarantine',
+        is_floor: false,
+        is_sellable: false,
+        is_pickable: true,
+        is_active: location.code === 'LOCATION-1',
+        updated_at: now,
+      })),
+      { onConflict: 'company_id,location_name,bin_code' }
     )
 
     await supabase.from('integration_settings').upsert(

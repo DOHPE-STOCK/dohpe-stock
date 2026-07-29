@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 import { useCompany } from '@/app/context/CompanyContext'
+import { isQuantityTrackedSkuType } from '@/lib/skuTypes'
 
 type ItemRow = {
   id: string
@@ -2644,7 +2645,7 @@ export default function CheckoutPage() {
                             <div className="mt-2 flex items-end justify-between gap-2">
   <div className="min-w-0">
     <p className="truncate text-xs font-black">
-      {item.sku_type === 'reusable' && item.barcode_number
+      {isQuantityTrackedSkuType(item.sku_type) && item.barcode_number
         ? item.barcode_number
         : item.sku}
     </p>

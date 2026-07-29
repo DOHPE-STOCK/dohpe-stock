@@ -123,50 +123,84 @@ export async function POST(request: Request) {
       const buffer = Buffer.from(await file.arrayBuffer())
       const sha = sha256Buffer(buffer)
       if (workerSha && workerSha !== sha) return failure(400, 'SHA-256 does not match uploaded result file.')
+      const cleanRepresentationType = representationType || 'processed_preview'
 
-      const storagePath = [
-        'processed-representations',
-        source.company_id,
-        source.station_id,
-        new Date().toISOString().slice(0, 10),
-        `${Date.now()}-${sha.slice(0, 12)}-${originalFilename}`,
-      ].join('/')
-
-      const { error: uploadError } = await supabase.storage
-        .from('item-images')
-        .upload(storagePath, buffer, {
-          contentType: file.type || 'application/octet-stream',
-          upsert: false,
-        })
-
-      if (uploadError) throw new Error(uploadError.message)
-
-      const { data: urlData } = supabase.storage.from('item-images').getPublicUrl(storagePath)
-
-      const { data: inserted, error: representationError } = await supabase
+      const { data: existingRepresentation, error: existingRepresentationError } = await supabase
         .from('photo_capture_representations')
-        .insert({
-          company_id: source.company_id,
-          capture_id: job.capture_id,
-          item_id: itemId,
-          session_id: job.session_id || null,
-          source_id: source.id,
-          representation_type: representationType || 'processed_preview',
-          status: 'available',
-          storage_bucket: 'item-images',
-          storage_path: storagePath,
-          public_url: urlData.publicUrl,
-          sha256: sha,
-          mime_type: file.type || null,
-          file_size_bytes: buffer.length,
-          original_filename: originalFilename,
-          metadata,
-        })
         .select('*')
-        .single()
+        .eq('company_id', source.company_id)
+        .eq('capture_id', job.capture_id)
+        .eq('representation_type', cleanRepresentationType)
+        .eq('sha256', sha)
+        .maybeSingle()
 
-      if (representationError) throw new Error(representationError.message)
-      representation = inserted
+      if (existingRepresentationError) throw new Error(existingRepresentationError.message)
+
+      if (existingRepresentation) {
+        representation = existingRepresentation
+      } else {
+        const storagePath = [
+          'processed-representations',
+          source.company_id,
+          source.station_id,
+          new Date().toISOString().slice(0, 10),
+          `${Date.now()}-${sha.slice(0, 12)}-${originalFilename}`,
+        ].join('/')
+
+        const { error: uploadError } = await supabase.storage
+          .from('item-images')
+          .upload(storagePath, buffer, {
+            contentType: file.type || 'application/octet-stream',
+            upsert: false,
+          })
+
+        if (uploadError) throw new Error(uploadError.message)
+
+        const { data: urlData } = supabase.storage.from('item-images').getPublicUrl(storagePath)
+
+        const { data: inserted, error: representationError } = await supabase
+          .from('photo_capture_representations')
+          .insert({
+            company_id: source.company_id,
+            capture_id: job.capture_id,
+            item_id: itemId,
+            session_id: job.session_id || null,
+            source_id: source.id,
+            representation_type: cleanRepresentationType,
+            status: cleanRepresentationType === 'baseline_processed' ? 'available' : 'preview',
+            storage_bucket: 'item-images',
+            storage_path: storagePath,
+            public_url: urlData.publicUrl,
+            sha256: sha,
+            mime_type: file.type || null,
+            file_size_bytes: buffer.length,
+            original_filename: originalFilename,
+            metadata,
+          })
+          .select('*')
+          .single()
+
+        if (representationError) {
+          if (String(representationError.message || '').includes('duplicate key value')) {
+            const { data: duplicateRepresentation, error: duplicateLookupError } = await supabase
+              .from('photo_capture_representations')
+              .select('*')
+              .eq('company_id', source.company_id)
+              .eq('capture_id', job.capture_id)
+              .eq('representation_type', cleanRepresentationType)
+              .eq('sha256', sha)
+              .maybeSingle()
+
+            if (duplicateLookupError) throw new Error(duplicateLookupError.message)
+            if (!duplicateRepresentation) throw new Error(representationError.message)
+            representation = duplicateRepresentation
+          } else {
+            throw new Error(representationError.message)
+          }
+        } else {
+          representation = inserted
+        }
+      }
 
       if (representationType === 'baseline_processed' && itemImageId) {
         const { data: itemImage, error: itemImageError } = await supabase
@@ -179,18 +213,18 @@ export async function POST(request: Request) {
         if (itemImageError) throw new Error(itemImageError.message)
 
         const imageUpdate: Record<string, unknown> = {
-          baseline_processed_url: urlData.publicUrl,
-          baseline_processed_storage_bucket: 'item-images',
-          baseline_processed_storage_path: storagePath,
-          baseline_processed_file_size_bytes: buffer.length,
+          baseline_processed_url: representation.public_url,
+          baseline_processed_storage_bucket: representation.storage_bucket || 'item-images',
+          baseline_processed_storage_path: representation.storage_path || null,
+          baseline_processed_file_size_bytes: representation.file_size_bytes || buffer.length,
           baseline_processed_created_at: new Date().toISOString(),
         }
 
         if (itemImage && !itemImage.processed_url) {
-          imageUpdate.processed_url = urlData.publicUrl
-          imageUpdate.processed_storage_bucket = 'item-images'
-          imageUpdate.processed_storage_path = storagePath
-          imageUpdate.processed_file_size_bytes = buffer.length
+          imageUpdate.processed_url = representation.public_url
+          imageUpdate.processed_storage_bucket = representation.storage_bucket || 'item-images'
+          imageUpdate.processed_storage_path = representation.storage_path || null
+          imageUpdate.processed_file_size_bytes = representation.file_size_bytes || buffer.length
         }
 
         const { error: baselineError } = await supabase

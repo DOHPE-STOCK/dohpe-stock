@@ -12,6 +12,7 @@ type NavKey =
   | 'settings'
   | 'sku'
   | 'inventory'
+  | 'open-orders'
   | 'processing'
   | 'working'
   | 'review'
@@ -41,6 +42,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { key: 'sku', label: 'Search/Create', href: '/' },
   { key: 'inventory', label: 'Inventory', href: '/inventory', permission: 'inventory' },
+  { key: 'open-orders', label: 'Open Orders', href: '/open-orders', permission: 'inventory' },
   { key: 'processing', label: 'Processing', href: '/processing', permission: ['working', 'review', 'finalised'] },
   { key: 'transfers', label: 'Transfers', href: '/transfers', permission: 'scanner' },
   { key: 'allocate', label: 'Allocate', href: '/scanner/allocate', permission: 'scanner' },

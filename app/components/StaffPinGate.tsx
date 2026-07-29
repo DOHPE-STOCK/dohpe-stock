@@ -12,13 +12,20 @@ type StaffRow = {
   must_change_pin: boolean
   role?: string | null
   permissions?: StaffPermissions | null
+  pin_timeout_minutes?: number | null
 }
 
 type StaffPinGateProps = {
   onStaffSelected?: (staff: StaffUser | null) => void
 }
 
-const STAFF_PIN_SESSION_MS = 1000 * 60 * 30
+const DEFAULT_STAFF_PIN_SESSION_MINUTES = 30
+
+function cleanPinTimeoutMinutes(value: any) {
+  const minutes = Number(value)
+  if (!Number.isFinite(minutes)) return DEFAULT_STAFF_PIN_SESSION_MINUTES
+  return Math.min(480, Math.max(5, Math.round(minutes)))
+}
 
 export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
   const [staffUsers, setStaffUsers] = useState<StaffRow[]>([])
@@ -38,7 +45,7 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
   async function fetchStaff() {
     const { data, error } = await supabase
       .from('staff_users')
-      .select('id, name, pin_code, is_active, must_change_pin, role, permissions')
+      .select('id, name, pin_code, is_active, must_change_pin, role, permissions, pin_timeout_minutes')
       .eq('is_active', true)
       .order('name', { ascending: true })
 
@@ -57,6 +64,7 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
       role: staff.role || 'staff',
       permissions: staff.permissions || {},
       is_active: staff.is_active !== false,
+      pin_timeout_minutes: cleanPinTimeoutMinutes(staff.pin_timeout_minutes),
     }
   }
 
@@ -94,14 +102,16 @@ export default function StaffPinGate({ onStaffSelected }: StaffPinGateProps) {
 
   function saveStaff(staff: StaffRow) {
     const safeStaff = normaliseStaff(staff)
+    const timeoutMinutes = cleanPinTimeoutMinutes(safeStaff.pin_timeout_minutes)
     const persistedStaff = {
       ...safeStaff,
-      expires_at: Date.now() + STAFF_PIN_SESSION_MS,
+      pin_timeout_minutes: timeoutMinutes,
+      expires_at: Date.now() + timeoutMinutes * 60 * 1000,
     }
     const encoded = encodeURIComponent(JSON.stringify(persistedStaff))
 
     window.localStorage.setItem('active_staff_user', JSON.stringify(persistedStaff))
-    document.cookie = `active_staff_user=${encoded}; path=/; max-age=1800; SameSite=Lax`
+    document.cookie = `active_staff_user=${encoded}; path=/; max-age=${timeoutMinutes * 60}; SameSite=Lax`
 
     onStaffSelected?.(safeStaff)
 

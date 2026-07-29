@@ -55,6 +55,12 @@ function randomSequenceNumber() {
   return Math.floor(Math.random() * 10000000)
 }
 
+function normalizeReceivingMethod(value: any) {
+  const method = text(value).toLowerCase()
+  if (['photo_only', 'barcode', 'rfid', 'untracked'].includes(method)) return method
+  return ''
+}
+
 async function generateSkus(supabase: any, quantity: number, companyId?: string | null) {
   const yearPrefix = getYearPrefix()
   const skus: string[] = []
@@ -131,7 +137,12 @@ export async function POST(request: Request) {
     const staffId = text(body.staff_id || body.staffId)
     const requestCompanyId = text(body.company_id || body.companyId)
     const actualQuantity = Number(body.actual_quantity ?? body.actualQuantity ?? 0)
-    const useRfid = Boolean(body.use_rfid ?? body.useRfid ?? true)
+    const requestedReceivingMethod = normalizeReceivingMethod(body.receiving_method || body.receivingMethod)
+    const useRfid = requestedReceivingMethod
+      ? requestedReceivingMethod === 'rfid'
+      : Boolean(body.use_rfid ?? body.useRfid ?? false)
+    const receivingMethod = requestedReceivingMethod || (useRfid ? 'rfid' : 'barcode')
+    const createsWorkingItems = receivingMethod !== 'untracked'
     const tids = Array.from(
       new Set(
         (Array.isArray(body.tids) ? body.tids : [])
@@ -147,6 +158,10 @@ export async function POST(request: Request) {
 
     if (!Number.isInteger(actualQuantity) || actualQuantity <= 0) {
       return NextResponse.json({ ok: false, message: 'Actual quantity must be greater than 0.' }, { status: 400 })
+    }
+
+    if (!['photo_only', 'barcode', 'rfid', 'untracked'].includes(receivingMethod)) {
+      return NextResponse.json({ ok: false, message: 'Invalid receiving method.' }, { status: 400 })
     }
 
     if (useRfid && tids.length !== actualQuantity) {
@@ -210,13 +225,38 @@ export async function POST(request: Request) {
       }
     }
 
+    if (!createsWorkingItems) {
+      const { error: batchUpdateError } = await supabase
+        .from('inbound_batches')
+        .update({
+          actual_quantity: actualQuantity,
+          status: 'completed',
+          received_by: staffId || null,
+          received_at: now,
+          updated_at: now,
+        })
+        .eq('id', batch.id)
+        .eq('company_id', companyId)
+
+      if (batchUpdateError) throw new Error(batchUpdateError.message)
+
+      return NextResponse.json({
+        ok: true,
+        batch_id: batch.id,
+        batch_code: batch.batch_code,
+        receiving_method: receivingMethod,
+        created_count: 0,
+        items: [],
+      })
+    }
+
     const skus = await generateSkus(supabase, actualQuantity, companyId)
     const itemRows = skus.map((sku, index) => ({
       ...(companyId ? { company_id: companyId } : {}),
       sku,
       status: 'working',
       stock_level: 1,
-      sku_type: 'single_use',
+      sku_type: 'standard',
       location_status: 'stored',
       current_location: WAREHOUSE_LOCATION,
       current_bin: DEFAULT_BIN,
@@ -239,6 +279,10 @@ export async function POST(request: Request) {
       inbound_batch_id: batch.id,
       inbound_batch_code: batch.batch_code,
       rfid_tid: useRfid ? tids[index] : null,
+      extended_properties: {
+        ...(batch.extended_properties && typeof batch.extended_properties === 'object' ? batch.extended_properties : {}),
+        receiving_method: receivingMethod,
+      },
       last_saved_by: staffId || null,
       updated_at: now,
     }))
@@ -339,6 +383,7 @@ export async function POST(request: Request) {
       ok: true,
       batch_id: batch.id,
       batch_code: batch.batch_code,
+      receiving_method: receivingMethod,
       created_count: createdItems?.length || 0,
       items: createdItems || [],
     })

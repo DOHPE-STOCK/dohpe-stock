@@ -10,6 +10,8 @@ import { useCompany } from '@/app/context/CompanyContext'
 import CompanySettingsPanel from '@/app/settings/company/CompanySettingsPanel'
 import BillingSettingsPanel from '@/app/settings/company/billing/BillingSettingsPanel'
 import IntegrationsPanel from '@/app/settings/integrations/IntegrationsPanel'
+import RfidZonesPanel from '@/app/settings/rfid-zones/RfidZonesPanel'
+import StationAgentPanel from '@/app/settings/station-agent/StationAgentPanel'
 import SupportPanel from '@/app/settings/support/SupportPanel'
 
 type StaffUser = {
@@ -23,6 +25,7 @@ type StaffUser = {
   role?: string
   permissions?: Record<string, boolean>
   payroll_settings?: PayrollStaffSettings | null
+  pin_timeout_minutes?: number | null
 }
 
 type PayrollPeriod = 'weekly' | 'biweekly' | 'monthly'
@@ -60,6 +63,13 @@ type LocationSetting = {
   is_active: boolean
   bin_mode: 'basic' | 'range'
   basic_bins: string[]
+  location_type?: 'stock' | 'virtual'
+  is_retail?: boolean
+  floor_bin_code?: string | null
+  quarantine_bin_code?: string | null
+  default_receiving_bin?: string | null
+  is_default_receiving?: boolean
+  sort_order?: number | null
 }
 
 type FixedCost = {
@@ -78,6 +88,8 @@ type OpenSection =
   | 'support'
   | 'integrations'
   | 'processing'
+  | 'station_agent'
+  | 'rfid_zones'
   | 'locations'
   | 'users'
   | 'payroll'
@@ -103,11 +115,76 @@ const permissionOptions = [
 const roleOptions = ['admin', 'manager', 'staff', 'checkout', 'scanner']
 
 const defaultLocationSettings: LocationSetting[] = [
-  { name: 'LOCATION-1', label: 'WAREHOUSE', is_active: true, bin_mode: 'range', basic_bins: ['Default'] },
-  { name: 'LOCATION-2', label: 'SHOP-1', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
-  { name: 'LOCATION-3', label: 'SHOP-2', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
-  { name: 'LOCATION-4', label: 'SHOP-3', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
-  { name: 'LOCATION-5', label: 'SHOP-4', is_active: true, bin_mode: 'basic', basic_bins: ['FLOOR', 'STOCK'] },
+  {
+    name: 'LOCATION-1',
+    label: 'WAREHOUSE',
+    is_active: true,
+    bin_mode: 'range',
+    basic_bins: ['Default'],
+    location_type: 'stock',
+    is_retail: false,
+    floor_bin_code: null,
+    quarantine_bin_code: 'QUARANTINE',
+    default_receiving_bin: 'Default',
+    is_default_receiving: true,
+    sort_order: 1,
+  },
+  {
+    name: 'LOCATION-2',
+    label: 'SHOP-1',
+    is_active: true,
+    bin_mode: 'basic',
+    basic_bins: ['FLOOR', 'STOCK'],
+    location_type: 'stock',
+    is_retail: true,
+    floor_bin_code: 'FLOOR',
+    quarantine_bin_code: 'QUARANTINE',
+    default_receiving_bin: 'Default',
+    is_default_receiving: false,
+    sort_order: 2,
+  },
+  {
+    name: 'LOCATION-3',
+    label: 'SHOP-2',
+    is_active: true,
+    bin_mode: 'basic',
+    basic_bins: ['FLOOR', 'STOCK'],
+    location_type: 'stock',
+    is_retail: true,
+    floor_bin_code: 'FLOOR',
+    quarantine_bin_code: 'QUARANTINE',
+    default_receiving_bin: 'Default',
+    is_default_receiving: false,
+    sort_order: 3,
+  },
+  {
+    name: 'LOCATION-4',
+    label: 'SHOP-3',
+    is_active: true,
+    bin_mode: 'basic',
+    basic_bins: ['FLOOR', 'STOCK'],
+    location_type: 'stock',
+    is_retail: true,
+    floor_bin_code: 'FLOOR',
+    quarantine_bin_code: 'QUARANTINE',
+    default_receiving_bin: 'Default',
+    is_default_receiving: false,
+    sort_order: 4,
+  },
+  {
+    name: 'LOCATION-5',
+    label: 'SHOP-4',
+    is_active: true,
+    bin_mode: 'basic',
+    basic_bins: ['FLOOR', 'STOCK'],
+    location_type: 'stock',
+    is_retail: true,
+    floor_bin_code: 'FLOOR',
+    quarantine_bin_code: 'QUARANTINE',
+    default_receiving_bin: 'Default',
+    is_default_receiving: false,
+    sort_order: 5,
+  },
 ]
 
 const newCompanyDefaultLocationSettings: LocationSetting[] = defaultLocationSettings.map((location) => ({
@@ -137,6 +214,14 @@ const defaultPayrollStaffSettings: Required<PayrollStaffSettings> = {
   carried_over_hours: 0,
   break_4h_minutes: 15,
   break_6h_minutes: 30,
+}
+
+const defaultPinTimeoutMinutes = 30
+
+function cleanPinTimeoutMinutes(value: any) {
+  const minutes = Number(value)
+  if (!Number.isFinite(minutes)) return defaultPinTimeoutMinutes
+  return Math.min(480, Math.max(5, Math.round(minutes)))
 }
 
 const monthOptions = [
@@ -306,6 +391,41 @@ function limitReached(used: number, limit: any) {
   return used >= Number(limit || 0)
 }
 
+function cleanLocationCode(value: string) {
+  return value.trim().toUpperCase().replace(/[\s_]+/g, '-').replace(/[^A-Z0-9-]/g, '')
+}
+
+function cleanBinCode(value: string) {
+  const clean = value.trim().replace(/\s+/g, ' ')
+  return clean || 'Default'
+}
+
+function locationSortValue(location: LocationSetting, index: number) {
+  if (typeof location.sort_order === 'number') return location.sort_order
+  const match = location.name.match(/^LOCATION-(\d+)$/i)
+  return match ? Number(match[1]) : index + 1
+}
+
+function nextLocationCode(locations: LocationSetting[]) {
+  const maxNumber = locations.reduce((max, location) => {
+    const match = location.name.match(/^LOCATION-(\d+)$/i)
+    return match ? Math.max(max, Number(match[1])) : max
+  }, 0)
+
+  return `LOCATION-${maxNumber + 1}`
+}
+
+function compatibilityBinMode(location: LocationSetting): 'basic' | 'range' {
+  return location.is_retail ? 'basic' : 'range'
+}
+
+function compatibilityBasicBins(location: LocationSetting) {
+  if (!location.is_retail) return ['Default']
+
+  const floorBin = cleanBinCode(location.floor_bin_code || 'FLOOR')
+  return Array.from(new Set([floorBin, 'STOCK']))
+}
+
 export default function SettingsPage() {
   const { activeCompany, activeCompanyId, schemaReady } = useCompany()
   const [settings, setSettings] = useState<any>(null)
@@ -326,6 +446,7 @@ export default function SettingsPage() {
     return section || 'integrations'
   })
   const [payrollDirty, setPayrollDirty] = useState(false)
+  const [locationsDirty, setLocationsDirty] = useState(false)
   const [holidayStartPickerOpen, setHolidayStartPickerOpen] = useState(false)
   const [planLimits, setPlanLimits] = useState<Record<string, any>>({})
 
@@ -336,7 +457,11 @@ export default function SettingsPage() {
   const activeStaffCount = staffUsers.filter((user) => user.is_active !== false).length
   const effectiveStaffLimit =
     activeCompany?.billing_exempt || activeCompany?.internal_account ? null : planLimits.staff_limit
+  const activeLocationCount = locations.filter((location) => location.is_active !== false).length
+  const effectiveLocationLimit =
+    activeCompany?.billing_exempt || activeCompany?.internal_account ? null : planLimits.location_limit
   const staffLimitReached = limitReached(activeStaffCount, effectiveStaffLimit)
+  const locationLimitReached = limitReached(activeLocationCount, effectiveLocationLimit)
 
   const canAddNewStaff =
     newStaffName.trim().length > 0 &&
@@ -374,6 +499,7 @@ export default function SettingsPage() {
         'billing',
         'support',
         'processing',
+        'rfid_zones',
         'locations',
         'users',
         'payroll',
@@ -390,17 +516,21 @@ export default function SettingsPage() {
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent) {
-      if (!payrollDirty) return
+      if (!payrollDirty && !locationsDirty) return
       event.preventDefault()
       event.returnValue = ''
     }
 
     window.addEventListener('beforeunload', warnBeforeUnload)
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
-  }, [payrollDirty])
+  }, [payrollDirty, locationsDirty])
 
   function markPayrollDirty() {
     setPayrollDirty(true)
+  }
+
+  function markLocationsDirty() {
+    setLocationsDirty(true)
   }
 
   function updatePayrollSettings(patch: Partial<PayrollSettings>) {
@@ -409,6 +539,20 @@ export default function SettingsPage() {
   }
 
   async function changeSettingsSection(section: OpenSection) {
+    if (openSection === 'locations' && section !== 'locations' && locationsDirty) {
+      const save = window.confirm(
+        'Save location changes before leaving this section?\n\nOK = save changes\nCancel = discard unsaved changes',
+      )
+
+      if (save) {
+        const saved = await saveLocations()
+        if (!saved) return
+      } else {
+        await fetchLocations()
+        setLocationsDirty(false)
+      }
+    }
+
     if (openSection === 'payroll' && section !== 'payroll' && payrollDirty) {
       const save = window.confirm(
         'Save payroll and holiday changes before leaving this section?\n\nOK = save changes\nCancel = discard unsaved changes',
@@ -491,6 +635,7 @@ export default function SettingsPage() {
           role: user.role || 'staff',
           permissions: normalisePermissions(user.role || 'staff', user.permissions || {}),
           payroll_settings: normalisePayrollStaffSettings(user.payroll_settings),
+          pin_timeout_minutes: cleanPinTimeoutMinutes(user.pin_timeout_minutes),
         }))
         .sort((a: StaffUser, b: StaffUser) => {
           if (a.is_active !== b.is_active) return a.is_active ? -1 : 1
@@ -570,9 +715,11 @@ export default function SettingsPage() {
 
   async function fetchLocations() {
     let query = supabase
-      .from('locations')
-      .select('id, code, name, label, is_active, bin_mode, basic_bins')
-      .in('name', defaultLocationSettings.map((location) => location.name))
+    .from('locations')
+    .select(
+        'id, code, name, label, is_active, bin_mode, basic_bins, location_type, is_retail, floor_bin_code, quarantine_bin_code, default_receiving_bin, is_default_receiving, sort_order'
+      )
+      .order('sort_order', { ascending: true, nullsFirst: false })
       .order('name', { ascending: true })
 
     if (schemaReady) query = query.eq('company_id', activeCompanyId)
@@ -594,20 +741,39 @@ export default function SettingsPage() {
       return
     }
 
-    const saved = new Map(
-      (data || []).map((location: any) => [location.name, location as LocationSetting])
-    )
+    const saved = (data || []) as any[]
+    const fallbackByName = new Map(defaultLocationSettings.map((location) => [location.name, location]))
+    const baseRows = saved.length > 0 ? saved : defaultLocationSettings
 
-    const mergedLocations = defaultLocationSettings.map((location) => ({
-      ...location,
-      ...(saved.get(location.name) || {}),
-      bin_mode: ((saved.get(location.name) as any)?.bin_mode || location.bin_mode) as 'basic' | 'range',
-      basic_bins: Array.isArray((saved.get(location.name) as any)?.basic_bins)
-        ? (saved.get(location.name) as any).basic_bins
-        : location.basic_bins,
-    }))
+    const mergedLocations = baseRows
+      .map((row: any, index: number) => {
+        const fallback = fallbackByName.get(row.name) || defaultLocationSettings[0]
+        const isRetail = row.is_retail ?? row.bin_mode === 'basic'
+
+        return {
+          ...fallback,
+          ...row,
+          name: cleanLocationCode(row.name || row.code || fallback.name),
+          code: cleanLocationCode(row.code || row.name || fallback.name),
+          label: String(row.label || fallback.label || row.name || '').toUpperCase(),
+          is_active: row.is_active !== false,
+          bin_mode: (row.bin_mode === 'basic' ? 'basic' : 'range') as 'basic' | 'range',
+          basic_bins: Array.isArray(row.basic_bins) && row.basic_bins.length > 0
+            ? row.basic_bins
+            : fallback.basic_bins,
+          location_type: row.location_type === 'virtual' ? 'virtual' : 'stock',
+          is_retail: Boolean(isRetail),
+          floor_bin_code: isRetail ? cleanBinCode(row.floor_bin_code || 'FLOOR') : null,
+          quarantine_bin_code: cleanBinCode(row.quarantine_bin_code || 'QUARANTINE'),
+          default_receiving_bin: cleanBinCode(row.default_receiving_bin || 'Default'),
+          is_default_receiving: row.is_default_receiving === true,
+          sort_order: row.sort_order ?? locationSortValue(row, index),
+        } as LocationSetting
+      })
+      .sort((a, b) => locationSortValue(a, 0) - locationSortValue(b, 0) || a.name.localeCompare(b.name))
 
     setLocations(mergedLocations)
+    setLocationsDirty(false)
     setOriginalLocationModes(
       Object.fromEntries(
         mergedLocations.map((location) => [location.name, location.bin_mode])
@@ -678,18 +844,43 @@ export default function SettingsPage() {
 
         if (!confirmed) {
           setMessage('Location bin setup change cancelled. Check/reallocate stock first.')
-          return
+          return false
         }
       }
     }
 
-    for (const location of locations) {
-      const cleanName = location.name.trim().toUpperCase()
+    const activeNames = locations
+      .filter((location) => location.is_active)
+      .map((location) => location.label.trim().toUpperCase())
+      .filter(Boolean)
+    const duplicateActiveName = activeNames.find((name, index) => activeNames.indexOf(name) !== index)
+
+    if (duplicateActiveName) {
+      setMessage(`Location display names must be unique. "${duplicateActiveName}" is used more than once.`)
+      return false
+    }
+
+    const activeReceivingDefaults = locations.filter(
+      (location) => location.is_active && location.is_default_receiving
+    )
+
+    if (activeReceivingDefaults.length !== 1) {
+      setMessage('Choose one active default receiving location.')
+      return false
+    }
+
+    for (const [index, location] of locations.entries()) {
+      const cleanName = cleanLocationCode(location.name)
       const cleanLabel = location.label.trim().toUpperCase()
+      const floorBin = location.is_retail ? cleanBinCode(location.floor_bin_code || 'FLOOR') : null
+      const quarantineBin = cleanBinCode(location.quarantine_bin_code || 'QUARANTINE')
+      const defaultReceivingBin = cleanBinCode(location.default_receiving_bin || 'Default')
+      const binMode = compatibilityBinMode(location)
+      const basicBins = compatibilityBasicBins({ ...location, floor_bin_code: floorBin })
 
       if (!cleanName || !cleanLabel) {
         setMessage('Every location needs a code and display name')
-        return
+        return false
       }
 
       if (location.id) {
@@ -698,18 +889,22 @@ export default function SettingsPage() {
           .update({
             label: cleanLabel,
             is_active: location.is_active,
-            bin_mode: location.bin_mode,
-            basic_bins: location.basic_bins
-              .map((bin) => bin.trim().toUpperCase())
-              .filter(Boolean)
-              .slice(0, 3),
+            bin_mode: binMode,
+            basic_bins: basicBins,
+            location_type: location.location_type || 'stock',
+            is_retail: Boolean(location.is_retail),
+            floor_bin_code: floorBin,
+            quarantine_bin_code: quarantineBin,
+            default_receiving_bin: defaultReceivingBin,
+            is_default_receiving: Boolean(location.is_default_receiving && location.is_active),
+            sort_order: location.sort_order ?? index + 1,
           })
           .eq('id', location.id)
           .eq(schemaReady ? 'company_id' : 'id', schemaReady ? activeCompanyId : location.id)
 
         if (error) {
           setMessage(error.message)
-          return
+          return false
         }
       } else {
         const { error } = await supabase
@@ -720,22 +915,107 @@ export default function SettingsPage() {
             name: cleanName,
             label: cleanLabel,
             is_active: location.is_active,
-            bin_mode: location.bin_mode,
-            basic_bins: location.basic_bins
-              .map((bin) => bin.trim().toUpperCase())
-              .filter(Boolean)
-              .slice(0, 3),
+            bin_mode: binMode,
+            basic_bins: basicBins,
+            location_type: location.location_type || 'stock',
+            is_retail: Boolean(location.is_retail),
+            floor_bin_code: floorBin,
+            quarantine_bin_code: quarantineBin,
+            default_receiving_bin: defaultReceivingBin,
+            is_default_receiving: Boolean(location.is_default_receiving && location.is_active),
+            sort_order: location.sort_order ?? index + 1,
           })
 
         if (error) {
           setMessage(error.message)
-          return
+          return false
         }
+      }
+
+      const defaultBinRow = {
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
+        location_name: cleanName,
+        bin_code: 'Default',
+        label: 'Default',
+        display_name: 'Default',
+        bin_type: 'default',
+        is_floor: false,
+        is_sellable: true,
+        is_pickable: true,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }
+
+      const { error: defaultBinError } = await supabase
+        .from('warehouse_bins')
+        .upsert(defaultBinRow, {
+          onConflict: schemaReady ? 'company_id,location_name,bin_code' : 'location_name,bin_code',
+        })
+
+      if (defaultBinError) {
+        setMessage(defaultBinError.message)
+        return false
+      }
+
+      if (floorBin) {
+        const { error: floorBinError } = await supabase
+          .from('warehouse_bins')
+          .upsert(
+            {
+              ...(schemaReady ? { company_id: activeCompanyId } : {}),
+              location_name: cleanName,
+              bin_code: floorBin,
+              label: floorBin,
+              display_name: floorBin,
+              bin_type: 'floor',
+              is_floor: true,
+              is_sellable: true,
+              is_pickable: true,
+              is_active: true,
+              updated_at: new Date().toISOString(),
+            },
+            {
+              onConflict: schemaReady ? 'company_id,location_name,bin_code' : 'location_name,bin_code',
+            }
+          )
+
+        if (floorBinError) {
+          setMessage(floorBinError.message)
+          return false
+        }
+      }
+
+      const { error: quarantineBinError } = await supabase
+        .from('warehouse_bins')
+        .upsert(
+          {
+            ...(schemaReady ? { company_id: activeCompanyId } : {}),
+            location_name: cleanName,
+            bin_code: quarantineBin,
+            label: quarantineBin,
+            display_name: quarantineBin,
+            bin_type: 'quarantine',
+            is_floor: false,
+            is_sellable: false,
+            is_pickable: true,
+            is_active: true,
+            updated_at: new Date().toISOString(),
+          },
+          {
+            onConflict: schemaReady ? 'company_id,location_name,bin_code' : 'location_name,bin_code',
+          }
+        )
+
+      if (quarantineBinError) {
+        setMessage(quarantineBinError.message)
+        return false
       }
     }
 
     setMessage('Location names saved')
-    fetchLocations()
+    setLocationsDirty(false)
+    await fetchLocations()
+    return true
   }
 
   async function fetchFixedCosts() {
@@ -822,6 +1102,7 @@ export default function SettingsPage() {
   }
 
   function updateLocation(index: number, patch: Partial<LocationSetting>) {
+    markLocationsDirty()
     setLocations((current) =>
       current.map((location, locationIndex) =>
         locationIndex === index ? { ...location, ...patch } : location
@@ -830,6 +1111,7 @@ export default function SettingsPage() {
   }
 
   function updateLocationBasicBin(index: number, binIndex: number, value: string) {
+    markLocationsDirty()
     setLocations((current) =>
       current.map((location, locationIndex) => {
         if (locationIndex !== index) return location
@@ -843,6 +1125,61 @@ export default function SettingsPage() {
         }
       })
     )
+  }
+
+  function addLocation() {
+    setLocations((current) => {
+      const activeCount = current.filter((location) => location.is_active !== false).length
+      const locationLimit =
+        activeCompany?.billing_exempt || activeCompany?.internal_account ? null : planLimits.location_limit
+
+      if (limitReached(activeCount, locationLimit)) {
+        setMessage(`Location limit reached for this plan (${formatLimit(locationLimit)}).`)
+        return current
+      }
+
+      const code = nextLocationCode(current)
+      const label = `LOCATION ${code.replace(/^LOCATION-/i, '')}`
+      markLocationsDirty()
+
+      return [
+        ...current,
+        {
+          name: code,
+          code,
+          label,
+          is_active: true,
+          bin_mode: 'range',
+          basic_bins: ['Default'],
+          location_type: 'stock',
+          is_retail: false,
+          floor_bin_code: null,
+          quarantine_bin_code: 'QUARANTINE',
+          default_receiving_bin: 'Default',
+          is_default_receiving: !current.some((location) => location.is_active && location.is_default_receiving),
+          sort_order: current.length + 1,
+        },
+      ]
+    })
+  }
+
+  function setDefaultReceivingLocation(index: number) {
+    markLocationsDirty()
+    setLocations((current) =>
+      current.map((location, locationIndex) => ({
+        ...location,
+        is_default_receiving: locationIndex === index,
+        is_active: true,
+      }))
+    )
+  }
+
+  function openBinQrGenerator(location?: LocationSetting, binCode = '') {
+    const params = new URLSearchParams()
+    if (location?.name) params.set('location', location.name)
+    if (binCode) params.set('bin', binCode)
+    const query = params.toString()
+    window.open(`/scanner/create-bin${query ? `?${query}` : ''}`, '_blank')
   }
 
   async function saveSettings() {
@@ -929,6 +1266,7 @@ export default function SettingsPage() {
       pin_updated_at: new Date().toISOString(),
       role,
       permissions,
+      pin_timeout_minutes: defaultPinTimeoutMinutes,
     })
 
     if (error) {
@@ -980,6 +1318,7 @@ export default function SettingsPage() {
         role: user.role || 'staff',
         permissions,
         payroll_settings: normalisePayrollStaffSettings(user.payroll_settings),
+        pin_timeout_minutes: cleanPinTimeoutMinutes(user.pin_timeout_minutes),
         pin_updated_at: new Date().toISOString(),
       })
       .eq('id', user.id)
@@ -1350,6 +1689,16 @@ export default function SettingsPage() {
       description: 'Inbound, receiving and working workflow options.',
     },
     {
+      section: 'station_agent',
+      title: 'Station Agent',
+      description: 'Download and update the Windows hardware companion.',
+    },
+    {
+      section: 'rfid_zones',
+      title: 'RFID Zones',
+      description: 'Entrance, exit, changing room and stock room readers.',
+    },
+    {
       section: 'locations',
       title: 'Locations',
       description: 'Display names and bin modes.',
@@ -1512,7 +1861,7 @@ export default function SettingsPage() {
           <SectionHeader
             section="processing"
             title="Processing"
-            description="Choose whether receiving uses the RFID table workflow or the normal barcode/batch workflow."
+            description="Control optional receiving tools such as RFID table linking."
             colour="emerald"
           />
 
@@ -1525,7 +1874,7 @@ export default function SettingsPage() {
                   </h2>
 
                   <p className="mt-1 text-sm text-zinc-500">
-                    This only controls Processing &gt; Receiving. RFID tags already linked to items still scan in Search/Create and Checkout.
+                    Receiving can always create photo-only or barcode-later working SKUs. This setting only decides whether RFID appears as a receiving method.
                   </p>
                 </div>
               </div>
@@ -1545,12 +1894,12 @@ export default function SettingsPage() {
                 }`}
               >
                 <span className="block text-sm font-black">
-                  {settings.enable_rfid_receiving ? 'RFID receiving enabled' : 'RFID receiving disabled'}
+                  {settings.enable_rfid_receiving ? 'RFID method available' : 'RFID method hidden'}
                 </span>
                 <span className="mt-1 block text-sm font-bold text-zinc-400">
                   {settings.enable_rfid_receiving
-                    ? 'Receiving will show the RFID table bridge, live TID count and TID-linked batch creation.'
-                    : 'Receiving will create normal working batches without requiring the RFID table bridge.'}
+                    ? 'Processing > Receiving can use the RFID table bridge, live TID count and TID-linked batch creation.'
+                    : 'RFID tags already linked to items still scan elsewhere. Receiving will offer photo-only, barcode and untracked methods.'}
                 </span>
               </button>
 
@@ -1565,9 +1914,31 @@ export default function SettingsPage() {
           )}
 
           <SectionHeader
+            section="station_agent"
+            title="Station Agent"
+            description="Download the Windows companion used for photo ingest, RFID, RFID zones and local printing."
+            colour="emerald"
+          />
+
+          {openSection === 'station_agent' && (
+            <StationAgentPanel />
+          )}
+
+          <SectionHeader
+            section="rfid_zones"
+            title="RFID Zones"
+            description="Configure threshold readers for entrances, exits, changing rooms and stock rooms."
+            colour="emerald"
+          />
+
+          {openSection === 'rfid_zones' && (
+            <RfidZonesPanel />
+          )}
+
+          <SectionHeader
             section="locations"
             title="Locations"
-            description="Set display names for the five stable location slots used by bins, scanners and stock movement."
+            description="Set the company locations used by receiving, bins, scanners and stock movement."
             colour="zinc"
           />
 
@@ -1576,115 +1947,164 @@ export default function SettingsPage() {
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
-                    Location Display Names
+                    Location Setup
                   </h2>
 
                   <p className="mt-1 text-sm text-zinc-500">
-                    Internal codes stay fixed. Change the display names to match your business.
+                    Internal keys stay fixed for stock rows. Display names, retail floor bins and receiving defaults are company-specific.
+                  </p>
+
+                  <p className="mt-1 text-xs font-bold text-zinc-500">
+                    Active locations: {activeLocationCount} / {formatLimit(effectiveLocationLimit)}
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={saveLocations}
-                  className="rounded-lg bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500"
-                >
-                  Save Locations
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={addLocation}
+                    disabled={locationLimitReached}
+                    className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 text-sm font-black text-white hover:border-white disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Add Location
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => openBinQrGenerator()}
+                    className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 text-sm font-black text-white hover:border-white"
+                  >
+                    Print Bin QR Labels
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={saveLocations}
+                    className="rounded-lg bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500"
+                  >
+                    Save
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-3">
                 {locations.map((location, index) => (
                   <div
                     key={location.name}
-                    className="grid gap-3 rounded-xl border border-zinc-800 bg-zinc-950 p-4 xl:grid-cols-[150px_1fr_150px_1.5fr_120px]"
+                    className="rounded-xl border border-zinc-800 bg-zinc-950 p-4"
                   >
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                        Internal code
-                      </label>
+                    <div className="grid gap-3 xl:grid-cols-[140px_minmax(180px,1fr)_180px_150px_170px]">
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                          Internal code
+                        </label>
 
-                      <div className="flex h-10 items-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 font-mono text-sm font-black text-zinc-300">
-                        {location.name}
+                        <div className="flex h-10 items-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 font-mono text-sm font-black text-zinc-300">
+                          {location.name}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                          Display name
+                        </label>
+
+                        <input
+                          value={location.label}
+                          onChange={(event) =>
+                            updateLocation(index, {
+                              label: event.target.value.toUpperCase(),
+                            })
+                          }
+                          className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-black uppercase text-white outline-none focus:border-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                          Retail location
+                        </label>
+
+                        <div className="grid h-10 grid-cols-2 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 p-1">
+                          {[
+                            { label: 'Yes', value: true },
+                            { label: 'No', value: false },
+                          ].map((option) => {
+                            const selected = Boolean(location.is_retail) === option.value
+
+                            return (
+                              <button
+                                key={option.label}
+                                type="button"
+                                onClick={() =>
+                                  updateLocation(index, {
+                                    is_retail: option.value,
+                                    floor_bin_code: option.value
+                                      ? location.floor_bin_code || 'FLOOR'
+                                      : null,
+                                  })
+                                }
+                                className={`rounded-md text-xs font-black ${
+                                  selected
+                                    ? option.value
+                                      ? 'bg-green-600 text-white'
+                                      : 'bg-zinc-600 text-white'
+                                    : 'text-zinc-400 hover:text-white'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                          Floor bin name
+                        </label>
+
+                        <input
+                          value={location.floor_bin_code || ''}
+                          onChange={(event) =>
+                            updateLocation(index, {
+                              floor_bin_code: event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''),
+                            })
+                          }
+                          disabled={!location.is_retail}
+                          placeholder="FLOOR"
+                          className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-black uppercase text-white outline-none focus:border-white disabled:opacity-40"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                          Quarantine bin name
+                        </label>
+
+                        <input
+                          value={location.quarantine_bin_code || ''}
+                          onChange={(event) =>
+                            updateLocation(index, {
+                              quarantine_bin_code: event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''),
+                            })
+                          }
+                          placeholder="QUARANTINE"
+                          className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-black uppercase text-white outline-none focus:border-white"
+                        />
                       </div>
                     </div>
 
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                        Display name
+                    <div className="mt-3 flex flex-wrap gap-4 border-t border-zinc-800 pt-3">
+                      <label className="flex cursor-pointer items-center gap-2 text-sm font-bold text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(location.is_default_receiving)}
+                          onChange={() => setDefaultReceivingLocation(index)}
+                          className="h-4 w-4 accent-green-600"
+                        />
+                        Default receiving location
                       </label>
-
-                      <input
-                        value={location.label}
-                        onChange={(event) =>
-                          updateLocation(index, {
-                            label: event.target.value.toUpperCase(),
-                          })
-                        }
-                        className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-black uppercase text-white outline-none focus:border-white"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                        Bin setup
-                      </label>
-
-                      <select
-                        value={location.bin_mode}
-                        onChange={(event) =>
-                          updateLocation(index, {
-                            bin_mode: event.target.value as 'basic' | 'range',
-                          })
-                        }
-                        className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-black uppercase text-white outline-none focus:border-white"
-                      >
-                        <option value="basic">Basic bins</option>
-                        <option value="range">Range / allocate</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                        Basic bins
-                      </label>
-
-                      <div className="grid grid-cols-3 gap-2">
-                        {[0, 1, 2].map((binIndex) => (
-                          <input
-                            key={binIndex}
-                            value={location.basic_bins?.[binIndex] || ''}
-                            onChange={(event) =>
-                              updateLocationBasicBin(index, binIndex, event.target.value)
-                            }
-                            disabled={location.bin_mode !== 'basic'}
-                            placeholder={`BIN ${binIndex + 1}`}
-                            className="h-10 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-xs font-black uppercase text-white outline-none focus:border-white disabled:opacity-40"
-                          />
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                        Active
-                      </label>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updateLocation(index, {
-                            is_active: !location.is_active,
-                          })
-                        }
-                        className={`h-10 w-full rounded-lg px-3 text-sm font-black ${
-                          location.is_active
-                            ? 'bg-green-700 text-white'
-                            : 'bg-zinc-800 text-zinc-400'
-                        }`}
-                      >
-                        {location.is_active ? 'Active' : 'Hidden'}
-                      </button>
                     </div>
                   </div>
                 ))}
@@ -1848,7 +2268,7 @@ export default function SettingsPage() {
                             : 'border-red-900 bg-red-950/30'
                         }`}
                       >
-                        <div className="grid gap-3 xl:grid-cols-[1fr_160px_120px_240px]">
+                        <div className="grid gap-3 xl:grid-cols-[1fr_160px_120px_130px_240px]">
                           <div>
                             <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
                               Name
@@ -1903,6 +2323,29 @@ export default function SettingsPage() {
                             >
                               {user.is_active ? 'Active' : 'Disabled'}
                             </button>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+                              PIN timeout
+                            </label>
+
+                            <div className="flex h-10 items-center rounded-lg border border-zinc-700 bg-zinc-900">
+                              <input
+                                value={cleanPinTimeoutMinutes(user.pin_timeout_minutes)}
+                                onChange={(e) =>
+                                  updateStaffUser(user.id, {
+                                    pin_timeout_minutes: cleanPinTimeoutMinutes(e.target.value),
+                                  })
+                                }
+                                min={5}
+                                max={480}
+                                step={5}
+                                type="number"
+                                className="h-full min-w-0 flex-1 rounded-l-lg bg-transparent px-3 text-sm font-bold text-white outline-none"
+                              />
+                              <span className="pr-3 text-xs font-bold text-zinc-500">min</span>
+                            </div>
                           </div>
 
                           <div>

@@ -5,7 +5,7 @@ import AppNav from '@/app/components/AppNav'
 import { supabase } from '@/lib/supabase'
 import { useCompany } from '@/app/context/CompanyContext'
 
-type GeneratorMode = 'word' | 'range'
+type GeneratorMode = 'name' | 'range'
 
 type LocationOption = {
   name: string
@@ -18,14 +18,6 @@ type ZoneConfig = {
 }
 
 const MAX_LABELS = 500
-
-const FALLBACK_LOCATIONS: LocationOption[] = [
-  { name: 'LOCATION-1', label: 'WAREHOUSE' },
-  { name: 'LOCATION-2', label: 'SHOP-1' },
-  { name: 'LOCATION-3', label: 'SHOP-2' },
-  { name: 'LOCATION-4', label: 'SHOP-3' },
-  { name: 'LOCATION-5', label: 'SHOP-4' },
-]
 
 function cleanLocation(value: string) {
   return value.trim().toUpperCase()
@@ -48,6 +40,7 @@ function cleanZoneInput(value: string, width: number) {
 
 function getAllocateUrl(location: string, bin: string) {
   const params = new URLSearchParams()
+  params.set('type', 'bin')
   params.set('location', cleanLocation(location))
   params.set('bin', cleanBinInput(bin))
 
@@ -150,7 +143,7 @@ function buildCombinations(groups: string[][]) {
 }
 
 function generateRangeBins(zones: ZoneConfig[], zoneCount: number, zoneWidth: number) {
-  const activeZones = zones.slice(0, zoneCount)
+  const activeZones = zones.slice(0, Math.min(4, Math.max(2, zoneCount)))
 
   const groups = activeZones.map((zone, index) => {
     if (!zone.from.trim()) {
@@ -199,7 +192,7 @@ async function loadLocationOptions(companyId?: string | null) {
 
     const { data, error } = await query
 
-    if (error || !data || data.length === 0) return FALLBACK_LOCATIONS
+    if (error || !data || data.length === 0) return []
 
     const rows = data
       .map((row: any) => ({
@@ -208,23 +201,22 @@ async function loadLocationOptions(companyId?: string | null) {
       }))
       .filter((row) => row.name)
 
-    return rows.length > 0 ? rows : FALLBACK_LOCATIONS
+    return rows
   } catch {
-    return FALLBACK_LOCATIONS
+    return []
   }
 }
 
 export default function CreateBinPage() {
   const { activeCompanyId, schemaReady } = useCompany()
-  const [locations, setLocations] = useState<LocationOption[]>(FALLBACK_LOCATIONS)
-  const [location, setLocation] = useState('LOCATION-1')
-  const [customLocation, setCustomLocation] = useState('')
+  const [locations, setLocations] = useState<LocationOption[]>([])
+  const [location, setLocation] = useState('')
 
-  const [mode, setMode] = useState<GeneratorMode>('word')
+  const [mode, setMode] = useState<GeneratorMode>('name')
   const [wordBin, setWordBin] = useState('STOCK')
 
   const [zoneCount, setZoneCount] = useState(3)
-  const [zoneWidth, setZoneWidth] = useState(2)
+  const [zoneWidth, setZoneWidth] = useState(4)
   const [zones, setZones] = useState<ZoneConfig[]>([
     { from: 'AA', to: 'AA' },
     { from: '00', to: '00' },
@@ -236,14 +228,30 @@ export default function CreateBinPage() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const activeLocation = location === '__CUSTOM__' ? cleanLocation(customLocation) : location
+  const activeLocation = location
 
   useEffect(() => {
     loadLocationOptions(schemaReady ? activeCompanyId : null).then((rows) => {
+      const params = new URLSearchParams(window.location.search)
+      const requestedLocation = cleanLocation(params.get('location') || '')
+      const requestedBin = cleanBinInput(params.get('bin') || '')
       setLocations(rows)
 
-      if (rows.length > 0 && !rows.some((row) => row.name === location)) {
+      if (requestedLocation) {
+        const matchedLocation = rows.find((row) => cleanLocation(row.name) === requestedLocation)
+        if (matchedLocation) {
+          setLocation(matchedLocation.name)
+        } else {
+          setLocation(rows[0]?.name || '')
+          setMessage('That location is not active in Settings.')
+        }
+      } else if (rows.length > 0 && (!location || !rows.some((row) => row.name === location))) {
         setLocation(rows[0].name)
+      }
+
+      if (requestedBin) {
+        setMode('name')
+        setWordBin(requestedBin)
       }
     })
   }, [activeCompanyId, schemaReady])
@@ -259,7 +267,7 @@ export default function CreateBinPage() {
 
   const previewBins = useMemo(() => {
     try {
-      if (mode === 'word') {
+      if (mode === 'name') {
         const clean = cleanBinInput(wordBin)
         return clean ? [clean] : []
       }
@@ -292,7 +300,7 @@ export default function CreateBinPage() {
     if (preset === 'warehouse') {
       setMode('range')
       setZoneCount(3)
-      setZoneWidth(2)
+      setZoneWidth(4)
       setZones([
         { from: 'AA', to: 'AA' },
         { from: '00', to: '00' },
@@ -304,7 +312,7 @@ export default function CreateBinPage() {
     }
 
     if (preset === 'shop') {
-      setMode('word')
+      setMode('name')
       setWordBin('STOCK')
       setMessage('Preset loaded: STOCK')
       return
@@ -312,7 +320,7 @@ export default function CreateBinPage() {
 
     setMode('range')
     setZoneCount(4)
-    setZoneWidth(3)
+    setZoneWidth(4)
     setZones([
       { from: 'AAA', to: 'AAA' },
       { from: '000', to: '000' },
@@ -327,7 +335,7 @@ export default function CreateBinPage() {
 
     try {
       const bins =
-        mode === 'word'
+        mode === 'name'
           ? [cleanBinInput(wordBin)].filter(Boolean)
           : generateRangeBins(zones, zoneCount, zoneWidth)
 
@@ -472,7 +480,7 @@ export default function CreateBinPage() {
               </h1>
 
               <p className="text-sm text-neutral-300">
-                Select a location, then create one exact word/bin label or a structured range with up to 4 zones.
+                Select a location, then create one named bin label or a structured range with 2 to 4 zones.
               </p>
             </div>
 
@@ -525,23 +533,13 @@ export default function CreateBinPage() {
                     {row.label || row.name}
                   </option>
                 ))}
-                <option value="__CUSTOM__">CUSTOM LOCATION</option>
               </select>
             </label>
 
-            {location === '__CUSTOM__' && (
-              <label>
-                <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
-                  Custom location
-                </span>
-
-                <input
-                  value={customLocation}
-                  onChange={(e) => setCustomLocation(cleanLocation(e.target.value))}
-                  placeholder="WAREHOUSE / SHOP-1 / etc"
-                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-lg font-black uppercase outline-none focus:border-white"
-                />
-              </label>
+            {locations.length === 0 && (
+              <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-4 text-sm font-bold text-amber-100">
+                No active locations found. Add a location in Settings &gt; Locations first.
+              </div>
             )}
           </div>
         </section>
@@ -570,7 +568,7 @@ export default function CreateBinPage() {
                 onClick={() => setPreset('shop')}
                 className="rounded-xl border border-neutral-700 px-4 py-3 text-xs font-black"
               >
-                STOCK WORD
+                STOCK NAME
               </button>
 
               <button
@@ -594,7 +592,7 @@ export default function CreateBinPage() {
                 onChange={(e) => setMode(e.target.value as GeneratorMode)}
                 className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-lg font-black outline-none focus:border-white"
               >
-                <option value="word">WORD / SINGLE LABEL</option>
+                <option value="name">NAME / SINGLE LABEL</option>
                 <option value="range">RANGE</option>
               </select>
             </label>
@@ -611,7 +609,7 @@ export default function CreateBinPage() {
                     onChange={(e) => setZoneCount(Number(e.target.value))}
                     className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-4 text-lg font-black outline-none focus:border-white"
                   >
-                    {[1, 2, 3, 4].map((num) => (
+                    {[2, 3, 4].map((num) => (
                       <option key={num} value={num}>
                         {num} zone{num === 1 ? '' : 's'}
                       </option>
@@ -640,10 +638,10 @@ export default function CreateBinPage() {
             )}
           </div>
 
-          {mode === 'word' ? (
+          {mode === 'name' ? (
             <label>
               <span className="mb-1 block text-xs font-bold uppercase text-neutral-500">
-                Exact bin / word
+                Bin name
               </span>
 
               <input

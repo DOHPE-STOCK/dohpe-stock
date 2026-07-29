@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 import { getEnabledIntegrationCompanies } from '@/lib/tenantCronCompanies'
+import { recalculateStockSummaryForSku, upsertStockReservation } from '@/lib/stockSummary'
+import { upsertLoopbaseOrder, upsertLoopbaseOrderLine } from '@/lib/orderManagement'
 
 export const dynamic = 'force-dynamic'
 
@@ -680,6 +682,18 @@ async function markOrderChecked(params: {
   if (error) throw new Error(error.message)
 }
 
+function getOrderNumber(order: any) {
+  return normaliseText(
+    order?.ReferenceNum ||
+      order?.referenceNum ||
+      order?.NumOrderId ||
+      order?.numOrderId ||
+      order?.OrderNumber ||
+      order?.orderNumber ||
+      order?.nOrderId
+  )
+}
+
 async function getAppStockRows(supabase: any, itemId: string, companyId?: string) {
   let query = supabase
     .from('item_stock_locations')
@@ -1271,7 +1285,86 @@ async function processLinnworksOpenOrders(request: Request, companyId?: string) 
           )
         }
 
+        let stockReservation: any = null
+        let stockReservationWarning: string | null = null
+        let loopbaseOrder: any = null
+        let loopbaseOrderLine: any = null
+        let loopbaseOrderWarning: string | null = null
+
+        try {
+          stockReservation = await upsertStockReservation(supabase, {
+            companyId: companyId || '',
+            itemId: localItem.id,
+            sku,
+            channel: source || 'linnworks',
+            source: 'linnworks_open_order',
+            externalOrderId: orderId,
+            externalOrderReference: groupedItem.orderItemId || null,
+            quantity,
+            stockAlreadyDeducted: true,
+            metadata: {
+              source,
+              sub_source: subSource,
+              order_item_id: groupedItem.orderItemId || null,
+              deductions: operationalDeduction.deductions,
+            },
+          })
+        } catch (error: any) {
+          stockReservationWarning = error.message || 'Stock reservation shadow write failed.'
+        }
+
+        if (companyId) {
+          try {
+            loopbaseOrder = await upsertLoopbaseOrder(supabase, {
+              companyId,
+              source: 'linnworks',
+              externalOrderId: orderId,
+              externalOrderNumber: getOrderNumber(order) || orderId,
+              channel: source || 'linnworks',
+              subChannel: subSource || null,
+              status: 'reserved',
+              stockMode: 'physical_deducted',
+              rawPayload: {
+                source,
+                sub_source: subSource,
+                linnworks_order_number: getOrderNumber(order) || null,
+              },
+            })
+
+            if (loopbaseOrder?.id) {
+              loopbaseOrderLine = await upsertLoopbaseOrderLine(supabase, {
+                companyId,
+                orderId: loopbaseOrder.id,
+                itemId: localItem.id,
+                sku,
+                externalLineId: groupedItem.orderItemId || sku,
+                status: 'reserved',
+                quantity,
+                reservedQuantity: quantity,
+                reservationId: stockReservation?.id || null,
+                rawPayload: {
+                  linnworks_order_item_id: groupedItem.orderItemId || null,
+                  source,
+                  sub_source: subSource,
+                },
+              })
+            }
+          } catch (error: any) {
+            loopbaseOrderWarning = error.message || 'Loopbase order shadow write failed.'
+          }
+        }
+
         const summary = await updateItemSummary(supabase, localItem.id, companyId)
+        let stockTruthSummary: any = null
+        let stockTruthWarning: string | null = null
+
+        if (companyId) {
+          try {
+            stockTruthSummary = await recalculateStockSummaryForSku(supabase, companyId, sku)
+          } catch (error: any) {
+            stockTruthWarning = error.message || 'Stock truth summary update failed.'
+          }
+        }
 
         const telegramByShop = await sendShopTelegramMessages({
           sku,
@@ -1339,6 +1432,13 @@ async function processLinnworksOpenOrders(request: Request, companyId?: string) 
           quantity,
           operational_deduction: operationalDeduction,
           item_summary: summary,
+          stock_truth_summary: stockTruthSummary,
+          stock_reservation: stockReservation,
+          stock_reservation_warning: stockReservationWarning,
+          loopbase_order: loopbaseOrder,
+          loopbase_order_line: loopbaseOrderLine,
+          loopbase_order_warning: loopbaseOrderWarning,
+          stock_truth_warning: stockTruthWarning,
           transfer_items_created: transferItems.length,
           telegram_sent: telegramSent,
           telegram_results: Object.fromEntries(telegramByShop),

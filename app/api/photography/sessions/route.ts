@@ -6,6 +6,7 @@ import {
 } from '@/lib/serverTenant'
 import { loadCompanyPhotoSettings, originalDeleteAfterFrom } from '@/lib/photoRetention'
 import { startPhotoSessionForItem, type PhotoStartMethod } from '@/lib/photographyServer'
+import { cleanupPhotoPreviewRepresentations } from '@/lib/photoPreviewCleanup'
 
 function failure(status: number, message: string) {
   return NextResponse.json({ ok: false, message }, { status })
@@ -14,6 +15,49 @@ function failure(status: number, message: string) {
 function text(value: unknown) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
+}
+
+const channelStatusFields = [
+  'linnworks_status',
+  'ebay_status',
+  'shopify_status',
+  'square_status',
+  'grailed_status',
+  'vestiaire_collective_status',
+  'whatnot_status',
+  'vinted_status',
+  'depop_status',
+  'tiktok_shop_status',
+]
+
+const liveChannelStatuses = new Set(['synced', 'active', 'listed', 'pending_update', 'failed'])
+
+async function markItemChannelUpdatesPending(supabase: any, companyId: string, itemId: string | null | undefined) {
+  if (!itemId) return
+
+  const { data: item } = await supabase
+    .from('items')
+    .select(channelStatusFields.join(','))
+    .eq('company_id', companyId)
+    .eq('id', itemId)
+    .maybeSingle()
+
+  if (!item) return
+
+  const updates = channelStatusFields.reduce((next: Record<string, string>, field) => {
+    if (liveChannelStatuses.has(text(item[field]).toLowerCase())) {
+      next[field] = 'pending_update'
+    }
+    return next
+  }, {})
+
+  if (Object.keys(updates).length === 0) return
+
+  await supabase
+    .from('items')
+    .update(updates)
+    .eq('company_id', companyId)
+    .eq('id', itemId)
 }
 
 export async function POST(request: Request) {
@@ -137,16 +181,47 @@ export async function PATCH(request: Request) {
 
     if (itemImageIds.length > 0) {
       const photoSettings = await loadCompanyPhotoSettings(supabase, access.company.id)
-      await supabase
+      const { data: itemImages, error: itemImagesError } = await supabase
         .from('item_images')
-        .update({
-          original_delete_after: originalDeleteAfterFrom(now, photoSettings.original_retention_days),
-          original_retention_status: 'cleanup_scheduled',
-        })
+        .select('id, original_url, processed_url')
         .eq('company_id', access.company.id)
         .in('id', itemImageIds)
         .not('processed_url', 'is', null)
         .not('original_url', 'is', null)
+
+      if (itemImagesError) return failure(500, itemImagesError.message)
+
+      const genuinelyProcessedImageIds = (itemImages || [])
+        .filter((image: any) => text(image.processed_url) && text(image.original_url) && image.processed_url !== image.original_url)
+        .map((image: any) => image.id)
+
+      const originalOnlyImageIds = (itemImages || [])
+        .filter((image: any) => text(image.processed_url) && text(image.original_url) && image.processed_url === image.original_url)
+        .map((image: any) => image.id)
+
+      if (genuinelyProcessedImageIds.length > 0) {
+        await supabase
+          .from('item_images')
+          .update({
+            original_delete_after: originalDeleteAfterFrom(now, photoSettings.original_retention_days),
+            original_retention_status: 'cleanup_scheduled',
+          })
+          .eq('company_id', access.company.id)
+          .in('id', genuinelyProcessedImageIds)
+      }
+
+      if (originalOnlyImageIds.length > 0) {
+        await supabase
+          .from('item_images')
+          .update({
+            original_delete_after: null,
+            original_retention_status: 'active',
+          })
+          .eq('company_id', access.company.id)
+          .in('id', originalOnlyImageIds)
+      }
+
+      await markItemChannelUpdatesPending(supabase, access.company.id, session.item_id)
     }
 
     await supabase
@@ -155,8 +230,28 @@ export async function PATCH(request: Request) {
       .eq('company_id', access.company.id)
       .eq('id', stationId)
 
+    try {
+      await cleanupPhotoPreviewRepresentations({
+        supabase,
+        companyId: access.company.id,
+        sessionId: session.id,
+      })
+    } catch (cleanupError) {
+      console.warn('Photo preview cleanup after complete failed', cleanupError)
+    }
+
     return NextResponse.json({ ok: true, session })
   }
+
+  const { data: activeSession, error: activeSessionError } = await supabase
+    .from('photo_sessions')
+    .select('id')
+    .eq('company_id', access.company.id)
+    .eq('station_id', stationId)
+    .eq('status', 'active')
+    .maybeSingle()
+
+  if (activeSessionError) return failure(500, activeSessionError.message)
 
   const { data: session, error } = await supabase.rpc('end_photo_session', {
     p_company_id: access.company.id,
@@ -164,6 +259,18 @@ export async function PATCH(request: Request) {
   })
 
   if (error) return failure(500, error.message)
+
+  if (activeSession?.id) {
+    try {
+      await cleanupPhotoPreviewRepresentations({
+        supabase,
+        companyId: access.company.id,
+        sessionId: activeSession.id,
+      })
+    } catch (cleanupError) {
+      console.warn('Photo preview cleanup after end failed', cleanupError)
+    }
+  }
 
   return NextResponse.json({ ok: true, session })
 }

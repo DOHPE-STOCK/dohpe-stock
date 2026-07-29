@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 import { getEnabledIntegrationCompanies } from '@/lib/tenantCronCompanies'
+import { recalculateStockSummaryForSku } from '@/lib/stockSummary'
 
 export const dynamic = 'force-dynamic'
 
@@ -931,6 +932,7 @@ async function upsertOperationalStockRow(params: {
   const { error: insertError } = await supabase
     .from('item_stock_locations')
     .insert({
+      ...(item.company_id ? { company_id: item.company_id } : {}),
       item_id: item.id,
       sku: item.sku,
       location_name: locationName,
@@ -946,10 +948,14 @@ async function upsertOperationalStockRow(params: {
 }
 
 async function recalcItemStockFromOperationalRows(supabase: any, item: any) {
-  const { data, error } = await supabase
+  let stockQuery = supabase
     .from('item_stock_locations')
     .select('location_name, bin_code, stock_level')
     .eq('item_id', item.id)
+
+  if (item.company_id) stockQuery = stockQuery.eq('company_id', item.company_id)
+
+  const { data, error } = await stockQuery
 
   if (error) throw new Error(error.message)
 
@@ -971,7 +977,7 @@ async function recalcItemStockFromOperationalRows(supabase: any, item: any) {
     .filter((row: any) => Number(row.stock_level || 0) > 0)
     .sort((a: any, b: any) => Number(b.stock_level || 0) - Number(a.stock_level || 0))[0]
 
-  const { error: updateError } = await supabase
+  let updateQuery = supabase
     .from('items')
     .update({
       stock_level: total,
@@ -983,7 +989,19 @@ async function recalcItemStockFromOperationalRows(supabase: any, item: any) {
     })
     .eq('id', item.id)
 
+  if (item.company_id) updateQuery = updateQuery.eq('company_id', item.company_id)
+
+  const { error: updateError } = await updateQuery
+
   if (updateError) throw new Error(updateError.message)
+
+  if (item.company_id) {
+    try {
+      await recalculateStockSummaryForSku(supabase, item.company_id, item.sku)
+    } catch (error: any) {
+      console.warn(`stock summary update failed for ${item.sku}:`, error.message || error)
+    }
+  }
 
   return { total, shopFloor, warehouse }
 }
@@ -1258,6 +1276,7 @@ async function processDebugLocationsQueueRow(params: {
 }) {
   const { row, server, token, locations } = params
   const payload = row.payload || {}
+  const companyId = normaliseText(row.company_id)
 
   const sku = normaliseText(payload.sku || row.sku)
   if (!sku) throw new Error('Missing SKU in queue payload.')
@@ -1345,6 +1364,7 @@ async function processAdjustStockQueueRow(params: {
 }) {
   const { row, supabase, server, token, locations } = params
   const payload = row.payload || {}
+  const companyId = normaliseText(row.company_id)
 
   const sku = normaliseText(payload.sku || row.sku)
   if (!sku) throw new Error('Missing SKU in queue payload.')
@@ -1375,11 +1395,14 @@ async function processAdjustStockQueueRow(params: {
     throw new Error(`Could not find Linnworks item for SKU ${sku}`)
   }
 
-  const itemResult = await supabase
+  let itemQuery = supabase
     .from('items')
-    .select('id, sku, brand, reporting_category, cost_price, stock_level, current_location, current_bin')
+    .select('id, company_id, sku, brand, reporting_category, cost_price, stock_level, current_location, current_bin')
     .eq('sku', sku)
-    .maybeSingle()
+
+  if (companyId) itemQuery = itemQuery.eq('company_id', companyId)
+
+  const itemResult = await itemQuery.maybeSingle()
 
   if (itemResult.error) throw new Error(itemResult.error.message)
 
@@ -1523,6 +1546,7 @@ async function processUpdateStockQueueRow(params: {
 }) {
   const { row, supabase, server, token, locations } = params
   const payload = row.payload || {}
+  const companyId = normaliseText(row.company_id)
 
   const sku = normaliseText(payload.sku || row.sku)
   if (!sku) throw new Error('Missing SKU in queue payload.')
@@ -1536,11 +1560,14 @@ async function processUpdateStockQueueRow(params: {
     throw new Error(`Could not find Linnworks item for SKU ${sku}`)
   }
 
-  const itemResult = await supabase
+  let itemQuery = supabase
     .from('items')
-    .select('id, sku, brand, reporting_category, cost_price, stock_level, current_location, current_bin')
+    .select('id, company_id, sku, brand, reporting_category, cost_price, stock_level, current_location, current_bin')
     .eq('sku', sku)
-    .maybeSingle()
+
+  if (companyId) itemQuery = itemQuery.eq('company_id', companyId)
+
+  const itemResult = await itemQuery.maybeSingle()
 
   if (itemResult.error) throw new Error(itemResult.error.message)
 
@@ -1635,7 +1662,7 @@ Bin: ${binRack}`,
     }
   }
 
-  await supabase
+  let updateItemQuery = supabase
     .from('items')
     .update({
       stock_level: stockLevel,
@@ -1648,6 +1675,18 @@ Bin: ${binRack}`,
       updated_at: new Date().toISOString(),
     })
     .eq('sku', sku)
+
+  if (companyId) updateItemQuery = updateItemQuery.eq('company_id', companyId)
+
+  await updateItemQuery
+
+  if (companyId) {
+    try {
+      await recalculateStockSummaryForSku(supabase, companyId, sku)
+    } catch (error: any) {
+      results.stock_truth_summary = { ok: false, error: error.message || 'Stock summary update failed.' }
+    }
+  }
 
   return {
     sku,
@@ -1672,6 +1711,7 @@ async function processUpdateLocationQueueRow(params: {
 }) {
   const { row, supabase, server, token, locations } = params
   const payload = row.payload || {}
+  const companyId = normaliseText(row.company_id)
 
   const sku = normaliseText(payload.sku || row.sku)
   if (!sku) throw new Error('Missing SKU in queue payload.')
@@ -1725,15 +1765,18 @@ async function processUpdateLocationQueueRow(params: {
 
   const now = new Date().toISOString()
 
-  const { data: item, error: itemReadError } = await supabase
+  let itemReadQuery = supabase
     .from('items')
-    .select('id, sku')
+    .select('id, company_id, sku')
     .eq('sku', sku)
-    .maybeSingle()
+
+  if (companyId) itemReadQuery = itemReadQuery.eq('company_id', companyId)
+
+  const { data: item, error: itemReadError } = await itemReadQuery.maybeSingle()
 
   if (itemReadError) throw new Error(itemReadError.message)
 
-  const { error: itemUpdateError } = await supabase
+  let itemUpdateQuery = supabase
     .from('items')
     .update({
       current_location: appLocationName,
@@ -1746,6 +1789,10 @@ async function processUpdateLocationQueueRow(params: {
     })
     .eq('sku', sku)
 
+  if (companyId) itemUpdateQuery = itemUpdateQuery.eq('company_id', companyId)
+
+  const { error: itemUpdateError } = await itemUpdateQuery
+
   if (itemUpdateError) throw new Error(itemUpdateError.message)
 
   if (item?.id) {
@@ -1755,6 +1802,7 @@ async function processUpdateLocationQueueRow(params: {
         .select('id, stock_level')
         .eq('item_id', item.id)
         .eq('location_name', mapOperationalLocationToStoredLocation(linnworksLocationName))
+        .eq('company_id', item.company_id)
         .limit(1)
 
       if (!existingError) {
@@ -1772,6 +1820,7 @@ async function processUpdateLocationQueueRow(params: {
           await supabase
             .from('item_stock_locations')
             .insert({
+              company_id: item.company_id,
               item_id: item.id,
               sku,
               location_name: mapOperationalLocationToStoredLocation(linnworksLocationName),
@@ -1786,6 +1835,14 @@ async function processUpdateLocationQueueRow(params: {
       }
     } catch {
       // item_stock_locations may not exist yet in older deployments. Do not fail location sync for that.
+    }
+
+    if (item.company_id) {
+      try {
+        await recalculateStockSummaryForSku(supabase, item.company_id, sku)
+      } catch {
+        // Keep Linnworks location sync non-blocking if the shadow stock summary is not migrated yet.
+      }
     }
   }
 

@@ -59,6 +59,7 @@ begin
   alter table public.photography_calibration_profiles
     add constraint photography_calibration_profiles_type_check
     check (profile_type in (
+      'station_daily_reference',
       'colour_white_balance',
       'calibrite_colour_checker',
       'geometry_scale',

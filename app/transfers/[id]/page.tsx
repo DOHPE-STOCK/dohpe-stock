@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 import { useCompany } from '@/app/context/CompanyContext'
+import { isQuantityTrackedSkuType, skuTypeLabel } from '@/lib/skuTypes'
 
 const DEFAULT_BIN = 'Default'
 type ReceiveChoice = {
@@ -83,7 +84,7 @@ function text(value: any) {
 }
 
 function isReusableStockItem(item: StockItemRow | LinkedItem | null | undefined) {
-  return text(item?.sku_type).toLowerCase() === 'reusable'
+  return isQuantityTrackedSkuType(item?.sku_type)
 }
 
 function canonicalLocationKey(location: string | null | undefined) {
@@ -607,6 +608,11 @@ export default function TransferDetailPage() {
 
     try {
       const itemMap = await loadItemsBySku(receivableItems.map((item) => item.sku))
+      const blockedItem = Array.from(itemMap.values()).find((item) => !isReusableStockItem(item))
+      if (blockedItem) {
+        throw new Error(`${blockedItem.sku} is a ${skuTypeLabel(blockedItem.sku_type)} SKU and cannot be received through stock transfers.`)
+      }
+
       const reusableSkus = new Set(
         Array.from(itemMap.values())
           .filter(isReusableStockItem)
@@ -1008,7 +1014,7 @@ export default function TransferDetailPage() {
                         {isReusableStockItem(linkedItem) && (
                           <>
                             <span>·</span>
-                            <span className="font-bold text-yellow-300">Reusable qty unit</span>
+                            <span className="font-bold text-yellow-300">Standard qty unit</span>
                           </>
                         )}
                       </div>

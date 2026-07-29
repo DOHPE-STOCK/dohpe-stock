@@ -11,6 +11,7 @@ export type StaffUser = {
   role: string
   permissions: StaffPermissions
   is_active: boolean
+  pin_timeout_minutes?: number
 }
 
 type StaffInput = Partial<StaffUser> & {
@@ -18,7 +19,7 @@ type StaffInput = Partial<StaffUser> & {
   name: string
 }
 
-const STAFF_PIN_SESSION_MS = 1000 * 60 * 30
+const DEFAULT_STAFF_PIN_SESSION_MINUTES = 30
 const APP_SESSION_KEY_STORAGE = 'loopbase_app_session_key'
 
 type StaffContextType = {
@@ -40,13 +41,22 @@ const StaffContext = createContext<StaffContextType>({
 function normaliseStaff(saved: any): StaffUser | null {
   if (!saved?.id || !saved?.name) return null
 
+  const pinTimeoutMinutes = cleanPinTimeoutMinutes(saved.pin_timeout_minutes)
+
   return {
     id: String(saved.id),
     name: String(saved.name),
     role: String(saved.role || 'staff'),
     permissions: saved.permissions || {},
     is_active: saved.is_active !== false,
+    pin_timeout_minutes: pinTimeoutMinutes,
   }
+}
+
+function cleanPinTimeoutMinutes(value: any) {
+  const minutes = Number(value)
+  if (!Number.isFinite(minutes)) return DEFAULT_STAFF_PIN_SESSION_MINUTES
+  return Math.min(480, Math.max(5, Math.round(minutes)))
 }
 
 export function StaffProvider({ children }: { children: React.ReactNode }) {
@@ -91,15 +101,17 @@ export function StaffProvider({ children }: { children: React.ReactNode }) {
     setStaffState(safeStaff)
 
     if (safeStaff) {
-      const expiresAt = Date.now() + STAFF_PIN_SESSION_MS
+      const timeoutMinutes = cleanPinTimeoutMinutes(safeStaff.pin_timeout_minutes)
+      const expiresAt = Date.now() + timeoutMinutes * 60 * 1000
       const persistedStaff = {
         ...safeStaff,
+        pin_timeout_minutes: timeoutMinutes,
         expires_at: expiresAt,
       }
       const encoded = encodeURIComponent(JSON.stringify(persistedStaff))
 
       window.localStorage.setItem('active_staff_user', JSON.stringify(persistedStaff))
-      document.cookie = `active_staff_user=${encoded}; path=/; max-age=1800; SameSite=Lax`
+      document.cookie = `active_staff_user=${encoded}; path=/; max-age=${timeoutMinutes * 60}; SameSite=Lax`
       syncStaffPinSession('start', safeStaff.id)
     } else {
       clearStaffStorage()

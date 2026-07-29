@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireCompanyAccess } from '@/lib/serverTenant'
+import { recalculateStockSummaryForSku } from '@/lib/stockSummary'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -152,6 +153,12 @@ export async function POST(request: Request) {
 
       if (error) throw new Error(error.message)
 
+      try {
+        await recalculateStockSummaryForSku(supabase, companyId, sku)
+      } catch (summaryError: any) {
+        console.warn(`stock summary update failed for ${sku}:`, summaryError.message || summaryError)
+      }
+
       return NextResponse.json({ ok: true, row: data })
     }
 
@@ -174,6 +181,12 @@ export async function POST(request: Request) {
       .single()
 
     if (error) throw new Error(error.message)
+
+    try {
+      await recalculateStockSummaryForSku(supabase, companyId, sku)
+    } catch (summaryError: any) {
+      console.warn(`stock summary update failed for ${sku}:`, summaryError.message || summaryError)
+    }
 
     return NextResponse.json({ ok: true, row: data })
   } catch (error: any) {

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getLinnworksIntegrationConfig, shouldRunLinnworksRoute } from '@/lib/linnworksIntegrationSettings'
 import { getEnabledIntegrationCompanies } from '@/lib/tenantCronCompanies'
+import { recalculateStockSummaryForSku, updateStockReservationStatus } from '@/lib/stockSummary'
+import { updateLoopbaseOrderLineStatus } from '@/lib/orderManagement'
 
 export const dynamic = 'force-dynamic'
 
@@ -929,6 +931,41 @@ async function processProcessedOrders(request: Request, companyId?: string) {
           companyId,
         })
 
+        let stockReservationRelease: any = null
+        let stockReservationWarning: string | null = null
+        let loopbaseOrderLineUpdate: any = null
+        let loopbaseOrderWarning: string | null = null
+
+        if (companyId) {
+          try {
+            stockReservationRelease = await updateStockReservationStatus({
+              supabase,
+              companyId,
+              source: 'linnworks_open_order',
+              externalOrderId: orderId,
+              sku,
+              status: 'cancelled',
+              releaseReason: 'linnworks_order_cancelled',
+            })
+            await recalculateStockSummaryForSku(supabase, companyId, sku)
+          } catch (error: any) {
+            stockReservationWarning = error.message || 'Stock reservation cancellation update failed.'
+          }
+
+          try {
+            loopbaseOrderLineUpdate = await updateLoopbaseOrderLineStatus({
+              supabase,
+              companyId,
+              source: 'linnworks',
+              externalOrderId: orderId,
+              sku,
+              status: 'cancelled',
+            })
+          } catch (error: any) {
+            loopbaseOrderWarning = error.message || 'Loopbase order cancellation update failed.'
+          }
+        }
+
         let saleUpdateQuery = supabase
           .from('linnworks_processed_sales')
           .update({
@@ -954,6 +991,10 @@ async function processProcessedOrders(request: Request, companyId?: string) {
           cancellation_reference_found: orderHasCancellationReference(order),
           release_result: releaseResult,
           saved_deduction_restore_result: savedDeductionRestoreResult,
+          stock_reservation_release: stockReservationRelease,
+          stock_reservation_warning: stockReservationWarning,
+          loopbase_order_line_update: loopbaseOrderLineUpdate,
+          loopbase_order_warning: loopbaseOrderWarning,
           debug_order: debug ? order : undefined,
         })
 
@@ -1012,6 +1053,40 @@ async function processProcessedOrders(request: Request, companyId?: string) {
 
       if (itemError) throw new Error(itemError.message)
 
+      let stockReservationProcessed: any = null
+      let stockReservationWarning: string | null = null
+      let loopbaseOrderLineUpdate: any = null
+      let loopbaseOrderWarning: string | null = null
+
+      if (companyId) {
+        try {
+          stockReservationProcessed = await updateStockReservationStatus({
+            supabase,
+            companyId,
+            source: 'linnworks_open_order',
+            externalOrderId: orderId,
+            sku,
+            status: 'deducted',
+          })
+          await recalculateStockSummaryForSku(supabase, companyId, sku)
+        } catch (error: any) {
+          stockReservationWarning = error.message || 'Stock reservation processed update failed.'
+        }
+
+        try {
+          loopbaseOrderLineUpdate = await updateLoopbaseOrderLineStatus({
+            supabase,
+            companyId,
+            source: 'linnworks',
+            externalOrderId: orderId,
+            sku,
+            status: 'dispatched',
+          })
+        } catch (error: any) {
+          loopbaseOrderWarning = error.message || 'Loopbase order dispatched update failed.'
+        }
+      }
+
       results.push({
         ok: true,
         sku,
@@ -1022,6 +1097,10 @@ async function processProcessedOrders(request: Request, companyId?: string) {
         tracking_number: trackingNumber || null,
         shipping_vendor: shippingVendor || null,
         shipping_method: shippingMethod || null,
+        stock_reservation_processed: stockReservationProcessed,
+        stock_reservation_warning: stockReservationWarning,
+        loopbase_order_line_update: loopbaseOrderLineUpdate,
+        loopbase_order_warning: loopbaseOrderWarning,
       })
     }
 

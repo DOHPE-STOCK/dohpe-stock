@@ -6,10 +6,11 @@ import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 import { useCompany } from '@/app/context/CompanyContext'
 import { supabase } from '@/lib/supabase'
+import { isQuantityTrackedSkuType, skuTypeLabel } from '@/lib/skuTypes'
 
-type ScanMode = 'bin' | 'items'
+type ScanMode = 'bin' | 'action' | 'items'
 type ItemScanMode = 'sku' | 'rfid'
-type SkuType = 'single_use' | 'reusable' | string
+type SkuType = 'standard' | 'parent_child' | 'composite' | 'digital' | 'single_use' | 'reusable' | string
 
 type WarehouseBin = {
   id: string
@@ -51,7 +52,7 @@ function text(value: any) {
 }
 
 function isReusable(item: Pick<PendingItem, 'sku_type'>) {
-  return text(item.sku_type).toLowerCase() === 'reusable'
+  return isQuantityTrackedSkuType(item.sku_type)
 }
 
 function canonicalLocationKey(location: string | null | undefined) {
@@ -73,9 +74,12 @@ function parseBinScan(value: string) {
   const raw = text(value)
   const queryMatch = raw.match(/[?&]bin=([^&#]+)/i)
   const locationMatch = raw.match(/[?&]location=([^&#]+)/i)
+  const typeMatch = raw.match(/[?&]type=([^&#]+)/i)
 
   if (queryMatch?.[1]) {
     return {
+      isQr: true,
+      type: typeMatch?.[1] ? decodeURIComponent(typeMatch[1]).trim().toLowerCase() : 'bin',
       location: locationMatch?.[1]
         ? decodeURIComponent(locationMatch[1]).trim().toUpperCase()
         : '',
@@ -83,7 +87,7 @@ function parseBinScan(value: string) {
     }
   }
 
-  return { location: '', bin: cleanScanValue(raw) }
+  return { isQr: false, type: '', location: '', bin: cleanScanValue(raw) }
 }
 
 function configuredLocationRows(rows: LocationConfig[]) {
@@ -143,7 +147,7 @@ export default function AllocatePage() {
     }
 
     if (binFromUrl) {
-      scanBin(cleanScanValue(binFromUrl), cleanScanValue(destinationLocation))
+      scanBin(cleanScanValue(binFromUrl), cleanScanValue(destinationLocation), { showActionChoice: true })
     }
 
     focusInput()
@@ -290,7 +294,13 @@ export default function AllocatePage() {
 
     if (mode === 'bin') {
       const parsedBin = parseBinScan(value)
-      await scanBin(parsedBin.bin, parsedBin.location)
+      await scanBin(parsedBin.bin, parsedBin.location, { showActionChoice: parsedBin.isQr && parsedBin.type === 'bin' })
+      focusInput()
+      return
+    }
+
+    if (mode === 'action') {
+      setMessage('Choose Allocate stock or Recount bin first.')
       focusInput()
       return
     }
@@ -299,7 +309,7 @@ export default function AllocatePage() {
     focusInput()
   }
 
-  async function scanBin(binCode: string, locationName = '') {
+  async function scanBin(binCode: string, locationName = '', options: { showActionChoice?: boolean } = {}) {
     if (!binCode) return
 
     const cleanBin = cleanScanValue(binCode)
@@ -351,11 +361,13 @@ export default function AllocatePage() {
 
       const selectedBin = created as WarehouseBin
       setActiveBin(selectedBin)
-      setMode('items')
+      setMode(options.showActionChoice ? 'action' : 'items')
       setMessage(
-        `Bin auto-created and selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. ${
-          pendingItems.length > 0 ? 'Preloaded items are ready to allocate.' : 'Scan item SKUs now.'
-        }`
+        options.showActionChoice
+          ? `Bin selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. Choose Allocate or Recount.`
+          : `Bin auto-created and selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. ${
+              pendingItems.length > 0 ? 'Preloaded items are ready to allocate.' : 'Scan item SKUs now.'
+            }`
       )
       focusInput()
       return
@@ -374,11 +386,13 @@ export default function AllocatePage() {
     }
 
     setActiveBin(selectedBin)
-    setMode('items')
+    setMode(options.showActionChoice ? 'action' : 'items')
     setMessage(
-      `Bin selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. ${
-        pendingItems.length > 0 ? 'Preloaded items are ready to allocate.' : 'Scan item SKUs now.'
-      }`
+      options.showActionChoice
+        ? `Bin selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. Choose Allocate or Recount.`
+        : `Bin selected: ${getActiveDisplayLocation(selectedBin)} / ${selectedBin.bin_code}. ${
+            pendingItems.length > 0 ? 'Preloaded items are ready to allocate.' : 'Scan item SKUs now.'
+          }`
     )
     focusInput()
   }
@@ -458,6 +472,11 @@ export default function AllocatePage() {
     const item = data as PendingItem
     const itemIsReusable = isReusable(item)
 
+    if (!itemIsReusable) {
+      setMessage(`${skuTypeLabel(item.sku_type)} SKUs cannot be allocated directly.`)
+      return
+    }
+
     setPendingItems((current) => {
       const existing = current.find((row) => row.id === item.id)
 
@@ -480,7 +499,7 @@ export default function AllocatePage() {
 
     setMessage(
       itemIsReusable
-        ? `Added reusable ${item.sku} x1. Scan again to allocate another.`
+        ? `Added standard ${item.sku} x1. Scan again to allocate another.`
         : `Added ${item.sku}`
     )
   }
@@ -507,6 +526,25 @@ export default function AllocatePage() {
     setActiveBin(null)
     setMode('bin')
     setMessage('Scan bin.')
+    focusInput()
+  }
+
+  function chooseAllocateMode() {
+    if (!activeBin) return
+    setMode('items')
+    setMessage(
+      `Allocate mode: ${getActiveDisplayLocation(activeBin)} / ${getActiveBinCode(activeBin)}. ${
+        pendingItems.length > 0 ? 'Preloaded items are ready to allocate.' : 'Scan item SKUs now.'
+      }`
+    )
+    focusInput()
+  }
+
+  function chooseRecountMode() {
+    if (!activeBin) return
+    setMessage(
+      `Recount selected for ${getActiveDisplayLocation(activeBin)} / ${getActiveBinCode(activeBin)}. Recount task workflow is next to wire in.`
+    )
     focusInput()
   }
 
@@ -800,7 +838,7 @@ export default function AllocatePage() {
             </p>
 
             <h2 className="mt-1 text-3xl font-black">
-              {mode === 'bin' ? 'SCAN BIN' : 'SCAN ITEMS'}
+              {mode === 'bin' ? 'SCAN BIN' : mode === 'action' ? 'CHOOSE ACTION' : 'SCAN ITEMS'}
             </h2>
 
             <div className="mt-4 rounded-xl bg-neutral-950 p-4">
@@ -817,6 +855,35 @@ export default function AllocatePage() {
               )}
             </div>
           </section>
+
+          {mode === 'action' && activeBin && (
+            <section className="rounded-2xl border border-emerald-800 bg-emerald-950/30 p-4">
+              <p className="text-sm font-bold text-emerald-100">
+                Bin QR scanned: {getActiveDisplayLocation(activeBin)} / {getActiveBinCode(activeBin)}
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={chooseAllocateMode}
+                  disabled={busy || allocating}
+                  className="rounded-xl bg-emerald-600 px-5 py-5 text-xl font-black text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  Allocate Stock
+                </button>
+                <button
+                  type="button"
+                  onClick={chooseRecountMode}
+                  disabled={busy || allocating}
+                  className="rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
+                >
+                  Recount Bin
+                </button>
+              </div>
+              <p className="mt-3 text-xs font-bold text-neutral-400">
+                In pick mode, this same QR will verify the source bin for the active pick instead of opening these options.
+              </p>
+            </section>
+          )}
 
           <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
             {mode === 'items' && (
@@ -859,9 +926,11 @@ export default function AllocatePage() {
                   ? 'Go to staff PIN screen first'
                   : mode === 'bin'
                     ? 'Scan bin barcode'
+                    : mode === 'action'
+                      ? 'Choose Allocate Stock or Recount Bin'
                     : itemScanMode === 'rfid'
                       ? 'Scan item RFID'
-                      : 'Scan item SKU or reusable barcode'
+                      : 'Scan item SKU or barcode'
               }
               disabled={busy || allocating || !staff}
               inputMode="none"
@@ -877,7 +946,7 @@ export default function AllocatePage() {
               disabled={busy || allocating || !scanValue.trim() || !staff}
               className="mt-3 w-full rounded-xl bg-white px-5 py-5 text-xl font-black text-black disabled:opacity-50"
             >
-              {busy ? 'PROCESSING...' : mode === 'bin' ? 'SET BIN' : 'ADD ITEM'}
+              {busy ? 'PROCESSING...' : mode === 'bin' ? 'SET BIN' : mode === 'action' ? 'CHOOSE ACTION ABOVE' : 'ADD ITEM'}
             </button>
           </section>
 
@@ -941,7 +1010,7 @@ export default function AllocatePage() {
                         </p>
                         <p className="text-sm text-neutral-400">
                           {isReusable(item)
-                            ? `Reusable: ${displayLocation(sourceLocation)} / ${item.current_bin || DEFAULT_BIN} → ${displayLocation(destinationLocation)} / ${activeBin?.bin_code || '-'}`
+                            ? `Standard: ${displayLocation(sourceLocation)} / ${item.current_bin || DEFAULT_BIN} → ${displayLocation(destinationLocation)} / ${activeBin?.bin_code || '-'}`
                             : `Current: ${displayLocation(sourceLocation)} / ${item.current_bin || '-'}`}
                         </p>
 

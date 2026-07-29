@@ -6,6 +6,12 @@ import { supabase } from '@/lib/supabase'
 import AppNav from '@/app/components/AppNav'
 import { useCompany } from '@/app/context/CompanyContext'
 import { useStaff } from '@/app/context/StaffContext'
+import {
+  isQuantityTrackedSkuType,
+  SKU_TYPE_OPTIONS,
+  skuTypeLabel,
+  type LoopbaseSkuType,
+} from '@/lib/skuTypes'
 
 type ItemImage = {
   processed_url: string | null
@@ -126,7 +132,6 @@ const CHANNEL_ICONS = [
 const WAREHOUSE_LOCATION = 'LOCATION-1'
 const IN_TRANSIT_LOCATION = 'IN_TRANSIT'
 const DEFAULT_BIN = 'Default'
-
 async function upsertStockLocationViaApi(params: {
   itemId: string
   sku: string
@@ -157,10 +162,6 @@ async function upsertStockLocationViaApi(params: {
   }
 
   return result.row as StockLocationChoice
-}
-
-function getYearPrefix() {
-  return new Date().getFullYear().toString().slice(-2)
 }
 
 function luhnCheckDigit(input: string) {
@@ -200,10 +201,6 @@ function extractTransferIdFromScan(value: string) {
   return null
 }
 
-function randomSequenceNumber() {
-  return Math.floor(Math.random() * 10000000)
-}
-
 function getSizeText(item: ScannedItem) {
   if (
     item.waist_in !== null &&
@@ -221,6 +218,26 @@ function getSizeText(item: ScannedItem) {
 function openLabelPreview(items: PreviewLabelItem[]) {
   window.localStorage.setItem('label_preview_items', JSON.stringify(items))
   window.open('/labels/preview', '_blank')
+}
+
+async function reserveGeneratedSkus(quantity: number): Promise<string[]> {
+  const response = await fetch('/api/skus/generated', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ quantity }),
+  })
+  const result = await response.json().catch(() => ({}))
+
+  if (!response.ok || result?.ok === false) {
+    throw new Error(result?.message || 'Generated SKU reservation failed.')
+  }
+
+  const skus: string[] = Array.isArray(result.skus) ? result.skus.map((sku: any) => String(sku)) : []
+  if (skus.length !== quantity) {
+    throw new Error('Generated SKU reservation returned the wrong quantity.')
+  }
+
+  return skus
 }
 
 function cleanReusableSku(value: string) {
@@ -274,6 +291,7 @@ export default function SkuSearchPage() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [reusableSearch, setReusableSearch] = useState('')
+  const [newItemSkuType, setNewItemSkuType] = useState<LoopbaseSkuType>('standard')
   const [reusableResults, setReusableResults] = useState<ReusableSkuResult[]>([])
   const [reusableSuggestionsLoaded, setReusableSuggestionsLoaded] = useState(false)
   const [reusableBusy, setReusableBusy] = useState(false)
@@ -532,7 +550,7 @@ export default function SkuSearchPage() {
         sku,
         status: 'working',
         stock_level: 1,
-        sku_type: 'single_use',
+        sku_type: 'standard',
         location_status: 'stored',
         current_location: WAREHOUSE_LOCATION,
         current_bin: 'Default',
@@ -709,7 +727,6 @@ export default function SkuSearchPage() {
     }
 
     let itemData = data
-    let createdFromScan = false
 
     if (!itemData) {
       let identifierQuery = supabase
@@ -782,23 +799,29 @@ export default function SkuSearchPage() {
 
     if (!itemData) {
       const confirmed = window.confirm(
-        `SKU ${rawSku} is not in the app yet. Create item now?`
+        `Item ${rawSku} is not in the system.\n\nCreate it and start a photo/catalogue session?\n\nOK = create and start\nCancel = do not create`
       )
 
-      if (confirmed) {
-        setBusy(true)
-        const createdItem = await createItemFromSku(rawSku)
-        setBusy(false)
-
-        if (!createdItem) {
-          setScanValue('')
-          return
-        }
-
-        itemData = createdItem
-        createdFromScan = true
-        setMessage(`Created item ${rawSku} by ${staff.name}`)
+      if (!confirmed) {
+        setScanValue('')
+        setMessage(`Item ${rawSku} was not created.`)
+        setTimeout(() => scanInputRef.current?.focus(), 50)
+        return
       }
+
+      setBusy(true)
+      const createdItem = await createItemFromSku(rawSku)
+      setBusy(false)
+
+      if (!createdItem) {
+        setScanValue('')
+        return
+      }
+
+      setScanValue('')
+      setMessage(`Created item ${rawSku} by ${staff.name}. Opening catalogue session...`)
+      router.push(`/items/${createdItem.id}?catalogue=1&start_photo=1&calibration_prompt=1`)
+      return
     }
 
     const loanedByName =
@@ -815,18 +838,6 @@ export default function SkuSearchPage() {
 
     const firstImage =
       firstImageRecord?.processed_url || firstImageRecord?.original_url || null
-
-    if (itemData?.id && !firstImage && createdFromScan) {
-      const startPhoto = window.confirm(
-        `Created item ${itemData.sku || rawSku}.\n\nStart a photography session for it now?`
-      )
-
-      if (startPhoto) {
-        setScanValue('')
-        router.push(`/items/${itemData.id}?start_photo=1`)
-        return
-      }
-    }
 
     const stockLocations = itemData ? await ensurePrimaryStockLocationRow(itemData, itemData.sku || rawSku) : []
 
@@ -846,7 +857,7 @@ export default function SkuSearchPage() {
       condition: itemData?.condition || null,
       selling_price: itemData?.selling_price || null,
       stock_level: itemData?.stock_level ?? 1,
-      sku_type: itemData?.sku_type || 'single_use',
+      sku_type: itemData?.sku_type || 'standard',
       location_status: itemData?.location_status || 'unknown',
       current_location: resolveLocationName(itemData?.current_location || null),
       current_bin: itemData?.current_bin || null,
@@ -1023,6 +1034,10 @@ export default function SkuSearchPage() {
 
     try {
       for (const item of existingItems) {
+        if (!isQuantityTrackedSkuType(item.sku_type)) {
+          throw new Error(`${item.sku} is a ${skuTypeLabel(item.sku_type)} SKU and cannot be transferred directly.`)
+        }
+
         const choices = await getReusableStockChoices(item)
         const choice = choices[0]
 
@@ -1321,79 +1336,7 @@ export default function SkuSearchPage() {
     setMessage('Generating labels...')
 
     try {
-      const yearPrefix = getYearPrefix()
-      const skus: string[] = []
-
-      const rowsToInsert: {
-        sku: string
-        year_prefix: string
-        sequence_number: number
-        check_digit: string
-      }[] = []
-
-      let attempts = 0
-
-      while (skus.length < qty && attempts < qty * 100) {
-        attempts++
-
-        const sequenceNumber = randomSequenceNumber()
-        const body = `${yearPrefix}${String(sequenceNumber).padStart(7, '0')}`
-        const checkDigit = luhnCheckDigit(body)
-        const sku = `${body}${checkDigit}`
-
-        if (skus.includes(sku)) continue
-
-        let itemCheckQuery = supabase
-          .from('items')
-          .select('sku')
-          .eq('sku', sku)
-
-        if (schemaReady) itemCheckQuery = itemCheckQuery.eq('company_id', activeCompanyId)
-
-        const { data: existingItem, error: itemCheckError } = await itemCheckQuery.maybeSingle()
-
-        if (itemCheckError) {
-          throw new Error(`Item SKU check failed: ${itemCheckError.message}`)
-        }
-
-        if (existingItem) continue
-
-        const { data: existingGenerated, error: generatedCheckError } =
-          await supabase
-            .from('generated_skus')
-            .select('sku')
-            .eq('sku', sku)
-            .maybeSingle()
-
-        if (generatedCheckError) {
-          throw new Error(
-            `Generated SKU check failed: ${generatedCheckError.message}`
-          )
-        }
-
-        if (existingGenerated) continue
-
-        skus.push(sku)
-
-        rowsToInsert.push({
-          sku,
-          year_prefix: yearPrefix,
-          sequence_number: sequenceNumber,
-          check_digit: checkDigit,
-        })
-      }
-
-      if (skus.length !== qty) {
-        throw new Error('Could not generate enough unique SKUs.')
-      }
-
-      const { error: insertError } = await supabase
-        .from('generated_skus')
-        .insert(rowsToInsert)
-
-      if (insertError) {
-        throw new Error(`Saving generated SKUs failed: ${insertError.message}`)
-      }
+      const skus = await reserveGeneratedSkus(qty)
 
       openLabelPreview(
         skus.map((sku) => ({
@@ -1403,88 +1346,18 @@ export default function SkuSearchPage() {
         }))
       )
 
-      setMessage(`Opened preview for ${skus.length} new single-use SKU label(s).`)
+      setMessage(`Opened preview for ${skus.length} generated SKU label(s).`)
     } catch (error: any) {
-      setMessage(error.message || 'Print Next failed.')
+      setMessage(error.message || 'Quick print failed.')
     } finally {
       setBusy(false)
     }
   }
 
   async function generateReusableBarcodeNumber() {
-    const yearPrefix = getYearPrefix()
-    let attempts = 0
-
-    while (attempts < 1000) {
-      attempts++
-
-      const sequenceNumber = randomSequenceNumber()
-      const body = `${yearPrefix}${String(sequenceNumber).padStart(7, '0')}`
-      const checkDigit = luhnCheckDigit(body)
-      const barcodeNumber = `${body}${checkDigit}`
-
-      let itemSkuQuery = supabase
-        .from('items')
-        .select('id')
-        .eq('sku', barcodeNumber)
-
-      if (schemaReady) itemSkuQuery = itemSkuQuery.eq('company_id', activeCompanyId)
-
-      const { data: existingItemBySku, error: itemSkuError } = await itemSkuQuery.maybeSingle()
-
-      if (itemSkuError) {
-        throw new Error(`Item SKU check failed: ${itemSkuError.message}`)
-      }
-
-      if (existingItemBySku) continue
-
-      let itemBarcodeQuery = supabase
-        .from('items')
-        .select('id')
-        .eq('barcode_number', barcodeNumber)
-
-      if (schemaReady) itemBarcodeQuery = itemBarcodeQuery.eq('company_id', activeCompanyId)
-
-      const { data: existingItemByBarcode, error: itemBarcodeError } = await itemBarcodeQuery.maybeSingle()
-
-      if (itemBarcodeError) {
-        throw new Error(`Item barcode check failed: ${itemBarcodeError.message}`)
-      }
-
-      if (existingItemByBarcode) continue
-
-      const { data: existingGenerated, error: generatedCheckError } =
-        await supabase
-          .from('generated_skus')
-          .select('sku')
-          .eq('sku', barcodeNumber)
-          .maybeSingle()
-
-      if (generatedCheckError) {
-        throw new Error(
-          `Generated SKU check failed: ${generatedCheckError.message}`
-        )
-      }
-
-      if (existingGenerated) continue
-
-      const { error: insertGeneratedError } = await supabase
-        .from('generated_skus')
-        .insert({
-          sku: barcodeNumber,
-          year_prefix: yearPrefix,
-          sequence_number: sequenceNumber,
-          check_digit: checkDigit,
-        })
-
-      if (insertGeneratedError) {
-        throw new Error(`Saving reusable barcode failed: ${insertGeneratedError.message}`)
-      }
-
-      return barcodeNumber
-    }
-
-    throw new Error('Could not generate a reusable barcode number.')
+    const [barcodeNumber] = await reserveGeneratedSkus(1)
+    if (!barcodeNumber) throw new Error('Could not generate a barcode number.')
+    return barcodeNumber
   }
 
   async function loadReusableSkuSuggestions() {
@@ -1511,7 +1384,7 @@ export default function SkuSearchPage() {
           current_location,
           current_bin
         `)
-        .eq('sku_type', 'reusable')
+        .in('sku_type', ['standard', 'reusable', 'single_use'])
         .order('sku', { ascending: true })
         .limit(300)
 
@@ -1524,7 +1397,7 @@ export default function SkuSearchPage() {
       setReusableResults((data || []) as ReusableSkuResult[])
       setReusableSuggestionsLoaded(true)
     } catch (error: any) {
-      setReusableMessage(error.message || 'Could not load reusable SKU suggestions.')
+      setReusableMessage(error.message || 'Could not load stock SKU suggestions.')
     } finally {
       setReusableBusy(false)
     }
@@ -1534,12 +1407,12 @@ export default function SkuSearchPage() {
     const clean = reusableSearch.trim()
 
     if (!clean) {
-      setReusableMessage('Enter a reusable SKU, brand, or title first.')
+      setReusableMessage('Enter a stock SKU, brand, or title first.')
       return
     }
 
     setReusableBusy(true)
-    setReusableMessage('Finding reusable SKU...')
+    setReusableMessage('Finding stock SKU...')
 
     try {
       const sku = cleanReusableSku(clean)
@@ -1562,7 +1435,7 @@ export default function SkuSearchPage() {
           current_location,
           current_bin
         `)
-        .eq('sku_type', 'reusable')
+        .in('sku_type', ['standard', 'reusable', 'single_use'])
         .or(
           `sku.eq.${sku},barcode_number.eq.${sku},sku.ilike.%${safe}%,barcode_number.ilike.%${safe}%,brand.ilike.%${safe}%,basic_title.ilike.%${safe}%,ai_title.ilike.%${safe}%,final_title.ilike.%${safe}%`
         )
@@ -1580,26 +1453,26 @@ export default function SkuSearchPage() {
       setReusableSuggestionsLoaded(true)
 
       if (rows.length === 0) {
-        setReusableMessage('No reusable SKU found. Use Create New if this should be a repeat-stock SKU.')
+        setReusableMessage('No stock SKU found. Use Create New if this should be a repeat-stock SKU.')
         return
       }
 
       const exact = rows.find((item) => item.sku.toUpperCase() === sku || item.barcode_number === sku)
 
       if (exact) {
-        setReusableMessage(`Found reusable SKU ${exact.sku}. Use Edit or Print.`)
+        setReusableMessage(`Found stock SKU ${exact.sku}. Use Edit or Print.`)
         return
       }
 
-      setReusableMessage(`Found ${rows.length} matching reusable SKU(s).`)
+      setReusableMessage(`Found ${rows.length} matching stock SKU(s).`)
     } catch (error: any) {
-      setReusableMessage(error.message || 'Could not find reusable SKU.')
+      setReusableMessage(error.message || 'Could not find stock SKU.')
     } finally {
       setReusableBusy(false)
     }
   }
 
-  async function createReusableSku() {
+  async function createNewItemSku() {
     if (!staff) {
       setReusableMessage('No active staff selected. Go to staff PIN screen first.')
       return
@@ -1608,17 +1481,12 @@ export default function SkuSearchPage() {
     const sku = cleanReusableSku(reusableSearch)
 
     if (!sku) {
-      setReusableMessage('Enter a reusable SKU first.')
-      return
-    }
-
-    if (exactReusableMatch) {
-      setReusableMessage('This reusable SKU already exists. Use Edit or Print.')
+      setReusableMessage('Enter an item SKU first.')
       return
     }
 
     const confirmed = window.confirm(
-      `Create reusable SKU ${sku}?\n\nThis creates a repeat-stock product line, not a one-off single-use item.`
+      `Create ${SKU_TYPE_OPTIONS.find((option) => option.value === newItemSkuType)?.label || 'item'} SKU ${sku}?`
     )
 
     if (!confirmed) return
@@ -1626,7 +1494,7 @@ export default function SkuSearchPage() {
     const now = new Date().toISOString()
 
     setReusableBusy(true)
-    setReusableMessage('Creating reusable SKU...')
+    setReusableMessage('Creating item SKU...')
 
     try {
       let existingQuery = supabase
@@ -1641,15 +1509,13 @@ export default function SkuSearchPage() {
       if (existingError) throw new Error(existingError.message)
 
       if (existing) {
-        setReusableMessage(
-          existing.sku_type === 'reusable'
-            ? 'Reusable SKU already exists. Use Find, Edit, or Print.'
-            : 'That SKU already exists as a single-use/item SKU. Choose a different reusable SKU.'
-        )
+        setReusableMessage('That SKU already exists. Use the main search result to open it, or choose another SKU.')
         return
       }
 
       const barcodeNumber = await generateReusableBarcodeNumber()
+      const isDigital = newItemSkuType === 'digital'
+      const stockLevel = isDigital ? 0 : 0
 
       const { data, error } = await supabase
         .from('items')
@@ -1657,9 +1523,9 @@ export default function SkuSearchPage() {
           ...(schemaReady ? { company_id: activeCompanyId } : {}),
           sku,
           barcode_number: barcodeNumber,
-          sku_type: 'reusable',
+          sku_type: newItemSkuType,
           status: 'working',
-          stock_level: 0,
+          stock_level: stockLevel,
           shop_floor_stock: 0,
           warehouse_stock: 0,
           location_status: 'stored',
@@ -1687,10 +1553,10 @@ export default function SkuSearchPage() {
       setReusableSearch('')
       setReusableResults([])
       setReusableSuggestionsLoaded(false)
-      setReusableMessage(`Created reusable SKU ${sku} with barcode ${barcodeNumber}. Opening edit page...`)
+      setReusableMessage(`Created item SKU ${sku} with barcode ${barcodeNumber}. Opening edit page...`)
       router.push(`/items/${data.id}`)
     } catch (error: any) {
-      setReusableMessage(error.message || 'Could not create reusable SKU.')
+      setReusableMessage(error.message || 'Could not create item SKU.')
     } finally {
       setReusableBusy(false)
     }
@@ -1704,7 +1570,7 @@ export default function SkuSearchPage() {
     const target = item || exactReusableMatch
 
     if (!target) {
-      setReusableMessage('Find or select an existing reusable SKU before printing.')
+      setReusableMessage('Find or select an existing stock SKU before printing.')
       return
     }
 
@@ -2032,62 +1898,78 @@ export default function SkuSearchPage() {
       <section className="grid gap-5 lg:grid-cols-2">
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
           <h2 className="mb-3 text-lg font-semibold">
-            Print Next Single-Use Labels
+            Quick Print Random SKU Labels
           </h2>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input
               type="number"
-              min={0}
+              min={1}
               max={100}
               value={printQty}
               onChange={(e) => setPrintQty(Number(e.target.value))}
-              className="w-32 rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2"
+              className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 sm:w-32"
             />
 
             <button
               onClick={printNextLabels}
-              disabled={busy}
-              className="rounded-xl bg-white px-4 py-2 font-semibold text-black disabled:opacity-50"
+              disabled={busy || !staff}
+              className="rounded-xl bg-emerald-600 px-4 py-2 font-black text-white disabled:opacity-50"
             >
-              Preview / Print Next
+              Quick Print
             </button>
           </div>
 
           <p className="mt-2 text-sm text-neutral-400">
-            Generates unused pseudo-random single-use SKU barcode labels and opens the print preview page.
+            Generates reserved barcode labels only. Scan a printed label later to create a Standard working item, edit details, or start photography.
           </p>
         </div>
 
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
           <h2 className="mb-3 text-lg font-semibold">
-            Create / Find / Print Reusable SKU
+            Create Detailed SKU
           </h2>
 
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {SKU_TYPE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setNewItemSkuType(option.value)}
+                  className={`rounded-xl border px-3 py-3 text-left transition ${
+                    newItemSkuType === option.value
+                      ? 'border-emerald-400 bg-emerald-600 text-white'
+                      : 'border-neutral-700 bg-neutral-950 text-neutral-200 hover:border-white'
+                  }`}
+                >
+                  <span className="block text-sm font-black">{option.label}</span>
+                  <span className="mt-1 block text-xs leading-snug opacity-80">
+                    {option.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">
               <input
                 value={reusableSearch}
-                onFocus={loadReusableSkuSuggestions}
                 onChange={(e) => setReusableSearch(e.target.value.toUpperCase())}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    if (exactReusableMatch) {
-                      editReusableSku(exactReusableMatch)
-                    } else {
-                      findReusableSku()
-                    }
+                    createNewItemSku()
                   }
                 }}
-                placeholder="Reusable SKU, brand, or title"
+                placeholder="Enter SKU"
                 disabled={!staff}
                 autoComplete="new-password"
-              name="dohpe-reusable-sku-no-autofill"
-              id="dohpe-reusable-sku-no-autofill"
+              name="loopbase-new-item-sku-no-autofill"
+              id="loopbase-new-item-sku-no-autofill"
               className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-white disabled:opacity-50"
               />
 
-              <datalist id="reusable-sku-suggestions">
+              {false && <datalist id="reusable-sku-suggestions">
                 {reusableResults.map((item) => (
                   <option
                     key={item.id}
@@ -2102,47 +1984,18 @@ export default function SkuSearchPage() {
                       .join(' · ')}
                   />
                 ))}
-              </datalist>
+              </datalist>}
             </div>
 
             <button
               type="button"
-              onClick={() => {
-                if (exactReusableMatch) {
-                  editReusableSku(exactReusableMatch)
-                  return
-                }
-
-                createReusableSku()
-              }}
+              onClick={createNewItemSku}
               disabled={reusableBusy || !staff || !reusableSearch.trim()}
               className="rounded-xl bg-emerald-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
             >
-              {exactReusableMatch ? 'Edit' : 'Create'}
-            </button>
-
-            <button
-              type="button"
-              onClick={findReusableSku}
-              disabled={reusableBusy || !staff || !reusableSearch.trim()}
-              className="rounded-xl bg-white px-4 py-2 font-semibold text-black disabled:opacity-50"
-            >
-              Find
-            </button>
-
-            <button
-              type="button"
-              onClick={() => openReusablePrintQuantity()}
-              disabled={reusableBusy || !staff || !exactReusableMatch}
-              className="rounded-xl border border-neutral-700 px-4 py-2 font-semibold text-white disabled:opacity-50"
-            >
-              Print
+              Create Detailed SKU
             </button>
           </div>
-
-          <p className="mt-2 text-sm text-neutral-400">
-            Reusable SKUs are for repeat-stock product lines. The field gives suggestions from existing reusable SKUs, but does not run a search on every key press.
-          </p>
 
           {reusableMessage && (
             <div className="mt-3 rounded-xl border border-neutral-700 bg-neutral-950 p-3 text-sm text-neutral-200">
@@ -2154,11 +2007,11 @@ export default function SkuSearchPage() {
             <p className="mt-3 text-sm font-bold text-neutral-400">Loading...</p>
           )}
 
-          {reusableSearch.trim().length >= 2 &&
+          {false && reusableSearch.trim().length >= 2 &&
             reusableDropdownMatches.length > 0 && (
               <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3">
                 <p className="mb-2 text-xs font-bold uppercase text-neutral-500">
-                  Matching reusable SKUs
+                  Matching stock SKUs
                 </p>
 
                 <div className="space-y-2">
@@ -2204,6 +2057,7 @@ export default function SkuSearchPage() {
                 </div>
               </div>
             )}
+          </div>
         </div>
       </section>
 
@@ -2432,7 +2286,7 @@ export default function SkuSearchPage() {
       {reusablePrintOpen && reusablePrintItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-neutral-700 bg-neutral-900 p-5 text-white shadow-2xl">
-            <h2 className="text-xl font-black">Print Reusable SKU</h2>
+            <h2 className="text-xl font-black">Print Stock SKU</h2>
             <p className="mt-2 font-mono text-sm text-neutral-300">
               SKU: {reusablePrintItem.sku}
             </p>

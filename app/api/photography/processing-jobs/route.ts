@@ -78,6 +78,7 @@ export async function POST(request: Request) {
   const captureId = text(body.capture_id || body.captureId)
   const jobType = text(body.job_type || body.jobType)
   const processingSource = text(body.processing_source || body.processingSource) || 'jpeg_camera_original'
+  const force = Boolean(body.force)
 
   if (!captureId) return failure(400, 'Capture is required.')
   if (!allowedJobTypes.includes(jobType)) return failure(400, 'Invalid processing job type.')
@@ -86,7 +87,7 @@ export async function POST(request: Request) {
   const supabase = getSupabaseAdmin()
   const { data: capture, error: captureError } = await supabase
     .from('photo_captures')
-    .select('id, company_id, station_id, source_id, session_id, item_id, capture_status')
+    .select('id, company_id, station_id, source_id, session_id, item_id, capture_status, exif')
     .eq('company_id', access.company.id)
     .eq('id', captureId)
     .maybeSingle()
@@ -97,44 +98,109 @@ export async function POST(request: Request) {
     return failure(409, 'Deleted or archived captures cannot be processed.')
   }
 
-  const { data: existing, error: existingError } = await supabase
-    .from('photo_processing_jobs')
-    .select('id, status, queued_at')
-    .eq('company_id', access.company.id)
-    .eq('capture_id', capture.id)
-    .eq('job_type', jobType)
-    .eq('processing_source', processingSource)
-    .in('status', activeJobStatuses())
-    .order('queued_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  let sourceId = capture.source_id || null
+  if (!sourceId) {
+    const { data: source, error: sourceError } = await supabase
+      .from('photo_sources')
+      .select('id')
+      .eq('company_id', access.company.id)
+      .eq('station_id', capture.station_id)
+      .eq('source_type', 'watched_folder')
+      .eq('enabled', true)
+      .is('token_revoked_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
-  if (existingError) return failure(500, existingError.message)
-  if (existing) {
-    return NextResponse.json({
-      ok: true,
-      job: existing,
-      already_queued: true,
-      message: 'A matching processing job is already active.',
-    })
+    if (sourceError) return failure(500, sourceError.message)
+    sourceId = source?.id || null
+
+    if (!sourceId) {
+      const { data: fallbackSource, error: fallbackSourceError } = await supabase
+        .from('photo_sources')
+        .select('id')
+        .eq('company_id', access.company.id)
+        .eq('station_id', capture.station_id)
+        .eq('enabled', true)
+        .is('token_revoked_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (fallbackSourceError) return failure(500, fallbackSourceError.message)
+      sourceId = fallbackSource?.id || null
+    }
+
+    if (sourceId) {
+      await supabase
+        .from('photo_captures')
+        .update({ source_id: sourceId })
+        .eq('company_id', access.company.id)
+        .eq('id', capture.id)
+    }
+  }
+
+  if (!force) {
+    const { data: existing, error: existingError } = await supabase
+      .from('photo_processing_jobs')
+      .select('id, status, queued_at')
+      .eq('company_id', access.company.id)
+      .eq('capture_id', capture.id)
+      .eq('job_type', jobType)
+      .eq('processing_source', processingSource)
+      .in('status', activeJobStatuses())
+      .order('queued_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingError) return failure(500, existingError.message)
+    if (existing) {
+      if (sourceId) {
+        await supabase
+          .from('photo_processing_jobs')
+          .update({
+            source_id: sourceId,
+            station_id: capture.station_id,
+          })
+          .eq('company_id', access.company.id)
+          .eq('id', existing.id)
+          .is('source_id', null)
+      }
+
+      return NextResponse.json({
+        ok: true,
+        job: existing,
+        already_queued: true,
+        message: 'A matching processing job is already active.',
+      })
+    }
   }
 
   const calibrationProfileIds = Array.isArray(body.calibration_profile_ids || body.calibrationProfileIds)
     ? (body.calibration_profile_ids || body.calibrationProfileIds).map(text).filter(Boolean)
     : []
+  const bodyOptions = body.options && typeof body.options === 'object' ? body.options : {}
+  const captureExif = capture.exif && typeof capture.exif === 'object' ? capture.exif as Record<string, any> : {}
+  const manualUploadUrl = text(captureExif.public_url || captureExif.original_url || captureExif.processed_url)
+  const jobOptions = manualUploadUrl
+    ? {
+        ...bodyOptions,
+        manual_upload_url: manualUploadUrl,
+      }
+    : bodyOptions
 
   const { data: job, error } = await supabase
     .from('photo_processing_jobs')
     .insert({
       company_id: access.company.id,
       station_id: capture.station_id,
-      source_id: capture.source_id,
+      source_id: sourceId,
       session_id: capture.session_id,
       capture_id: capture.id,
       job_type: jobType,
       status: 'queued',
       processing_source: processingSource,
-      options: body.options && typeof body.options === 'object' ? body.options : {},
+      options: jobOptions,
       calibration_profile_ids: calibrationProfileIds,
       created_by: access.user.id,
     })

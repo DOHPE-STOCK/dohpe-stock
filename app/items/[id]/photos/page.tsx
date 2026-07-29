@@ -11,6 +11,21 @@ import { useCompany } from '@/app/context/CompanyContext'
 const MANUAL_UPLOAD_MAX_FILES = 20
 const MANUAL_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024
 
+const channelStatusFields = [
+  'linnworks_status',
+  'ebay_status',
+  'shopify_status',
+  'square_status',
+  'grailed_status',
+  'vestiaire_collective_status',
+  'whatnot_status',
+  'vinted_status',
+  'depop_status',
+  'tiktok_shop_status',
+]
+
+const liveChannelStatuses = new Set(['synced', 'active', 'listed', 'pending_update', 'failed'])
+
 export default function PhotosPage() {
   const params = useParams()
   const id = params.id as string
@@ -63,6 +78,40 @@ export default function PhotosPage() {
     if (schemaReady) query = query.eq('company_id', activeCompanyId)
 
     await query
+  }
+
+  async function markChannelUpdatesPending() {
+    try {
+      let query = supabase
+        .from('items')
+        .select(channelStatusFields.join(','))
+        .eq('id', id)
+
+      if (schemaReady) query = query.eq('company_id', activeCompanyId)
+
+      const { data: currentItem } = await query.maybeSingle()
+      if (!currentItem) return
+
+      const currentStatusMap = currentItem as unknown as Record<string, unknown>
+      const updates = channelStatusFields.reduce((next: Record<string, string>, field) => {
+        const status = String(currentStatusMap[field] || '').trim().toLowerCase()
+        if (liveChannelStatuses.has(status)) next[field] = 'pending_update'
+        return next
+      }, {})
+
+      if (Object.keys(updates).length === 0) return
+
+      let updateQuery = supabase
+        .from('items')
+        .update(updates)
+        .eq('id', id)
+
+      if (schemaReady) updateQuery = updateQuery.eq('company_id', activeCompanyId)
+
+      await updateQuery
+    } catch {
+      // Image edits should not be blocked by channel status bookkeeping.
+    }
   }
 
   async function fetchItem() {
@@ -201,6 +250,7 @@ export default function PhotosPage() {
     }
 
     await touchItemLastSavedBy()
+    await markChannelUpdatesPending()
 
     setUploading(false)
 
@@ -235,6 +285,7 @@ export default function PhotosPage() {
     }
 
     await touchItemLastSavedBy()
+    await markChannelUpdatesPending()
 
     if (selectedImage?.id === image.id) {
       setSelectedImage(null)
@@ -296,6 +347,7 @@ export default function PhotosPage() {
     await targetUpdateQuery
 
     await touchItemLastSavedBy()
+    await markChannelUpdatesPending()
 
     setMessage(
       staff
@@ -446,6 +498,7 @@ export default function PhotosPage() {
       )
 
       await touchItemLastSavedBy()
+      await markChannelUpdatesPending()
 
       setMessage(
         staff

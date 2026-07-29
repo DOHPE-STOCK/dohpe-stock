@@ -32,6 +32,10 @@ type LinnworksSettings = {
   sync_description_app_to_linnworks: boolean
   sync_category_app_to_linnworks: boolean
   sync_images_app_to_linnworks: boolean
+  auto_sync_stock_poll: boolean
+  auto_sync_order_import: boolean
+  auto_sync_processed_orders: boolean
+  auto_sync_product_queue: boolean
   location_mapping: Record<string, string>
   field_mapping: Record<string, string>
 }
@@ -80,6 +84,10 @@ const defaultSettings: LinnworksSettings = {
   sync_description_app_to_linnworks: true,
   sync_category_app_to_linnworks: true,
   sync_images_app_to_linnworks: true,
+  auto_sync_stock_poll: true,
+  auto_sync_order_import: true,
+  auto_sync_processed_orders: true,
+  auto_sync_product_queue: true,
   location_mapping: {
     'LOCATION-1': 'Default',
     'LOCATION-2': 'SHOP-1',
@@ -435,7 +443,7 @@ export default function LinnworksIntegrationPage() {
                 <span>
                   <span className="block font-bold">Auto Sync</span>
                   <span className="text-xs text-neutral-500">
-                    If off, cron-triggered sync routes should skip once the route gates are added.
+                    Master switch for scheduled Linnworks automation. Route controls below decide what runs.
                   </span>
                 </span>
 
@@ -446,6 +454,61 @@ export default function LinnworksIntegrationPage() {
                   className="h-4 w-4"
                 />
               </label>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 xl:col-span-2">
+            <h2 className="mb-4 text-lg font-semibold">Scheduled Route Controls</h2>
+
+            <p className="mb-4 text-sm text-neutral-400">
+              Use these to phase Linnworks out safely. For example, stock polling can be disabled
+              while order import and cancellation polling stay on until Loopbase handles orders directly.
+            </p>
+
+            <div className="grid gap-2 text-sm md:grid-cols-2">
+              {[
+                [
+                  'auto_sync_stock_poll',
+                  'Stock polling from Linnworks',
+                  'When off, Linnworks stops being the stock master for app stock levels.',
+                ],
+                [
+                  'auto_sync_order_import',
+                  'Open order import',
+                  'Keeps pulling open orders so Loopbase can reserve/pick them.',
+                ],
+                [
+                  'auto_sync_processed_orders',
+                  'Processed/cancelled order polling',
+                  'Keeps cancellations and dispatched states flowing back into Loopbase.',
+                ],
+                [
+                  'auto_sync_product_queue',
+                  'Product/export queue',
+                  'Pushes app-managed stock/product updates back to Linnworks.',
+                ],
+              ].map(([key, label, description]) => (
+                <label
+                  key={key}
+                  className="flex items-center justify-between gap-4 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3"
+                >
+                  <span>
+                    <span className="block font-bold">{label}</span>
+                    <span className="text-xs text-neutral-500">{description}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings[key as keyof LinnworksSettings])}
+                    onChange={(e) =>
+                      updateSetting(
+                        key as keyof LinnworksSettings,
+                        e.target.checked as any
+                      )
+                    }
+                    className="h-4 w-4 shrink-0"
+                  />
+                </label>
+              ))}
             </div>
           </section>
 

@@ -31,6 +31,7 @@ type ItemImage = {
 
 type PhotoCapture = {
   id: string
+  source_id?: string | null
   item_image_id: string | null
   session_id: string | null
   item_id?: string | null
@@ -51,6 +52,7 @@ type CaptureRepresentation = {
   original_filename?: string | null
   file_size_bytes?: number | null
   metadata?: Record<string, any> | null
+  created_at?: string | null
 }
 
 type PhotoSource = {
@@ -78,6 +80,7 @@ type CalibrationProfile = {
   lens_model?: string | null
   measured_reference?: Record<string, any> | null
   calibration_data?: Record<string, any> | null
+  updated_at?: string | null
   source?: any
 }
 
@@ -88,6 +91,7 @@ type PhotoProcessingJob = {
   job_type: string
   status: string
   processing_source: string
+  options?: Record<string, any> | null
   calibration_profile_ids?: string[] | null
   error_message?: string | null
   queued_at?: string | null
@@ -98,6 +102,75 @@ type PhotoProcessingJob = {
 }
 
 type PhotoViewMode = 'original' | 'calibrated' | 'processed' | 'background'
+const viewableRepresentationStatuses = new Set(['available', 'preview', 'accepted'])
+
+type CropRotateSettings = {
+  mode: 'auto' | 'centre'
+  whitespace_percent: number
+  rotation_degrees: number
+  skip_closeups: boolean
+  closeup_threshold: number
+}
+
+type ManualCropSettings = {
+  auto_crop: boolean
+  rotation_degrees: number
+  zoom_percent: number
+  offset_x_percent: number
+  offset_y_percent: number
+  crop_width_percent: number
+  crop_center_x_percent: number
+  crop_center_y_percent: number
+  crop_left_percent: number
+  crop_right_percent: number
+  crop_top_percent: number
+  crop_bottom_percent: number
+}
+
+type BackgroundRemovalSettings = {
+  model: 'isnet-general-use' | 'u2net' | 'u2netp' | 'silueta'
+  alpha_matting: boolean
+  foreground_threshold: number
+  background_threshold: number
+  erode_size: number
+  post_process_mask: boolean
+  skip_full_frame: boolean
+  full_frame_threshold: number
+}
+
+const defaultBackgroundRemovalSettings: BackgroundRemovalSettings = {
+  model: 'isnet-general-use',
+  alpha_matting: true,
+  foreground_threshold: 240,
+  background_threshold: 10,
+  erode_size: 10,
+  post_process_mask: true,
+  skip_full_frame: true,
+  full_frame_threshold: 94,
+}
+
+const defaultCropRotateSettings: CropRotateSettings = {
+  mode: 'auto',
+  whitespace_percent: 8,
+  rotation_degrees: 0,
+  skip_closeups: true,
+  closeup_threshold: 90,
+}
+
+const defaultManualCropSettings: ManualCropSettings = {
+  auto_crop: false,
+  rotation_degrees: 0,
+  zoom_percent: 100,
+  offset_x_percent: 0,
+  offset_y_percent: 0,
+  crop_width_percent: 100,
+  crop_center_x_percent: 0,
+  crop_center_y_percent: 0,
+  crop_left_percent: 0,
+  crop_right_percent: 0,
+  crop_top_percent: 0,
+  crop_bottom_percent: 0,
+}
 
 type ToggleSwitchProps = {
   checked: boolean
@@ -123,6 +196,10 @@ type PhotoSessionHistory = {
 
 function imageUrl(image: ItemImage | null) {
   return image?.processed_url || image?.original_url || ''
+}
+
+function originalImageUrl(image: ItemImage | null) {
+  return image?.original_url || image?.processed_url || ''
 }
 
 function itemTitle(item: any) {
@@ -160,6 +237,7 @@ function processingJobLabel(value: string) {
 
 function profileTypeLabel(value: string) {
   const labels: Record<string, string> = {
+    station_daily_reference: 'Session Calibration Reference',
     colour_white_balance: 'Colour / WB',
     calibrite_colour_checker: 'Calibrite Colour Checker',
     geometry_scale: 'Geometry / Scale',
@@ -234,31 +312,44 @@ export default function PhotoMonitorPage() {
   const [captures, setCaptures] = useState<PhotoCapture[]>([])
   const [representations, setRepresentations] = useState<CaptureRepresentation[]>([])
   const [processingJobs, setProcessingJobs] = useState<PhotoProcessingJob[]>([])
+  const [sessionProcessingJobs, setSessionProcessingJobs] = useState<PhotoProcessingJob[]>([])
+  const [sessionRepresentations, setSessionRepresentations] = useState<CaptureRepresentation[]>([])
   const [unassignedCaptures, setUnassignedCaptures] = useState<PhotoCapture[]>([])
   const [sources, setSources] = useState<PhotoSource[]>([])
   const [calibrationProfiles, setCalibrationProfiles] = useState<CalibrationProfile[]>([])
   const [sessionHistory, setSessionHistory] = useState<PhotoSessionHistory[]>([])
   const [selectedImageId, setSelectedImageId] = useState('')
   const [batchSelectedImageIds, setBatchSelectedImageIds] = useState<string[]>([])
-  const [batchRunCalibration, setBatchRunCalibration] = useState(true)
+  const [batchRunCalibration, setBatchRunCalibration] = useState(false)
   const [batchRunBackgroundRemoval, setBatchRunBackgroundRemoval] = useState(false)
   const [batchRunAutoCropRotate, setBatchRunAutoCropRotate] = useState(false)
   const [autoMeasureOnComplete, setAutoMeasureOnComplete] = useState(false)
   const [completionWorkflowOpen, setCompletionWorkflowOpen] = useState(false)
   const [completionWorkflowStage, setCompletionWorkflowStage] = useState<'measure' | 'processing' | 'preview'>('processing')
+  const [completionJobIds, setCompletionJobIds] = useState<string[]>([])
+  const [completionTargetCaptureIds, setCompletionTargetCaptureIds] = useState<string[]>([])
+  const [completionRunStartedAt, setCompletionRunStartedAt] = useState<string | null>(null)
+  const [completionCanUseExistingPreviews, setCompletionCanUseExistingPreviews] = useState(true)
+  const [completionBackgroundImageIds, setCompletionBackgroundImageIds] = useState<string[]>([])
+  const [completionCropSettingsByImageId, setCompletionCropSettingsByImageId] = useState<Record<string, ManualCropSettings>>({})
   const [showStationSettings, setShowStationSettings] = useState(false)
+  const [calibrationPromptOpen, setCalibrationPromptOpen] = useState(false)
+  const [calibrationCapturePending, setCalibrationCapturePending] = useState(false)
   const [autoPreviewNewest, setAutoPreviewNewest] = useState(true)
   const [viewMode, setViewMode] = useState<PhotoViewMode>('original')
   const [showMeasurements, setShowMeasurements] = useState(false)
-  const [processingSettingsOpen, setProcessingSettingsOpen] = useState<null | 'calibration' | 'crop_rotate' | 'background'>(null)
+  const [processingSettingsOpen, setProcessingSettingsOpen] = useState<null | 'measure' | 'calibration' | 'crop_rotate' | 'background'>(null)
+  const [backgroundRemovalSettings, setBackgroundRemovalSettings] = useState<BackgroundRemovalSettings>(
+    defaultBackgroundRemovalSettings
+  )
+  const [cropRotateSettings, setCropRotateSettings] = useState<CropRotateSettings>(defaultCropRotateSettings)
   const [aiComparisonOpen, setAiComparisonOpen] = useState(false)
   const [qcNotes, setQcNotes] = useState('')
-  const [scanValue, setScanValue] = useState('')
   const [newStationName, setNewStationName] = useState('')
   const [editingStationName, setEditingStationName] = useState('')
   const [newSourceName, setNewSourceName] = useState('')
   const [newCalibrationName, setNewCalibrationName] = useState('')
-  const [newCalibrationType, setNewCalibrationType] = useState('colour_white_balance')
+  const [newCalibrationType, setNewCalibrationType] = useState('station_daily_reference')
   const [newCalibrationSourceId, setNewCalibrationSourceId] = useState('')
   const [newCalibrationBoardWidthMm, setNewCalibrationBoardWidthMm] = useState('')
   const [newCalibrationBoardHeightMm, setNewCalibrationBoardHeightMm] = useState('')
@@ -279,12 +370,18 @@ export default function PhotoMonitorPage() {
   const [phonePairPinned, setPhonePairPinned] = useState(false)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const scanInputRef = useRef<HTMLInputElement | null>(null)
   const phonePairHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const transientMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     setStationId(params.get('station') || '')
+    if (params.get('calibration_prompt') === '1') {
+      setCalibrationPromptOpen(true)
+      params.delete('calibration_prompt')
+      const nextQuery = params.toString()
+      window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`)
+    }
   }, [])
 
   useEffect(() => {
@@ -304,9 +401,10 @@ export default function PhotoMonitorPage() {
   }, [station?.id, station?.name])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => scanInputRef.current?.focus(), 100)
-    return () => window.clearTimeout(timer)
-  }, [station?.id, session?.id])
+    return () => {
+      if (transientMessageTimerRef.current) clearTimeout(transientMessageTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!stationId && station?.id) {
@@ -318,6 +416,8 @@ export default function PhotoMonitorPage() {
     fetchImages()
     fetchCaptures()
     fetchUnassignedCaptures()
+    fetchSessionProcessingJobs(false)
+    fetchSessionRepresentations(false)
   }, [session?.item_id, activeCompanyId, schemaReady, station?.id])
 
   useEffect(() => {
@@ -448,7 +548,10 @@ export default function PhotoMonitorPage() {
           table: 'photo_processing_jobs',
           filter: `session_id=eq.${session.id}`,
         },
-        () => fetchProcessingJobs(false)
+        () => {
+          fetchProcessingJobs(false)
+          fetchSessionProcessingJobs(false)
+        }
       )
       .subscribe()
 
@@ -456,6 +559,72 @@ export default function PhotoMonitorPage() {
       supabase.removeChannel(channel)
     }
   }, [activeCompanyId, schemaReady, session?.id, selectedImageId])
+
+  useEffect(() => {
+    if (!schemaReady || !activeCompanyId || !station?.id) return
+
+    const channel = supabase
+      .channel(`photo-monitor-calibration-${activeCompanyId}-${station.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'photography_calibration_profiles',
+          filter: `station_id=eq.${station.id}`,
+        },
+        () => {
+          setCalibrationCapturePending(false)
+          fetchCalibrationProfiles(false)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [activeCompanyId, schemaReady, station?.id])
+
+  useEffect(() => {
+    if (!schemaReady || !activeCompanyId || !session?.id) return
+
+    const channel = supabase
+      .channel(`photo-monitor-representations-${activeCompanyId}-${session.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'photo_capture_representations',
+          filter: `session_id=eq.${session.id}`,
+        },
+        () => {
+          fetchRepresentations(false)
+          fetchSessionRepresentations(false)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [activeCompanyId, schemaReady, session?.id, selectedImageId])
+
+  useEffect(() => {
+    if (!completionWorkflowOpen || completionWorkflowStage !== 'preview' || !session?.id) return
+
+    fetchSessionProcessingJobs(false)
+    fetchSessionRepresentations(false)
+
+    const timer = window.setInterval(() => {
+      fetchProcessingJobs(false)
+      fetchRepresentations(false)
+      fetchSessionProcessingJobs(false)
+      fetchSessionRepresentations(false)
+    }, 1500)
+
+    return () => window.clearInterval(timer)
+  }, [completionWorkflowOpen, completionWorkflowStage, session?.id, selectedImageId])
 
   useEffect(() => {
     if (!schemaReady || !activeCompanyId || !station?.id) return
@@ -487,6 +656,18 @@ export default function PhotoMonitorPage() {
     return images[0] || null
   }, [images, selectedImageId])
   const thumbnailImages = useMemo(() => [...images].reverse(), [images])
+  const selectedPreviewImageIndex = selectedImage?.id
+    ? thumbnailImages.findIndex((image) => image.id === selectedImage.id)
+    : -1
+  const selectedPreviewImagePosition = selectedPreviewImageIndex >= 0 ? selectedPreviewImageIndex + 1 : 0
+
+  function moveSelectedPreviewImage(direction: -1 | 1) {
+    if (!thumbnailImages.length) return
+    const currentIndex = selectedPreviewImageIndex >= 0 ? selectedPreviewImageIndex : 0
+    const nextIndex = Math.max(0, Math.min(thumbnailImages.length - 1, currentIndex + direction))
+    const nextImage = thumbnailImages[nextIndex]
+    if (nextImage?.id) setSelectedImageId(nextImage.id)
+  }
 
   async function fetchStations(showErrors = true) {
     try {
@@ -550,7 +731,7 @@ export default function PhotoMonitorPage() {
 
     let query = supabase
       .from('photo_captures')
-      .select('id, item_image_id, item_id, session_id, assignment_method, capture_status, original_filename, received_at, exif')
+      .select('id, source_id, item_image_id, item_id, session_id, assignment_method, capture_status, original_filename, received_at, exif')
       .eq('session_id', session.id)
       .order('received_at', { ascending: true })
 
@@ -655,6 +836,50 @@ export default function PhotoMonitorPage() {
       setProcessingJobs(data.jobs || [])
     } catch (error: any) {
       if (showErrors) setMessage(error.message || 'Could not load processing jobs.')
+    }
+  }
+
+  async function fetchSessionProcessingJobs(showErrors = true) {
+    if (!session?.id) {
+      setSessionProcessingJobs([])
+      return
+    }
+
+    try {
+      const response = await fetch(
+        `/api/photography/processing-jobs?session_id=${encodeURIComponent(session.id)}`
+      )
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not load session processing jobs.')
+      }
+
+      setSessionProcessingJobs(data.jobs || [])
+    } catch (error: any) {
+      if (showErrors) setMessage(error.message || 'Could not load session processing jobs.')
+    }
+  }
+
+  async function fetchSessionRepresentations(showErrors = true) {
+    if (!session?.id) {
+      setSessionRepresentations([])
+      return
+    }
+
+    try {
+      const response = await fetch(
+        `/api/photography/captures/representations?session_id=${encodeURIComponent(session.id)}`
+      )
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not load session preview images.')
+      }
+
+      setSessionRepresentations(data.representations || [])
+    } catch (error: any) {
+      if (showErrors) setMessage(error.message || 'Could not load session preview images.')
     }
   }
 
@@ -789,6 +1014,11 @@ export default function PhotoMonitorPage() {
     try {
       const measuredReference = {
         calibration_capture_id: selectedCapture?.id || null,
+        calibration_image_url: selectedImage?.original_url || selectedImage?.processed_url || null,
+        reference_scope:
+          newCalibrationType === 'station_daily_reference'
+            ? ['colour', 'geometry', 'measurements', 'background', 'crop']
+            : undefined,
         board_width_mm: numberOrNull(newCalibrationBoardWidthMm),
         board_height_mm: numberOrNull(newCalibrationBoardHeightMm),
         aruco_marker_size_mm: numberOrNull(newCalibrationMarkerSizeMm),
@@ -801,10 +1031,21 @@ export default function PhotoMonitorPage() {
         calibrite_chart: newCalibrationType === 'calibrite_colour_checker' ? newCalibrationChart : null,
       }
       const calibrationData = {
+        captured_for_date: new Date().toISOString().slice(0, 10),
+        background_reference:
+          newCalibrationType === 'station_daily_reference'
+            ? {
+                enabled: true,
+                sample_method: 'calibration_image_background_estimate',
+                note: 'Processor should estimate the clean background from this calibration image before matting product photos.',
+              }
+            : undefined,
         measurement_start_trim_percent: numberOrNull(newCalibrationStartTrimPercent),
         measurement_end_trim_percent: numberOrNull(newCalibrationEndTrimPercent),
         notes:
-          'Stored calibration inputs only. Image processor must generate transforms before calibrated previews or measurements use them.',
+          newCalibrationType === 'station_daily_reference'
+            ? 'Session calibration reference for colour, ArUco geometry, measurement scale, background removal and crop guidance.'
+            : 'Stored calibration inputs only. Image processor must generate transforms before calibrated previews or measurements use them.',
       }
       const response = await fetch('/api/photography/calibration-profiles', {
         method: 'POST',
@@ -869,11 +1110,109 @@ export default function PhotoMonitorPage() {
     }
   }
 
+  async function saveSelectedAsDailyReference() {
+    if (!station?.id || !selectedCapture?.id) {
+      setMessage('Select the calibration photo first.')
+      return
+    }
+
+    setBusy(true)
+    setMessage('')
+
+    const existing = activeDailyReferenceProfile()
+    const measuredReference = {
+      ...(existing?.measured_reference || {}),
+      calibration_capture_id: selectedCapture.id,
+      calibration_image_url: selectedImage?.original_url || selectedImage?.processed_url || null,
+      reference_scope: ['colour', 'geometry', 'measurements', 'background', 'crop'],
+    }
+    const calibrationData = {
+      ...(existing?.calibration_data || {}),
+      captured_for_date: new Date().toISOString().slice(0, 10),
+      background_reference: {
+        enabled: true,
+        sample_method: 'calibration_image_background_estimate',
+        note: 'Processor should estimate the clean background from this calibration image before matting product photos.',
+      },
+      notes: 'Session calibration reference for colour, ArUco geometry, measurement scale, background removal and crop guidance.',
+    }
+
+    try {
+      const response = await fetch('/api/photography/calibration-profiles', {
+        method: existing ? 'PATCH' : 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(
+          existing
+            ? {
+                id: existing.id,
+                name: existing.name || `Session reference ${new Date().toLocaleDateString('en-GB')}`,
+                measured_reference: measuredReference,
+                calibration_data: calibrationData,
+                status: 'active',
+              }
+            : {
+                station_id: station.id,
+                source_id: selectedCapture.source_id || null,
+                name: `Session reference ${new Date().toLocaleDateString('en-GB')}`,
+                profile_type: 'station_daily_reference',
+                measured_reference: measuredReference,
+                calibration_data: calibrationData,
+              }
+        ),
+      })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not save calibration image.')
+      }
+
+      await fetchCalibrationProfiles(false)
+      setMessage('Calibration image saved.')
+    } catch (error: any) {
+      setMessage(error.message || 'Could not save calibration image.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function requestStationCalibrationCapture() {
+    if (!station?.id) {
+      setMessage('Select a station first.')
+      return
+    }
+
+    setBusy(true)
+    setMessage('')
+
+    try {
+      const response = await fetch('/api/photography/calibration-capture-intents', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          station_id: station.id,
+          staff_id: staff?.id || null,
+        }),
+      })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not prepare calibration capture.')
+      }
+
+      setCalibrationCapturePending(true)
+      setCalibrationPromptOpen(false)
+      setMessage('Take the calibration image now. The next station photo will update calibration only, not the SKU photos.')
+    } catch (error: any) {
+      setMessage(error.message || 'Could not prepare calibration capture.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function queueProcessingJob(
     jobType: 'calibrated_preview' | 'measurement_analysis' | 'background_removal' | 'processed_preview' | 'raw_development'
   ) {
-    const linkedCapture = selectedImageId ? captureByImageId.get(selectedImageId) : null
-    if (!linkedCapture?.id) {
+    if (!selectedImageId) {
       setMessage('Select a session photo before queueing processing.')
       return
     }
@@ -882,6 +1221,8 @@ export default function PhotoMonitorPage() {
     setMessage('')
 
     try {
+      const linkedCapture = await ensureCaptureForImage(selectedImageId)
+      await fetchCaptures(false)
       const response = await fetch('/api/photography/processing-jobs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -892,6 +1233,22 @@ export default function PhotoMonitorPage() {
           calibration_profile_ids: calibrationProfiles
             .filter((profile) => profile.status === 'active')
             .map((profile) => profile.id),
+          options:
+            jobType === 'background_removal'
+              ? {
+                  background_removal: {
+                    ...backgroundRemovalSettings,
+                    station_daily_reference_profile_id: activeDailyReferenceProfile()?.id || null,
+                  },
+                }
+              : jobType === 'processed_preview'
+                ? {
+                    crop_rotate: {
+                      ...cropRotateSettings,
+                      station_daily_reference_profile_id: activeDailyReferenceProfile()?.id || null,
+                    },
+                  }
+                : undefined,
         }),
       })
       const data = await response.json().catch(() => null)
@@ -901,6 +1258,7 @@ export default function PhotoMonitorPage() {
       }
 
       await fetchProcessingJobs(false)
+      if (jobType === 'background_removal') setViewMode('background')
       setMessage(data.already_queued ? data.message : `${processingJobLabel(jobType)} queued.`)
     } catch (error: any) {
       setMessage(error.message || 'Could not queue processing job.')
@@ -911,7 +1269,8 @@ export default function PhotoMonitorPage() {
 
   async function queueProcessingJobForCapture(
     captureId: string,
-    jobType: 'calibrated_preview' | 'measurement_analysis' | 'background_removal' | 'processed_preview' | 'raw_development'
+    jobType: 'calibrated_preview' | 'measurement_analysis' | 'background_removal' | 'processed_preview' | 'raw_development',
+    force = false
   ) {
     const response = await fetch('/api/photography/processing-jobs', {
       method: 'POST',
@@ -919,12 +1278,29 @@ export default function PhotoMonitorPage() {
       body: JSON.stringify({
         capture_id: captureId,
         job_type: jobType,
+        force,
         processing_source: 'jpeg_camera_original',
         calibration_profile_ids: calibrationProfiles
           .filter((profile) => profile.status === 'active')
           .map((profile) => profile.id),
         options: {
           requested_from: 'photo_monitor_batch_pipeline',
+          ...(jobType === 'background_removal'
+            ? {
+                background_removal: {
+                  ...backgroundRemovalSettings,
+                  station_daily_reference_profile_id: activeDailyReferenceProfile()?.id || null,
+                },
+              }
+            : {}),
+          ...(jobType === 'processed_preview'
+            ? {
+                crop_rotate: {
+                  ...cropRotateSettings,
+                  station_daily_reference_profile_id: activeDailyReferenceProfile()?.id || null,
+                },
+              }
+            : {}),
         },
       }),
     })
@@ -933,6 +1309,17 @@ export default function PhotoMonitorPage() {
       throw new Error(data?.message || `Could not queue ${processingJobLabel(jobType)}.`)
     }
     return data
+  }
+
+  function activeDailyReferenceProfile() {
+    return calibrationProfiles.find((profile) => {
+      const reference = profile.measured_reference || {}
+      return (
+        profile.status === 'active' &&
+        profile.profile_type === 'station_daily_reference' &&
+        Boolean(reference.calibration_capture_id || reference.calibration_image_url)
+      )
+    }) || null
   }
 
   function batchTargetImageIds() {
@@ -946,50 +1333,132 @@ export default function PhotoMonitorPage() {
     )
   }
 
-  async function runBatchPreviewPipeline() {
+  async function ensureCaptureForImage(imageId: string) {
+    const existing = captureByImageId.get(imageId)
+    const existingHasManualFallback = Boolean(
+      existing?.source_id && (existing.exif?.public_url || existing.exif?.original_url || existing.exif?.processed_url)
+    )
+    const shouldRefreshExisting =
+      Boolean(existing?.id) &&
+      (existing?.assignment_method === 'explicit_session' || existing?.exif?.manual_upload || !existingHasManualFallback)
+
+    if (existing?.id && !shouldRefreshExisting) return existing
+    if (!session?.item_id) throw new Error('Active photo session is required.')
+
+    const image = images.find((row) => row.id === imageId)
+    const response = await fetch('/api/photography/captures/attach-image', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        item_id: session.item_id,
+        item_image_id: imageId,
+        original_filename: image?.original_url?.split('/').pop()?.split('?')[0] || 'manual-upload.jpg',
+      }),
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.message || 'Could not link uploaded image to this photo session.')
+    }
+    if (!data.attached || !data.capture?.id) {
+      throw new Error('Could not link uploaded image to this photo session.')
+    }
+    await fetchSessionRepresentations(false)
+    return data.capture as PhotoCapture
+  }
+
+  async function runBatchPreviewPipeline(options: { force?: boolean } = {}) {
+    const force = Boolean(options.force)
     const targetImageIds = batchTargetImageIds()
     if (targetImageIds.length === 0) {
       setMessage('Add photos before running the batch pipeline.')
-      return
+      return false
     }
     if (!batchRunCalibration && !batchRunBackgroundRemoval && !batchRunAutoCropRotate) {
       setMessage('Choose at least one batch processing step.')
-      return
+      return false
     }
-
-    const targetCaptures = targetImageIds
-      .map((id) => captureByImageId.get(id))
-      .filter((capture): capture is PhotoCapture => Boolean(capture?.id))
-
-    if (targetCaptures.length === 0) {
-      setMessage('The selected photos are not linked to station captures yet.')
-      return
+    if ((autoMeasureOnComplete || batchRunCalibration || batchRunAutoCropRotate || batchRunBackgroundRemoval) && !activeDailyReferenceProfile()) {
+      setMessage('No calibration image selected for this session.')
     }
 
     setBusy(true)
     setMessage('')
 
     try {
+      const previewRunStartedAt = new Date(Date.now() - 1000).toISOString()
+      const targetViewMode: PhotoViewMode = batchRunBackgroundRemoval
+        ? 'background'
+        : batchRunAutoCropRotate
+          ? 'processed'
+          : batchRunCalibration
+            ? 'calibrated'
+            : 'original'
+      const targetCaptures: PhotoCapture[] = []
+      for (const imageId of targetImageIds) {
+        targetCaptures.push(await ensureCaptureForImage(imageId))
+      }
+
+      if (targetCaptures.length === 0) {
+        setMessage('The selected photos are not linked to station captures yet.')
+        return false
+      }
+
+      await fetchCaptures(false)
+
       let queued = 0
+      const queuedJobIds: string[] = []
       for (const capture of targetCaptures) {
+        if (!force && targetViewMode !== 'original' && representationForMode(capture.id, targetViewMode)) {
+          continue
+        }
+
         if (batchRunCalibration) {
-          await queueProcessingJobForCapture(capture.id, 'calibrated_preview')
+          const data = await queueProcessingJobForCapture(capture.id, 'calibrated_preview', force)
+          if (data?.job?.id) queuedJobIds.push(data.job.id)
           queued += 1
         }
         if (batchRunAutoCropRotate) {
-          await queueProcessingJobForCapture(capture.id, 'processed_preview')
+          const data = await queueProcessingJobForCapture(capture.id, 'processed_preview', force)
+          if (data?.job?.id) queuedJobIds.push(data.job.id)
           queued += 1
         }
         if (batchRunBackgroundRemoval) {
-          await queueProcessingJobForCapture(capture.id, 'background_removal')
+          const data = await queueProcessingJobForCapture(capture.id, 'background_removal', force)
+          if (data?.job?.id) queuedJobIds.push(data.job.id)
           queued += 1
         }
       }
 
       await fetchProcessingJobs(false)
-      setMessage(`${queued} batch preview job${queued === 1 ? '' : 's'} queued. Review outputs, then accept or revert.`)
+      await fetchSessionProcessingJobs(false)
+      await fetchSessionRepresentations(false)
+      setCompletionJobIds(queuedJobIds)
+      setCompletionTargetCaptureIds(targetCaptures.map((capture) => capture.id))
+      setCompletionRunStartedAt(previewRunStartedAt)
+      setCompletionCanUseExistingPreviews(!force)
+      setCompletionBackgroundImageIds(
+        batchRunBackgroundRemoval
+          ? targetCaptures.map((capture) => capture.item_image_id).filter((id): id is string => Boolean(id))
+          : []
+      )
+      if (batchRunBackgroundRemoval) {
+        setViewMode('background')
+      } else if (batchRunAutoCropRotate) {
+        setViewMode('processed')
+      } else if (batchRunCalibration) {
+        setViewMode('calibrated')
+      }
+      setMessage(
+        queued
+          ? `${queued} batch preview job${queued === 1 ? '' : 's'} queued. Waiting for worker output.`
+          : force
+            ? 'No new preview jobs were queued.'
+            : 'Existing processed previews are ready to review.'
+      )
+      return true
     } catch (error: any) {
       setMessage(error.message || 'Could not queue batch preview pipeline.')
+      return false
     } finally {
       setBusy(false)
     }
@@ -1010,37 +1479,102 @@ export default function PhotoMonitorPage() {
     setMessage('')
 
     try {
-      const response = await fetch(
-        `/api/photography/captures/representations?session_id=${encodeURIComponent(session?.id || '')}`
-      )
-      const data = await response.json().catch(() => null)
-      if (!response.ok || !data?.ok) {
-        throw new Error(data?.message || 'Could not load batch preview results.')
-      }
-
       const representationsByCapture = new Map<string, CaptureRepresentation[]>()
-      for (const representation of data.representations || []) {
-        const rows = representationsByCapture.get(representation.capture_id) || []
-        rows.push(representation)
-        representationsByCapture.set(representation.capture_id, rows)
+      for (const capture of targetCaptures) {
+        const response = await fetch(
+          `/api/photography/captures/representations?capture_id=${encodeURIComponent(capture.id)}`
+        )
+        const data = await response.json().catch(() => null)
+        if (!response.ok || !data?.ok) {
+          throw new Error(data?.message || 'Could not load batch preview results.')
+        }
+        representationsByCapture.set(capture.id, data.representations || [])
       }
 
       const preferredTypes = [
-        batchRunBackgroundRemoval ? 'background_removed' : '',
         batchRunAutoCropRotate ? 'processed_preview' : '',
         batchRunCalibration ? 'calibrated_preview' : '',
-        'background_removed',
         'processed_preview',
         'calibrated_preview',
       ].filter(Boolean)
 
       let applied = 0
+      let keptOriginal = 0
       const missing: string[] = []
 
       for (const capture of targetCaptures) {
+        const imageId = capture.item_image_id || ''
+        const useBackground = imageId ? completionBackgroundImageIds.includes(imageId) : false
+        const manualCropSettings = cropSettingsForImage(imageId)
+        const manualOriginalSelected =
+          imageId &&
+          !useBackground &&
+          batchRunAutoCropRotate &&
+          !manualCropSettings.auto_crop &&
+          !hasManualCropChanges(manualCropSettings)
+        let manualCropRepresentation: CaptureRepresentation | null = null
+        if (
+          imageId &&
+          !useBackground &&
+          batchRunAutoCropRotate &&
+          !manualCropSettings.auto_crop &&
+          hasManualCropChanges(manualCropSettings)
+        ) {
+          const cropResponse = await fetch('/api/photography/captures/representations', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              action: 'create_manual_crop_preview',
+              capture_id: capture.id,
+              item_image_id: imageId,
+              settings: manualCropSettings,
+            }),
+          })
+          const cropData = await cropResponse.json().catch(() => null)
+          if (!cropResponse.ok || !cropData?.ok) {
+            throw new Error(cropData?.message || 'Could not create manual crop preview.')
+          }
+          manualCropRepresentation = cropData.representation || null
+        }
+
+        if (manualOriginalSelected) {
+          const image = images.find((row) => row.id === imageId)
+          const originalUrl = originalImageUrl(image || null)
+          if (originalUrl) {
+            const { error: resetError } = await supabase
+              .from('item_images')
+              .update({ processed_url: originalUrl })
+              .eq('company_id', activeCompanyId)
+              .eq('id', imageId)
+
+            if (resetError) throw resetError
+            keptOriginal += 1
+            continue
+          }
+        }
+
+        const selectedRepresentation =
+          manualCropRepresentation ||
+          (useBackground
+            ? completionRepresentationForMode(capture.id, 'background')
+            : batchRunAutoCropRotate
+              ? completionRepresentationForMode(capture.id, 'processed')
+              : batchRunCalibration
+                ? completionRepresentationForMode(capture.id, 'calibrated')
+                : null)
+
+        if (!selectedRepresentation && !preferredTypes.length) {
+          keptOriginal += 1
+          continue
+        }
+
         const rows = representationsByCapture.get(capture.id) || []
-        const representation = preferredTypes
-          .map((type) => rows.find((row) => row.representation_type === type && row.status === 'available' && row.public_url))
+        const representation = selectedRepresentation || preferredTypes
+          .map((type) =>
+            rows
+              .filter((row) => row.representation_type === type && viewableRepresentationStatuses.has(row.status) && row.public_url)
+              .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0]
+          )
           .find(Boolean)
 
         if (!representation) {
@@ -1067,8 +1601,8 @@ export default function PhotoMonitorPage() {
       await fetchRepresentations(false)
       setMessage(
         missing.length
-          ? `${applied} processed image${applied === 1 ? '' : 's'} accepted. ${missing.length} had no completed preview yet.`
-          : `${applied} processed image${applied === 1 ? '' : 's'} accepted.`
+          ? `${applied} processed image${applied === 1 ? '' : 's'} accepted. ${keptOriginal} kept original. ${missing.length} had no completed preview yet.`
+          : `${applied} processed image${applied === 1 ? '' : 's'} accepted. ${keptOriginal} kept original.`
       )
     } catch (error: any) {
       setMessage(error.message || 'Could not accept batch preview.')
@@ -1077,9 +1611,33 @@ export default function PhotoMonitorPage() {
     }
   }
 
-  function revertBatchPreviewPipeline() {
+  async function revertBatchPreviewPipeline() {
     setViewMode('original')
-    setMessage('Batch preview reverted. Nothing was applied to the item images.')
+    if (session?.id || completionTargetCaptureIds.length > 0) {
+      await fetch('/api/photography/preview-cleanup', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          session_id: session?.id || null,
+          capture_ids: completionTargetCaptureIds,
+        }),
+      }).catch(() => null)
+      await fetchSessionRepresentations(false)
+      await fetchRepresentations(false)
+    }
+    setTimedMessage('Batch preview reverted. Nothing was applied to the item images.', 4000)
+  }
+
+  function setTimedMessage(nextMessage: string, timeoutMs = 4000) {
+    if (transientMessageTimerRef.current) clearTimeout(transientMessageTimerRef.current)
+    setMessage(nextMessage)
+    transientMessageTimerRef.current = setTimeout(() => {
+      setMessage((current) => (current === nextMessage ? '' : current))
+    }, timeoutMs)
+  }
+
+  function updateBackgroundRemovalSettings(patch: Partial<BackgroundRemovalSettings>) {
+    setBackgroundRemovalSettings((current) => ({ ...current, ...patch }))
   }
 
   async function cancelProcessingJob(job: PhotoProcessingJob) {
@@ -1289,12 +1847,18 @@ export default function PhotoMonitorPage() {
     setMessage('')
 
     try {
+      const appOrigin =
+        typeof window !== 'undefined' &&
+        /^https?:\/\//i.test(window.location.origin) &&
+        !['null', 'undefined'].includes(window.location.origin)
+          ? window.location.origin
+          : ''
       const response = await fetch('/api/photography/phone-pairing', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           station_id: station.id,
-          app_origin: window.location.origin,
+          app_origin: appOrigin,
         }),
       })
       const data = await response.json().catch(() => null)
@@ -1443,11 +2007,11 @@ export default function PhotoMonitorPage() {
   }
 
   async function completeSession(qcStatus = 'complete', skipConfirm = false) {
-    if (!station?.id) return
+    if (!station?.id) return false
 
     const label = qcStatus === 'needs_reshoot' ? 'mark this session as needing reshoot' : 'complete this photo session'
     const confirmed = skipConfirm || window.confirm(`Are you sure you want to ${label}?`)
-    if (!confirmed) return
+    if (!confirmed) return false
 
     setBusy(true)
     setMessage('')
@@ -1477,8 +2041,10 @@ export default function PhotoMonitorPage() {
       await fetchStations(false)
       await fetchSessionHistory(false)
       setMessage(qcStatus === 'needs_reshoot' ? 'Photo session marked for reshoot.' : 'Photo session completed.')
+      return true
     } catch (error: any) {
       setMessage(error.message || 'Could not complete photo session.')
+      return false
     } finally {
       setBusy(false)
     }
@@ -1489,13 +2055,28 @@ export default function PhotoMonitorPage() {
       setMessage('Take at least one photo before completing.')
       return
     }
+    if (!autoMeasureOnComplete && !batchRunCalibration && !batchRunAutoCropRotate && !batchRunBackgroundRemoval) {
+      completeSession('complete')
+      return
+    }
     setCompletionWorkflowStage(autoMeasureOnComplete ? 'measure' : 'processing')
     setCompletionWorkflowOpen(true)
   }
 
   async function runCompletionProcessingPreview() {
-    await runBatchPreviewPipeline()
-    setCompletionWorkflowStage('preview')
+    const queued = await runBatchPreviewPipeline()
+    if (queued) {
+      setSelectedImageId(thumbnailImages[0]?.id || images[0]?.id || '')
+      setCompletionWorkflowStage('preview')
+    }
+  }
+
+  async function rerunCompletionProcessingPreview() {
+    const queued = await runBatchPreviewPipeline({ force: true })
+    if (queued) {
+      setSelectedImageId(thumbnailImages[0]?.id || images[0]?.id || '')
+      setCompletionWorkflowStage('preview')
+    }
   }
 
   async function acceptCompletionWorkflow() {
@@ -1504,53 +2085,14 @@ export default function PhotoMonitorPage() {
     await completeSession('complete', true)
   }
 
-  function revertCompletionWorkflow() {
-    revertBatchPreviewPipeline()
+  async function revertCompletionWorkflow() {
+    await revertBatchPreviewPipeline()
+    setCompletionBackgroundImageIds([])
     setCompletionWorkflowOpen(false)
   }
 
-  async function startSessionFromScan() {
-    const clean = scanValue.trim()
-    if (!clean || !station?.id) return
-
-    setBusy(true)
-    setMessage('')
-
-    try {
-      const response = await fetch('/api/photography/sessions/start-from-scan', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          station_id: station.id,
-          scan_value: clean,
-          staff_id: staff?.id || null,
-        }),
-      })
-
-      const data = await response.json().catch(() => null)
-
-      if (!response.ok || !data?.ok) {
-        throw new Error(data?.message || 'Could not start photo session from scan.')
-      }
-
-      setScanValue('')
-      setQcNotes('')
-      setImages([])
-      setCaptures([])
-      setSelectedImageId('')
-      await fetchStations(false)
-      await fetchUnassignedCaptures(false)
-      await fetchSessionHistory(false)
-      setMessage(`Photo session started for ${data.item?.sku || clean}.`)
-      window.setTimeout(() => scanInputRef.current?.focus(), 50)
-    } catch (error: any) {
-      setMessage(error.message || 'Could not start photo session from scan.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const currentUrl = imageUrl(selectedImage)
+  const currentOriginalUrl = originalImageUrl(selectedImage)
   const unassignedWithImages = useMemo(() => {
     return unassignedCaptures.filter((capture) => capture.exif?.public_url)
   }, [unassignedCaptures])
@@ -1571,17 +2113,67 @@ export default function PhotoMonitorPage() {
         : batchRunCalibration && calibratedRepresentation?.public_url
           ? 'calibrated'
           : 'original'
+  const activeViewMode: PhotoViewMode =
+    viewMode === 'background' && backgroundRepresentation?.public_url
+      ? 'background'
+      : viewMode === 'processed' && processedRepresentation?.public_url
+        ? 'processed'
+        : viewMode === 'calibrated' && calibratedRepresentation?.public_url
+          ? 'calibrated'
+          : pipelineViewMode
+  const selectedCompletionOriginal =
+    completionWorkflowOpen &&
+    completionWorkflowStage === 'preview' &&
+    selectedImage?.id &&
+    !completionImageUsesBackground(selectedImage.id) &&
+    completionFallbackModeForImage(selectedImage.id) === 'original'
+  const selectedCompletionMode: PhotoViewMode =
+    completionWorkflowOpen && completionWorkflowStage === 'preview' && selectedImage?.id
+      ? completionImageUsesBackground(selectedImage.id)
+        ? 'background'
+        : completionFallbackModeForImage(selectedImage.id)
+      : activeViewMode
+  const selectedCropSettings = cropSettingsForImage(selectedImage?.id)
+  const selectedManualCropActive =
+    completionWorkflowOpen &&
+    completionWorkflowStage === 'preview' &&
+    batchRunAutoCropRotate &&
+    selectedImage?.id &&
+    !selectedCropSettings.auto_crop &&
+    !completionImageUsesBackground(selectedImage.id)
   const displayUrl =
-    pipelineViewMode === 'background' && backgroundRepresentation?.public_url
+    selectedCompletionOriginal
+      ? currentOriginalUrl
+      : selectedCompletionMode === 'background' && backgroundRepresentation?.public_url
       ? backgroundRepresentation.public_url
-      : pipelineViewMode === 'processed' && processedRepresentation?.public_url
+      : selectedCompletionMode === 'processed' && processedRepresentation?.public_url
         ? processedRepresentation.public_url
-        : pipelineViewMode === 'calibrated' && calibratedRepresentation?.public_url
-          ? calibratedRepresentation.public_url
+        : selectedCompletionMode === 'calibrated' && calibratedRepresentation?.public_url
+        ? calibratedRepresentation.public_url
+        : selectedCompletionMode === 'original'
+          ? currentOriginalUrl
           : currentUrl
+  const completionViewMode: PhotoViewMode = batchRunBackgroundRemoval
+    ? 'background'
+    : batchRunAutoCropRotate
+      ? 'processed'
+      : batchRunCalibration
+        ? 'calibrated'
+        : 'original'
+  const previewBackgroundStyle =
+    selectedCompletionMode === 'background'
+      ? {
+          backgroundColor: '#ffffff',
+          backgroundImage:
+            'linear-gradient(45deg, #e5e7eb 25%, transparent 25%), linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e5e7eb 75%), linear-gradient(-45deg, transparent 75%, #e5e7eb 75%)',
+          backgroundSize: '24px 24px',
+          backgroundPosition: '0 0, 0 12px, 12px -12px, -12px 0px',
+        }
+      : undefined
   const measurementSourceCaptureId = session?.measurement_source_capture_id || null
   const selectedIsMeasurementSource =
     Boolean(selectedCapture?.id && measurementSourceCaptureId && selectedCapture.id === measurementSourceCaptureId)
+  const dailyReferenceProfile = activeDailyReferenceProfile()
   const activeCalibrationCount = calibrationProfiles.filter((profile) => profile.status === 'active').length
   const activeProcessingJobs = processingJobs.filter((job) =>
     ['queued', 'waiting_for_worker', 'processing', 'uploading'].includes(job.status)
@@ -1591,20 +2183,232 @@ export default function PhotoMonitorPage() {
   const latestBackgroundJob = processingJobs.find((job) => job.job_type === 'background_removal')
   const latestPreviewJob = processingJobs.find((job) => job.job_type === 'processed_preview')
   const latestRawJob = processingJobs.find((job) => job.job_type === 'raw_development')
+  const sessionRepresentationsByCaptureId = useMemo(() => {
+    const byCapture = new Map<string, CaptureRepresentation[]>()
+    for (const representation of sessionRepresentations) {
+      const rows = byCapture.get(representation.capture_id) || []
+      rows.push(representation)
+      byCapture.set(representation.capture_id, rows)
+    }
+    for (const representation of representations) {
+      const rows = byCapture.get(representation.capture_id) || []
+      if (!rows.some((row) => row.id === representation.id)) rows.push(representation)
+      byCapture.set(representation.capture_id, rows)
+    }
+    return byCapture
+  }, [sessionRepresentations, representations])
+  const completionBatchJobs = completionJobIds
+    .map((jobId) => sessionProcessingJobs.find((job) => job.id === jobId))
+    .filter((job): job is PhotoProcessingJob => Boolean(job?.id))
+  const completionTotalJobs = completionJobIds.length
+  const completionLoadedJobCount = completionBatchJobs.length
+  const completionMissingJobCount = Math.max(0, completionTotalJobs - completionLoadedJobCount)
+  function representationForMode(captureId: string | undefined | null, mode: PhotoViewMode, minCreatedAt?: string | null) {
+    if (!captureId) return null
+    const rows = sessionRepresentationsByCaptureId.get(captureId) || []
+    const representationType =
+      mode === 'background'
+        ? 'background_removed'
+        : mode === 'processed'
+          ? 'processed_preview'
+          : mode === 'calibrated'
+            ? 'calibrated_preview'
+            : ''
+    if (!representationType) return null
+    const minTime = minCreatedAt ? new Date(minCreatedAt).getTime() : 0
+    return rows
+      .filter((row) => {
+        if (row.representation_type !== representationType || !viewableRepresentationStatuses.has(row.status) || !row.public_url) return false
+        if (!minTime) return true
+        const createdTime = row.created_at ? new Date(row.created_at).getTime() : 0
+        return createdTime >= minTime
+      })
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0] || null
+  }
+  function jobResultRepresentationForMode(captureId: string | undefined | null, mode: PhotoViewMode) {
+    if (!captureId) return null
+    const representationType =
+      mode === 'background'
+        ? 'background_removed'
+        : mode === 'processed'
+          ? 'processed_preview'
+          : mode === 'calibrated'
+            ? 'calibrated_preview'
+            : ''
+    if (!representationType) return null
+
+    const completedJob = completionBatchJobs.find((job) => {
+      const result = job.result_representation
+      return (
+        job.capture_id === captureId &&
+        job.status === 'completed' &&
+        result?.representation_type === representationType &&
+        viewableRepresentationStatuses.has(result.status) &&
+        result.public_url
+      )
+    })
+
+    return completedJob?.result_representation || null
+  }
+  function completionRepresentationForMode(captureId: string | undefined | null, mode: PhotoViewMode) {
+    return (
+      jobResultRepresentationForMode(captureId, mode) ||
+      representationForMode(captureId, mode, completionRunStartedAt) ||
+      (completionCanUseExistingPreviews ? representationForMode(captureId, mode) : null)
+    )
+  }
+  function cropSettingsForImage(imageId: string | undefined | null): ManualCropSettings {
+    if (!imageId) return defaultManualCropSettings
+    return completionCropSettingsByImageId[imageId] || defaultManualCropSettings
+  }
+  function updateCropSettingsForImage(imageId: string, patch: Partial<ManualCropSettings>) {
+    setCompletionCropSettingsByImageId((current) => ({
+      ...current,
+      [imageId]: {
+        ...defaultManualCropSettings,
+        ...(current[imageId] || {}),
+        ...patch,
+      },
+    }))
+  }
+  function hasManualCropChanges(settings: ManualCropSettings) {
+    return (
+      Math.abs(settings.rotation_degrees || 0) > 0 ||
+      Math.abs(settings.crop_left_percent || 0) > 0 ||
+      Math.abs(settings.crop_right_percent || 0) > 0 ||
+      Math.abs(settings.crop_top_percent || 0) > 0 ||
+      Math.abs(settings.crop_bottom_percent || 0) > 0
+    )
+  }
+  const selectedCropLeft = Math.max(0, Math.min(80, selectedCropSettings.crop_left_percent || 0))
+  const selectedCropRight = Math.max(0, Math.min(80, selectedCropSettings.crop_right_percent || 0))
+  const selectedCropTop = Math.max(0, Math.min(80, selectedCropSettings.crop_top_percent || 0))
+  const selectedCropBottom = Math.max(0, Math.min(80, selectedCropSettings.crop_bottom_percent || 0))
+  const selectedCropHasChanges =
+    hasManualCropChanges(selectedCropSettings)
+  function completionFallbackModeForImage(imageId?: string | null) {
+    if (batchRunAutoCropRotate && cropSettingsForImage(imageId).auto_crop) return 'processed' as PhotoViewMode
+    if (batchRunCalibration) return 'calibrated' as PhotoViewMode
+    return 'original' as PhotoViewMode
+  }
+  function completionRequiredModeForImageId(imageId: string | null | undefined) {
+    if (imageId && completionBackgroundImageIds.includes(imageId)) return 'background' as PhotoViewMode
+    return completionFallbackModeForImage(imageId)
+  }
+  function completionRequiredModeForCapture(captureId: string) {
+    const capture = captures.find((row) => row.id === captureId)
+    return completionRequiredModeForImageId(capture?.item_image_id)
+  }
+  const completionTargetCaptureSet = new Set(completionTargetCaptureIds)
+  const completionCompletedCaptureIds = completionTargetCaptureIds.filter((captureId) =>
+    completionRequiredModeForCapture(captureId) === 'original' ||
+    Boolean(completionRepresentationForMode(captureId, completionRequiredModeForCapture(captureId)))
+  )
+  const completionIncompleteCaptureIds = completionTargetCaptureIds.filter(
+    (captureId) => !completionCompletedCaptureIds.includes(captureId)
+  )
+  function completionRequiredJobTypeForCapture(captureId: string) {
+    const mode = completionRequiredModeForCapture(captureId)
+    return mode === 'background'
+      ? 'background_removal'
+      : mode === 'processed'
+        ? 'processed_preview'
+        : mode === 'calibrated'
+          ? 'calibrated_preview'
+          : ''
+  }
+  const completionActiveJobs = completionBatchJobs.filter(
+    (job) =>
+      completionTargetCaptureSet.has(job.capture_id) &&
+      completionIncompleteCaptureIds.includes(job.capture_id) &&
+      (!completionRequiredJobTypeForCapture(job.capture_id) || job.job_type === completionRequiredJobTypeForCapture(job.capture_id)) &&
+      ['queued', 'waiting_for_worker', 'processing', 'uploading'].includes(job.status)
+  )
+  const completionFailedJobs = completionBatchJobs.filter(
+    (job) =>
+      completionTargetCaptureSet.has(job.capture_id) &&
+      completionIncompleteCaptureIds.includes(job.capture_id) &&
+      (!completionRequiredJobTypeForCapture(job.capture_id) || job.job_type === completionRequiredJobTypeForCapture(job.capture_id)) &&
+      job.status === 'failed'
+  )
+  const completionCompletedJobs = completionBatchJobs.filter(
+    (job) => completionTargetCaptureSet.has(job.capture_id) && job.status === 'completed'
+  )
+  const completionProgressUnits = Math.max(completionTargetCaptureIds.length, completionTotalJobs)
+  const completionDoneUnits = completionTargetCaptureIds.length
+    ? completionCompletedCaptureIds.length
+    : completionCompletedJobs.length
+  const completionProgressPercent =
+    completionProgressUnits > 0 ? Math.round((completionDoneUnits / completionProgressUnits) * 100) : 0
+  const completionPreviewReady =
+    completionTargetCaptureIds.length > 0 && completionCompletedCaptureIds.length === completionTargetCaptureIds.length
+  function displayUrlForImage(image: ItemImage | null) {
+    if (!image?.id) return ''
+    if (
+      completionWorkflowOpen &&
+      completionWorkflowStage === 'preview' &&
+      completionTargetCaptureIds.includes(captureByImageId.get(image.id)?.id || '')
+    ) {
+      const mode = completionImageUsesBackground(image.id) ? 'background' : completionFallbackModeForImage(image.id)
+      if (mode === 'original') return originalImageUrl(image)
+      const representation = completionRepresentationForMode(captureByImageId.get(image.id)?.id, mode)
+      return representation?.public_url || originalImageUrl(image)
+    }
+    const capture = captureByImageId.get(image.id)
+    const currentRunRepresentation =
+      completionWorkflowOpen && completionWorkflowStage === 'preview' && completionTargetCaptureIds.includes(capture?.id || '')
+        ? completionRepresentationForMode(capture?.id, completionViewMode)
+        : null
+    const representation = currentRunRepresentation || representationForMode(capture?.id, activeViewMode)
+    return representation?.public_url || imageUrl(image)
+  }
+  function completionStatusForImage(image: ItemImage) {
+    const capture = captureByImageId.get(image.id)
+    if (!capture?.id || !completionTargetCaptureIds.includes(capture.id)) return null
+    const requiredMode = completionRequiredModeForImageId(image.id)
+    if (requiredMode === 'original' || completionRepresentationForMode(capture.id, requiredMode)) return 'complete'
+    const requiredJobType =
+      requiredMode === 'background'
+        ? 'background_removal'
+        : requiredMode === 'processed'
+          ? 'processed_preview'
+          : requiredMode === 'calibrated'
+            ? 'calibrated_preview'
+            : ''
+    const jobs = completionBatchJobs.filter((job) => job.capture_id === capture.id && (!requiredJobType || job.job_type === requiredJobType))
+    if (jobs.some((job) => job.status === 'failed')) return 'failed'
+    if (jobs.length > 0 && jobs.every((job) => job.status === 'completed')) return 'complete'
+    if (jobs.some((job) => ['queued', 'waiting_for_worker', 'processing', 'uploading'].includes(job.status))) return 'processing'
+    return null
+  }
+  function completionImageUsesBackground(imageId: string) {
+    return completionBackgroundImageIds.includes(imageId)
+  }
+  function setCompletionImageUsesBackground(imageId: string, checked: boolean) {
+    setCompletionBackgroundImageIds((current) =>
+      checked ? Array.from(new Set([...current, imageId])) : current.filter((id) => id !== imageId)
+    )
+  }
   const viewedProcessedRepresentation =
-    pipelineViewMode === 'background'
+    activeViewMode === 'background'
       ? backgroundRepresentation
-      : pipelineViewMode === 'processed'
+      : activeViewMode === 'processed'
         ? processedRepresentation
-        : pipelineViewMode === 'calibrated'
+        : activeViewMode === 'calibrated'
           ? calibratedRepresentation
           : null
   const phonePairExpanded = Boolean(phonePairUrl && (phonePairHoverExpanded || phonePairPinned))
 
   function makeWorkerSetupUrl(sourceName: string, token: string) {
     if (!token) return ''
+    const appUrl =
+      typeof window !== 'undefined' &&
+      /^https?:\/\//i.test(window.location.origin) &&
+      !['null', 'undefined'].includes(window.location.origin)
+        ? window.location.origin
+        : ''
     const params = new URLSearchParams({
-      app_url: window.location.origin,
+      app_url: appUrl,
       source_name: sourceName,
       source_token: token,
     })
@@ -1671,31 +2475,6 @@ export default function PhotoMonitorPage() {
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className="flex min-w-[280px] items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 p-2">
-              <input
-                ref={scanInputRef}
-                value={scanValue}
-                onChange={(event) => setScanValue(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    startSessionFromScan()
-                  }
-                }}
-                placeholder="Scan SKU, barcode, or RFID"
-                className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-black px-3 text-sm font-bold text-white outline-none focus:border-white"
-              />
-
-              <button
-                type="button"
-                onClick={startSessionFromScan}
-                disabled={busy || !scanValue.trim() || !station}
-                className="h-9 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white disabled:opacity-50"
-              >
-                Start
-              </button>
-            </div>
-
             <select
               value={station?.id || ''}
               onChange={(event) => {
@@ -1722,6 +2501,15 @@ export default function PhotoMonitorPage() {
               Station Settings
             </button>
 
+            <button
+              type="button"
+              onClick={requestStationCalibrationCapture}
+              disabled={busy || !station || calibrationCapturePending}
+              className="h-10 rounded-lg bg-emerald-700 px-4 text-sm font-black text-white disabled:opacity-50"
+            >
+              {calibrationCapturePending ? 'Waiting For Calibration' : 'Refresh Calibration Image'}
+            </button>
+
             {item?.id && (
               <Link
                 href={`/items/${item.id}`}
@@ -1739,12 +2527,86 @@ export default function PhotoMonitorPage() {
             >
               Complete Photos
             </button>
+
+            <button
+              type="button"
+              onClick={endSession}
+              disabled={busy || !session}
+              className="h-10 rounded-lg bg-zinc-800 px-4 text-sm font-black text-white disabled:opacity-50"
+            >
+              End Session
+            </button>
           </div>
         </header>
 
         {message && (
           <div className="mb-4 rounded-xl border border-yellow-700 bg-yellow-950 px-4 py-3 text-sm font-bold text-yellow-200">
             {message}
+          </div>
+        )}
+
+        {calibrationPromptOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+            <div className="w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl">
+              <h2 className="text-xl font-black text-white">Calibration Image</h2>
+              <p className="mt-2 text-sm font-bold text-zinc-300">
+                Use a station calibration image for colour, crop, measurement and background removal.
+                This is stored against the station, not this SKU.
+              </p>
+
+              {dailyReferenceProfile ? (
+                <p className="mt-3 rounded-lg border border-emerald-900 bg-emerald-950/40 px-3 py-2 text-xs font-bold text-emerald-100">
+                  Previous: {dailyReferenceProfile.name} - {formatShortDateTime(dailyReferenceProfile.updated_at)}
+                </p>
+              ) : (
+                <p className="mt-3 rounded-lg border border-yellow-800 bg-yellow-950/40 px-3 py-2 text-xs font-bold text-yellow-100">
+                  No previous calibration image is saved for this station yet.
+                </p>
+              )}
+
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCalibrationPromptOpen(false)}
+                  className="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-black text-white"
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCalibrationPromptOpen(false)}
+                  disabled={!dailyReferenceProfile}
+                  className="rounded-lg bg-white px-4 py-2 text-sm font-black text-black disabled:opacity-50"
+                >
+                  Use Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={requestStationCalibrationCapture}
+                  disabled={busy || !station}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-black text-white disabled:opacity-50"
+                >
+                  Take Calibration Image
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {session?.status === 'active' && !dailyReferenceProfile && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-800 bg-emerald-950/50 px-4 py-3 text-sm font-bold text-emerald-100">
+            <div>
+              <span className="font-black">Add calibration image.</span>
+              {' '}Use one calibration image for colour, crop, measurement and background removal.
+            </div>
+            <button
+              type="button"
+              onClick={requestStationCalibrationCapture}
+              disabled={busy || !station || calibrationCapturePending}
+              className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white"
+            >
+              {calibrationCapturePending ? 'Waiting For Photo' : 'Take Calibration Image'}
+            </button>
           </div>
         )}
 
@@ -1836,7 +2698,7 @@ export default function PhotoMonitorPage() {
 
         {completionWorkflowOpen && (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-4">
-            <div className="w-full max-w-3xl rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl">
+            <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-black">Complete Photos</h2>
@@ -1878,6 +2740,14 @@ export default function PhotoMonitorPage() {
                 <div className="space-y-4">
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm font-black text-white">
+                      <span>Auto measure</span>
+                      <ToggleSwitch
+                        checked={autoMeasureOnComplete}
+                        onChange={setAutoMeasureOnComplete}
+                        label="Auto measure"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm font-black text-white">
                       <span>Apply active calibration</span>
                       <ToggleSwitch
                         checked={batchRunCalibration}
@@ -1886,11 +2756,11 @@ export default function PhotoMonitorPage() {
                       />
                     </div>
                     <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm font-black text-white">
-                      <span>Category crop / rotate</span>
+                      <span>Suggested crop / rotate</span>
                       <ToggleSwitch
                         checked={batchRunAutoCropRotate}
                         onChange={setBatchRunAutoCropRotate}
-                        label="Category crop and rotate"
+                        label="Suggested crop and rotate"
                       />
                     </div>
                     <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm font-black text-white">
@@ -1899,14 +2769,6 @@ export default function PhotoMonitorPage() {
                         checked={batchRunBackgroundRemoval}
                         onChange={setBatchRunBackgroundRemoval}
                         label="Background removal"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm font-black text-white">
-                      <span>Auto measure next time</span>
-                      <ToggleSwitch
-                        checked={autoMeasureOnComplete}
-                        onChange={setAutoMeasureOnComplete}
-                        label="Auto measure next time"
                       />
                     </div>
                   </div>
@@ -1934,13 +2796,248 @@ export default function PhotoMonitorPage() {
               {completionWorkflowStage === 'preview' && (
                 <div className="space-y-4">
                   <div className="rounded-xl border border-zinc-800 bg-black p-4">
-                    <p className="text-sm font-black text-white">Preview queued</p>
-                    <p className="mt-2 text-sm font-bold text-zinc-400">
-                      When the preview jobs complete, inspect the thumbnails and selected preview on the monitor.
-                      Accept saves generated versions as the item images; revert leaves originals unchanged.
-                    </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-white">Preview Progress</p>
+                        <p className="mt-2 text-sm font-bold text-zinc-400">
+                          Waiting for worker output before these photos can be accepted.
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded px-2 py-1 text-[10px] font-black ${
+                          completionPreviewReady
+                            ? 'bg-green-600 text-white'
+                            : completionFailedJobs.length > 0
+                              ? 'bg-red-700 text-white'
+                              : 'bg-yellow-500 text-black'
+                        }`}
+                      >
+                        {completionPreviewReady
+                          ? 'Ready'
+                          : completionFailedJobs.length > 0
+                            ? 'Failed'
+                            : 'Processing'}
+                      </span>
+                    </div>
+                    <div className="mt-4">
+                      <div className="h-3 overflow-hidden rounded-full bg-zinc-800">
+                        <div
+                          className={`h-full rounded-full ${
+                            completionFailedJobs.length > 0 ? 'bg-red-600' : 'bg-emerald-500'
+                          }`}
+                          style={{ width: `${completionProgressPercent}%` }}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs font-bold text-zinc-400">
+                        {completionDoneUnits} completed, {completionActiveJobs.length} active,
+                        {' '}{completionFailedJobs.length} failed
+                        {completionMissingJobCount ? `, ${completionMissingJobCount} waiting to load` : ''}
+                        {' '}of {completionProgressUnits || 0}.
+                      </p>
+                    </div>
+                    {completionFailedJobs[0]?.error_message && (
+                      <p className="mt-3 rounded-lg border border-red-700 bg-red-950 p-3 text-xs font-bold text-red-100">
+                        {completionFailedJobs[0].error_message}
+                      </p>
+                    )}
+                    {!viewedProcessedRepresentation?.public_url && !completionPreviewReady && (
+                      <p className="mt-3 rounded-lg border border-yellow-700 bg-yellow-950 p-3 text-xs font-bold text-yellow-100">
+                        The selected photo preview is not ready yet, so the image below may still be the original.
+                      </p>
+                    )}
+                    {displayUrl && (
+                      <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+                        <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+                        <div style={previewBackgroundStyle} className="flex min-h-[48vh] items-center justify-center overflow-hidden p-3">
+                          <img
+                            src={displayUrl}
+                            alt="Selected preview"
+                            className="max-h-[54vh] w-full object-contain"
+                            style={
+                              selectedManualCropActive && selectedCropHasChanges
+                                ? {
+                                    clipPath: `inset(${selectedCropTop}% ${selectedCropRight}% ${selectedCropBottom}% ${selectedCropLeft}%)`,
+                                    transform: `rotate(${selectedCropSettings.rotation_degrees}deg)`,
+                                    transformOrigin: 'center center',
+                                  }
+                                : undefined
+                            }
+                          />
+                        </div>
+                        <div className="border-t border-zinc-800 bg-zinc-950 p-3">
+                          <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                            <div
+                              className={`h-full rounded-full ${
+                                completionFailedJobs.length > 0 ? 'bg-red-600' : 'bg-emerald-500'
+                              }`}
+                              style={{ width: `${completionProgressPercent}%` }}
+                            />
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-xs font-black text-zinc-300">
+                              Image {selectedPreviewImagePosition || 0} of {thumbnailImages.length}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => moveSelectedPreviewImage(-1)}
+                                disabled={selectedPreviewImageIndex <= 0}
+                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-800 text-base font-black text-white disabled:opacity-40"
+                                aria-label="Previous image"
+                              >
+                                {'<'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveSelectedPreviewImage(1)}
+                                disabled={
+                                  selectedPreviewImageIndex < 0 ||
+                                  selectedPreviewImageIndex >= thumbnailImages.length - 1
+                                }
+                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-800 text-base font-black text-white disabled:opacity-40"
+                                aria-label="Next image"
+                              >
+                                {'>'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        </div>
+
+                        {selectedImage?.id && (
+                          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-3">
+                            <p className="text-xs font-black uppercase tracking-wide text-white">Selected Image</p>
+                            <p className="mt-1 text-[11px] font-bold text-zinc-400">
+                              These controls apply only to this preview image.
+                            </p>
+
+                            {batchRunBackgroundRemoval && (
+                              <label className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-black p-3 text-xs font-black text-white">
+                                <span>Background removal</span>
+                                <input
+                                  type="checkbox"
+                                  checked={completionImageUsesBackground(selectedImage.id)}
+                                  onChange={(event) => setCompletionImageUsesBackground(selectedImage.id, event.target.checked)}
+                                  className="h-4 w-4"
+                                />
+                              </label>
+                            )}
+
+                            {batchRunAutoCropRotate && (
+                              <div className="mt-4 space-y-3">
+                                <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-black p-3 text-xs font-black text-white">
+                                  <span>Suggested crop / rotate</span>
+                                  <ToggleSwitch
+                                    checked={selectedCropSettings.auto_crop}
+                                    onChange={(checked) => updateCropSettingsForImage(selectedImage.id, { auto_crop: checked })}
+                                    label="Suggested crop and rotate"
+                                  />
+                                </div>
+
+                                {!selectedCropSettings.auto_crop && (
+                                  <div className="space-y-3">
+                                    {[
+                                      ['rotation_degrees', 'Rotate', -25, 25, 0.5, `${selectedCropSettings.rotation_degrees} deg`],
+                                      ['crop_left_percent', 'Crop left', 0, 80, 1, `${selectedCropLeft}%`],
+                                      ['crop_right_percent', 'Crop right', 0, 80, 1, `${selectedCropRight}%`],
+                                      ['crop_top_percent', 'Crop top', 0, 80, 1, `${selectedCropTop}%`],
+                                      ['crop_bottom_percent', 'Crop bottom', 0, 80, 1, `${selectedCropBottom}%`],
+                                    ].map(([key, label, min, max, step, valueLabel]) => (
+                                      <label key={key as string} className="block">
+                                        <span className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                                          <span>{label as string}</span>
+                                          <span>{valueLabel as string}</span>
+                                        </span>
+                                        <input
+                                          type="range"
+                                          min={min as number}
+                                          max={max as number}
+                                          step={step as number}
+                                          value={(selectedCropSettings as any)[key as string]}
+                                          onChange={(event) =>
+                                            updateCropSettingsForImage(selectedImage.id, {
+                                              [key as string]: Number(event.target.value),
+                                            } as Partial<ManualCropSettings>)
+                                          }
+                                          className="w-full accent-emerald-500"
+                                        />
+                                      </label>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      onClick={() => updateCropSettingsForImage(selectedImage.id, defaultManualCropSettings)}
+                                      className="w-full rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white"
+                                    >
+                                      Reset Selected Crop
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {false && completionPreviewReady && batchRunAutoCropRotate && selectedImage?.id && (
+                      <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                        {!selectedCropSettings.auto_crop && (
+                          <div className="hidden">
+                            {[
+                              ['rotation_degrees', 'Rotate', -25, 25, 0.5, `${selectedCropSettings.rotation_degrees}°`],
+                              ['zoom_percent', 'Zoom', 70, 180, 1, `${selectedCropSettings.zoom_percent}%`],
+                              ['offset_x_percent', 'Move left/right', -50, 50, 1, `${selectedCropSettings.offset_x_percent}%`],
+                              ['offset_y_percent', 'Move up/down', -50, 50, 1, `${selectedCropSettings.offset_y_percent}%`],
+                            ].map(([key, label, min, max, step, valueLabel]) => (
+                              <label key={key as string} className="block">
+                                <span className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                                  <span>{label as string}</span>
+                                  <span>{valueLabel as string}</span>
+                                </span>
+                                <input
+                                  type="range"
+                                  min={min as number}
+                                  max={max as number}
+                                  step={step as number}
+                                  value={(selectedCropSettings as any)[key as string]}
+                                  onChange={(event) =>
+                                    updateCropSettingsForImage(selectedImage.id, {
+                                      [key as string]: Number(event.target.value),
+                                    } as Partial<ManualCropSettings>)
+                                  }
+                                  className="w-full accent-emerald-500"
+                                />
+                              </label>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => updateCropSettingsForImage(selectedImage.id, defaultManualCropSettings)}
+                              className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white sm:col-span-2"
+                            >
+                              Reset Selected Crop
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="flex justify-end gap-2">
+                    {batchRunBackgroundRemoval && (
+                      <button
+                        type="button"
+                        onClick={() => setProcessingSettingsOpen('background')}
+                        className="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-black text-white"
+                      >
+                        Background Settings
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={rerunCompletionProcessingPreview}
+                      disabled={busy || completionActiveJobs.length > 0}
+                      className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-black text-white disabled:opacity-50"
+                    >
+                      Rerun Preview
+                    </button>
                     <button
                       type="button"
                       onClick={revertCompletionWorkflow}
@@ -1951,7 +3048,7 @@ export default function PhotoMonitorPage() {
                     <button
                       type="button"
                       onClick={acceptCompletionWorkflow}
-                      disabled={busy}
+                      disabled={busy || !completionPreviewReady}
                       className="rounded-lg bg-white px-4 py-2 text-sm font-black text-black disabled:opacity-40"
                     >
                       Accept & Complete
@@ -2057,30 +3154,6 @@ export default function PhotoMonitorPage() {
                       <p className="mt-3 break-all text-center text-[11px] font-bold text-zinc-700">{phonePairUrl}</p>
                     </div>
                   )}
-                </div>
-
-                <div className="rounded-xl border border-zinc-800 bg-black p-4">
-                  <h3 className="text-sm font-black text-white">Station Defaults</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    <label className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs font-black text-zinc-200">
-                      <span>RFID auto-start</span>
-                      <input
-                        type="checkbox"
-                        checked={station?.auto_start_from_rfid === true}
-                        disabled={busy || !station}
-                        onChange={(event) => updateStationSettings({ auto_start_from_rfid: event.target.checked })}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs font-black text-zinc-200">
-                      <span>Barcode auto-start</span>
-                      <input
-                        type="checkbox"
-                        checked={station?.auto_start_from_barcode === true}
-                        disabled={busy || !station}
-                        onChange={(event) => updateStationSettings({ auto_start_from_barcode: event.target.checked })}
-                      />
-                    </label>
-                  </div>
                 </div>
 
                 <div className="rounded-xl border border-zinc-800 bg-black p-4">
@@ -2219,6 +3292,7 @@ export default function PhotoMonitorPage() {
                         onChange={(event) => setNewCalibrationType(event.target.value)}
                         className="h-9 rounded-lg border border-zinc-700 bg-zinc-950 px-2 text-xs font-bold text-white outline-none focus:border-white"
                       >
+                        <option value="station_daily_reference">Session Calibration Reference</option>
                         <option value="colour_white_balance">Colour / WB</option>
                         <option value="calibrite_colour_checker">Calibrite Colour Checker</option>
                         <option value="geometry_scale">Geometry / Scale</option>
@@ -2286,6 +3360,30 @@ export default function PhotoMonitorPage() {
                     >
                       Add Calibration Profile
                     </button>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-emerald-900 bg-emerald-950/40 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-black text-white">Calibration Image</p>
+                        <p className="mt-1 text-xs font-bold text-emerald-100/80">
+                          Use one calibration image to guide colour, ArUco scale, measurements, background removal and crop for this station.
+                        </p>
+                        <p className="mt-2 text-xs font-bold text-emerald-100">
+                          {dailyReferenceProfile
+                            ? `${dailyReferenceProfile.name} - ${formatShortDateTime(dailyReferenceProfile.updated_at)}`
+                            : 'No calibration image saved yet.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={saveSelectedAsDailyReference}
+                        disabled={busy || !selectedCapture}
+                        className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
+                      >
+                        Add Calibration Image
+                      </button>
+                    </div>
                   </div>
 
                   <div className="mt-3 space-y-2">
@@ -2478,43 +3576,240 @@ export default function PhotoMonitorPage() {
               )}
 
               {processingSettingsOpen === 'crop_rotate' && (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div className="rounded-lg border border-emerald-700 bg-emerald-950 p-3 text-xs font-bold text-emerald-100">
                     {cropGuidelineForItem(item)}
                   </div>
+
+                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-zinc-700 bg-zinc-950 p-1">
+                    {[
+                      { value: 'auto', label: 'Auto crop' },
+                      { value: 'centre', label: 'Centre crop' },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() =>
+                          setCropRotateSettings((current) => ({
+                            ...current,
+                            mode: option.value as CropRotateSettings['mode'],
+                          }))
+                        }
+                        className={`rounded-md px-3 py-2 text-xs font-black ${
+                          cropRotateSettings.mode === option.value ? 'bg-emerald-600 text-white' : 'text-zinc-300'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+
                   <label className="block">
-                    <span className="mb-1 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
-                      Edge padding %
+                    <span className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                      <span>Whitespace around garment</span>
+                      <span>{cropRotateSettings.whitespace_percent}%</span>
                     </span>
                     <input
-                      placeholder="Reserved for crop processor"
-                      className="h-9 w-full rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                      type="range"
+                      min={0}
+                      max={30}
+                      value={cropRotateSettings.whitespace_percent}
+                      onChange={(event) =>
+                        setCropRotateSettings((current) => ({
+                          ...current,
+                          whitespace_percent: Number(event.target.value || 0),
+                        }))
+                      }
+                      className="w-full accent-emerald-500"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                      <span>Rotate</span>
+                      <span>{cropRotateSettings.rotation_degrees}°</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={-15}
+                      max={15}
+                      step={0.5}
+                      value={cropRotateSettings.rotation_degrees}
+                      onChange={(event) =>
+                        setCropRotateSettings((current) => ({
+                          ...current,
+                          rotation_degrees: Number(event.target.value || 0),
+                        }))
+                      }
+                      className="w-full accent-emerald-500"
+                    />
+                  </label>
+
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-xs font-black text-white">
+                    <span>Ignore close-ups</span>
+                    <ToggleSwitch
+                      checked={cropRotateSettings.skip_closeups}
+                      onChange={(checked) =>
+                        setCropRotateSettings((current) => ({
+                          ...current,
+                          skip_closeups: checked,
+                        }))
+                      }
+                      label="Ignore close-ups"
+                    />
+                  </div>
+
+                  <label className="block">
+                    <span className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                      <span>Close-up threshold</span>
+                      <span>{cropRotateSettings.closeup_threshold}%</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={70}
+                      max={98}
+                      value={cropRotateSettings.closeup_threshold}
+                      onChange={(event) =>
+                        setCropRotateSettings((current) => ({
+                          ...current,
+                          closeup_threshold: Number(event.target.value || 90),
+                        }))
+                      }
+                      className="w-full accent-emerald-500"
                     />
                   </label>
                   <p className="rounded-lg border border-zinc-800 bg-black p-3 text-xs font-bold text-zinc-400">
-                    Category crop will use the item's category and sub category to choose safe framing rules. Smart crop, deskew, rotation, and manual handles still need the next processor pass.
+                    Auto crop finds the visible item and leaves the chosen whitespace. Centre crop keeps framing centred
+                    and only applies rotation/resize. Close-ups are skipped when the item already fills the frame.
                   </p>
                 </div>
               )}
 
               {processingSettingsOpen === 'background' && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-xs font-black text-white">
-                    <span>Preserve garment colour and texture</span>
-                    <ToggleSwitch checked onChange={() => undefined} label="Preserve garment colour and texture" />
-                  </div>
+                <div className="space-y-4">
                   <label className="block">
                     <span className="mb-1 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
-                      Background output
+                      Background model
                     </span>
-                    <select className="h-9 w-full rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white">
-                      <option>Transparent PNG</option>
-                      <option>White background</option>
-                      <option>Light grey background</option>
+                    <select
+                      value={backgroundRemovalSettings.model}
+                      onChange={(event) =>
+                        updateBackgroundRemovalSettings({
+                          model: event.target.value as BackgroundRemovalSettings['model'],
+                        })
+                      }
+                      className="h-9 w-full rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                    >
+                      <option value="isnet-general-use">Product detail - isnet general</option>
+                      <option value="u2net">General - u2net</option>
+                      <option value="silueta">Clean silhouettes - silueta</option>
+                      <option value="u2netp">Fast preview - u2netp</option>
                     </select>
                   </label>
+
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-xs font-black text-white">
+                    <span>Fine edge matting</span>
+                    <ToggleSwitch
+                      checked={backgroundRemovalSettings.alpha_matting}
+                      onChange={(checked) => updateBackgroundRemovalSettings({ alpha_matting: checked })}
+                      label="Fine edge matting"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                        Foreground
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={255}
+                        value={backgroundRemovalSettings.foreground_threshold}
+                        onChange={(event) =>
+                          updateBackgroundRemovalSettings({
+                            foreground_threshold: Number(event.target.value || 0),
+                          })
+                        }
+                        className="h-9 w-full rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                        Background
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={255}
+                        value={backgroundRemovalSettings.background_threshold}
+                        onChange={(event) =>
+                          updateBackgroundRemovalSettings({
+                            background_threshold: Number(event.target.value || 0),
+                          })
+                        }
+                        className="h-9 w-full rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                        Edge cleanup
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={80}
+                        value={backgroundRemovalSettings.erode_size}
+                        onChange={(event) =>
+                          updateBackgroundRemovalSettings({
+                            erode_size: Number(event.target.value || 0),
+                          })
+                        }
+                        className="h-9 w-full rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-xs font-black text-white">
+                    <span>Post-process mask</span>
+                    <ToggleSwitch
+                      checked={backgroundRemovalSettings.post_process_mask}
+                      onChange={(checked) => updateBackgroundRemovalSettings({ post_process_mask: checked })}
+                      label="Post-process mask"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-xs font-black text-white">
+                    <span>Skip full-frame images</span>
+                    <ToggleSwitch
+                      checked={backgroundRemovalSettings.skip_full_frame}
+                      onChange={(checked) => updateBackgroundRemovalSettings({ skip_full_frame: checked })}
+                      label="Skip full-frame images"
+                    />
+                  </div>
+
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                      Full-frame threshold %
+                    </span>
+                    <input
+                      type="number"
+                      min={70}
+                      max={99}
+                      value={backgroundRemovalSettings.full_frame_threshold}
+                      onChange={(event) =>
+                        updateBackgroundRemovalSettings({
+                          full_frame_threshold: Number(event.target.value || 94),
+                        })
+                      }
+                      className="h-9 w-full rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
+                    />
+                  </label>
+
                   <p className="rounded-lg border border-zinc-800 bg-black p-3 text-xs font-bold text-zinc-400">
-                    The current background engine is temporary. The next engine should expose matting/edge/shadow controls and must not alter item colour, silhouette, labels, flaws, or fabric texture.
+                    Output is a transparent PNG preview. Higher foreground values usually preserve more garment edge;
+                    higher edge cleanup can remove halos but may eat into fine fabric details. Full-frame skip keeps the
+                    image unchanged when the detected item fills almost the whole frame.
                   </p>
                 </div>
               )}
@@ -2678,6 +3973,8 @@ export default function PhotoMonitorPage() {
                   {thumbnailImages.map((image) => {
                     const active = selectedImage?.id === image.id
                     const batchSelected = batchSelectedImageIds.includes(image.id)
+                    const previewUrl = displayUrlForImage(image)
+                    const processingStatus = completionStatusForImage(image)
                     return (
                       <div
                         key={image.id}
@@ -2691,11 +3988,24 @@ export default function PhotoMonitorPage() {
                           className="block w-full"
                         >
                           <img
-                            src={imageUrl(image)}
+                            src={previewUrl}
                             alt=""
                             className="aspect-square w-full object-cover"
                           />
                         </button>
+                        {processingStatus && (
+                          <span
+                            className={`absolute bottom-1 left-1 rounded px-1.5 py-0.5 text-[9px] font-black uppercase text-white ${
+                              processingStatus === 'complete'
+                                ? 'bg-green-600'
+                                : processingStatus === 'failed'
+                                  ? 'bg-red-700'
+                                  : 'bg-yellow-600 text-black'
+                            }`}
+                          >
+                            {processingStatus === 'complete' ? 'Done' : processingStatus}
+                          </span>
+                        )}
                         <label className="absolute left-1 top-1 flex h-5 w-5 items-center justify-center rounded bg-black/70">
                           <input
                             type="checkbox"
@@ -2800,6 +4110,13 @@ export default function PhotoMonitorPage() {
               <div className="mt-4 space-y-2">
                 {[
                   {
+                    key: 'measure',
+                    label: 'Auto measure',
+                    enabled: autoMeasureOnComplete,
+                    setEnabled: setAutoMeasureOnComplete,
+                    status: selectedIsMeasurementSource ? 'source selected' : 'needs source photo',
+                  },
+                  {
                     key: 'calibration',
                     label: 'Calibration',
                     enabled: batchRunCalibration,
@@ -2808,7 +4125,7 @@ export default function PhotoMonitorPage() {
                   },
                   {
                     key: 'crop_rotate',
-                    label: 'Category crop / rotate',
+                    label: 'Suggested crop / rotate',
                     enabled: batchRunAutoCropRotate,
                     setEnabled: setBatchRunAutoCropRotate,
                     status: processedRepresentation?.public_url ? 'ready' : 'not generated',
@@ -2835,7 +4152,13 @@ export default function PhotoMonitorPage() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setProcessingSettingsOpen(option.key as 'calibration' | 'crop_rotate' | 'background')}
+                      onClick={() => {
+                        if (option.key === 'measure') {
+                          setShowArucoLayoutModal(true)
+                          return
+                        }
+                        setProcessingSettingsOpen(option.key as 'calibration' | 'crop_rotate' | 'background')
+                      }}
                       className="flex h-8 w-8 items-center justify-center rounded bg-zinc-800 text-white"
                       title={`${option.label} settings`}
                       aria-label={`${option.label} settings`}
@@ -2902,7 +4225,7 @@ export default function PhotoMonitorPage() {
                   },
                   {
                     key: 'crop_rotate',
-                    label: 'Category crop / rotate',
+                    label: 'Suggested crop / rotate',
                     enabled: batchRunAutoCropRotate,
                     setEnabled: setBatchRunAutoCropRotate,
                     status: processedRepresentation?.public_url ? 'ready' : 'not generated',
@@ -3001,7 +4324,7 @@ export default function PhotoMonitorPage() {
               <div className="mt-3 grid grid-cols-3 gap-2">
                 <button
                   type="button"
-                  onClick={runBatchPreviewPipeline}
+                  onClick={() => runBatchPreviewPipeline()}
                   disabled={busy || images.length === 0}
                   className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
                 >
@@ -3686,33 +5009,6 @@ export default function PhotoMonitorPage() {
                   Archive Selected Station
                 </button>
 
-                <div className="grid gap-2 pt-2 sm:grid-cols-2">
-                  <label className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-black p-3 text-xs font-black text-zinc-200">
-                    <span>RFID auto-start</span>
-                    <input
-                      type="checkbox"
-                      checked={station?.auto_start_from_rfid === true}
-                      disabled={busy || !station}
-                      onChange={(event) =>
-                        updateStationSettings({ auto_start_from_rfid: event.target.checked })
-                      }
-                      className="h-4 w-4"
-                    />
-                  </label>
-
-                  <label className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-black p-3 text-xs font-black text-zinc-200">
-                    <span>Barcode auto-start</span>
-                    <input
-                      type="checkbox"
-                      checked={station?.auto_start_from_barcode === true}
-                      disabled={busy || !station}
-                      onChange={(event) =>
-                        updateStationSettings({ auto_start_from_barcode: event.target.checked })
-                      }
-                      className="h-4 w-4"
-                    />
-                  </label>
-                </div>
               </div>
             </div>
 
@@ -4153,7 +5449,10 @@ export default function PhotoMonitorPage() {
             </div>
           </aside>
 
-          <div className="order-1 flex min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-black lg:order-2">
+          <div
+            className="order-1 flex min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-black lg:order-2"
+            style={previewBackgroundStyle}
+          >
             {displayUrl ? (
               <img
                 src={displayUrl}

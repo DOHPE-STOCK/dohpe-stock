@@ -12,6 +12,7 @@ import {
   findBestEbayCategoryMapping,
   mergeEbaySettings,
 } from '@/lib/ebayIntegrationSettings'
+import { isDigitalSkuType, normaliseSkuType, skuTypeLabel } from '@/lib/skuTypes'
 
 const PHOTO_ORIGINAL_RETENTION_DAYS = 14
 
@@ -19,6 +20,26 @@ function originalDeleteAfterIso(days = PHOTO_ORIGINAL_RETENTION_DAYS) {
   const date = new Date()
   date.setUTCDate(date.getUTCDate() + days)
   return date.toISOString()
+}
+
+async function reserveGeneratedSkus(quantity: number): Promise<string[]> {
+  const response = await fetch('/api/skus/generated', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ quantity }),
+  })
+  const result = await response.json().catch(() => ({}))
+
+  if (!response.ok || result?.ok === false) {
+    throw new Error(result?.message || 'Generated SKU reservation failed.')
+  }
+
+  const skus: string[] = Array.isArray(result.skus) ? result.skus.map((sku: any) => String(sku)) : []
+  if (skus.length !== quantity) {
+    throw new Error('Generated SKU reservation returned the wrong quantity.')
+  }
+
+  return skus
 }
 
 const reportingCategories = [
@@ -228,6 +249,35 @@ type ExportedChannel = {
   statusField: string
   supported: boolean
   updateHandler: string | null
+}
+
+type StockDetailRow = {
+  id?: string
+  location_name: string | null
+  bin_code: string | null
+  stock_level: number
+  is_quarantine?: boolean
+}
+
+type StockDetailSummary = {
+  physical_stock: number
+  available_stock: number
+  open_order_stock: number
+  inbound_stock: number
+  quarantine_stock: number
+  stock_buffer: number
+  max_channel_exposed_stock: number | null
+  channel_exposed_stock: number
+  location_rows: StockDetailRow[]
+  negative_locations: StockDetailRow[]
+}
+
+type ChannelProgress = {
+  open: boolean
+  status: 'working' | 'success' | 'failed'
+  title: string
+  message: string
+  details?: string[]
 }
 
 function channelPendingUpdates(channels: ExportedChannel[]) {
@@ -473,7 +523,10 @@ function DatalistField({
       />
 
       {open && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-auto rounded-lg border border-zinc-700 bg-zinc-950 p-1 shadow-xl">
+        <div
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-auto rounded-lg border border-zinc-600 bg-zinc-900 p-1 shadow-2xl"
+          style={{ backgroundColor: '#18181b', color: '#f4f4f5' }}
+        >
           {options.map((option: string) => {
             const selected = option === value
 
@@ -486,9 +539,21 @@ function DatalistField({
                   onChange(option)
                   setOpen(false)
                 }}
-                className={`block w-full rounded-md px-3 py-2 text-left text-sm font-bold ${
-                  selected ? 'bg-emerald-600 text-white' : 'text-zinc-100 hover:bg-zinc-800'
+                className={`block w-full rounded-md px-3 py-2 text-left text-sm ${
+                  selected
+                    ? 'bg-emerald-600 font-bold text-white'
+                    : 'text-zinc-100 hover:bg-zinc-800 hover:text-white'
                 }`}
+                style={{
+                  backgroundColor: selected ? '#059669' : '#18181b',
+                  color: '#ffffff',
+                }}
+                onMouseEnter={(event) => {
+                  if (!selected) event.currentTarget.style.backgroundColor = '#27272a'
+                }}
+                onMouseLeave={(event) => {
+                  if (!selected) event.currentTarget.style.backgroundColor = '#18181b'
+                }}
               >
                 {option}
               </button>
@@ -696,6 +761,12 @@ export default function ItemPage() {
   const [generatingAi, setGeneratingAi] = useState(false)
   const [processingImages, setProcessingImages] = useState(false)
   const [exportingLinnworks, setExportingLinnworks] = useState(false)
+  const [channelProgress, setChannelProgress] = useState<ChannelProgress>({
+    open: false,
+    status: 'working',
+    title: '',
+    message: '',
+  })
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0)
   const [ebayReadiness, setEbayReadiness] = useState<any>(null)
@@ -714,14 +785,23 @@ export default function ItemPage() {
   const [activeTab, setActiveTab] = useState<'catalogue' | 'internal'>('catalogue')
   const [dataEntryMode, setDataEntryMode] = useState(false)
   const [dataEntryIndex, setDataEntryIndex] = useState(0)
+  const [catalogueNextScanOpen, setCatalogueNextScanOpen] = useState(false)
+  const [catalogueNextScanValue, setCatalogueNextScanValue] = useState('')
+  const [catalogueNextScanBusy, setCatalogueNextScanBusy] = useState(false)
   const [compositionComponents, setCompositionComponents] = useState<CompositionComponentRow[]>([])
   const [childSkuRows, setChildSkuRows] = useState<ChildSkuRow[]>([])
   const [componentMessage, setComponentMessage] = useState('')
+  const [stockDetails, setStockDetails] = useState<StockDetailSummary | null>(null)
+  const [stockDetailsMessage, setStockDetailsMessage] = useState('')
+  const [locationLabels, setLocationLabels] = useState<Record<string, string>>({})
 
   const originalItemRef = useRef<any>(null)
   const autoStartPhotoRef = useRef(false)
+  const autoOpenDataEntryRef = useRef(false)
+  const catalogueNextScanInputRef = useRef<HTMLInputElement | null>(null)
   const dataEntrySnapshotRef = useRef('')
   const dataEntryHadUnsavedRef = useRef(false)
+  const autoSuggestedEbayCategoryRef = useRef('')
 
   useEffect(() => {
     fetchItem()
@@ -739,6 +819,11 @@ export default function ItemPage() {
   }, [id, activeCompanyId, schemaReady])
 
   useEffect(() => {
+    fetchStockDetails()
+    fetchLocationLabels()
+  }, [id, item?.sku, activeCompanyId, schemaReady])
+
+  useEffect(() => {
     fetchSubCategoryOptions(item?.reporting_category)
   }, [item?.reporting_category])
 
@@ -749,11 +834,43 @@ export default function ItemPage() {
     if (params.get('start_photo') !== '1') return
 
     autoStartPhotoRef.current = true
-    startPhotoSession()
+    const calibrationPrompt = params.get('calibration_prompt') === '1'
+    startPhotoSession({ askOpenMode: false, askStationChoice: false, calibrationPrompt })
     params.delete('start_photo')
+    params.delete('calibration_prompt')
     const nextQuery = params.toString()
     window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`)
   }, [item?.id, photoStations.length])
+
+  useEffect(() => {
+    if (!item?.id || autoOpenDataEntryRef.current) return
+
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('catalogue') !== '1' && params.get('data_entry') !== '1') return
+
+    autoOpenDataEntryRef.current = true
+    const inboundStartField = ['reporting_category', 'sub_category', 'brand'].find(
+      (field) => !text(item?.[field])
+    )
+    const startField = item?.inbound_batch_id || item?.inbound_batch_code
+      ? inboundStartField || 'gender'
+      : 'brand'
+    const startIndex = dataEntryFieldKeys.findIndex((field) => field === startField)
+
+    dataEntrySnapshotRef.current = JSON.stringify(item)
+    dataEntryHadUnsavedRef.current = hasUnsavedChanges
+    setDataEntryIndex(startIndex >= 0 ? startIndex : 0)
+    setDataEntryMode(true)
+    window.setTimeout(
+      () => document.getElementById(`data-entry-${startField}`)?.focus(),
+      0
+    )
+
+    params.delete('catalogue')
+    params.delete('data_entry')
+    const nextQuery = params.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`)
+  }, [item?.id])
 
   useEffect(() => {
     if (!message) return
@@ -769,6 +886,61 @@ export default function ItemPage() {
     if (!item?.sku) return
     checkEbayReadiness(item.sku)
   }, [item?.sku])
+
+  useEffect(() => {
+    if (!item?.id || text(item.ebay_category_id)) return
+    if (!['review', 'finalised'].includes(text(item.status).toLowerCase())) return
+
+    const suggestionKey = [
+      item.id,
+      item.item_type,
+      item.gender,
+      item.reporting_category,
+      item.sub_category,
+    ].map(text).join('|')
+
+    if (autoSuggestedEbayCategoryRef.current === suggestionKey) return
+    if (!text(item.reporting_category) && !text(item.sub_category)) return
+
+    autoSuggestedEbayCategoryRef.current = suggestionKey
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const mappedCategory = await fetchMappedEbayCategory(item)
+        if (mappedCategory) {
+          const updatedItem = {
+            ...item,
+            ebay_category_id: mappedCategory.id,
+            ebay_category_name: mappedCategory.name,
+          }
+          setItem(updatedItem)
+          setHasUnsavedChanges(
+            JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+          )
+          return
+        }
+
+        const suggestions = await fetchEbayCategorySuggestions(ebayCategoryQuery(item))
+        if (!suggestions[0]) return
+        const category = ebayCategoryFromSuggestion(suggestions[0])
+        if (!category.id) return
+
+        const updatedItem = {
+          ...item,
+          ebay_category_id: category.id,
+          ebay_category_name: category.name,
+        }
+        setItem(updatedItem)
+        setHasUnsavedChanges(
+          JSON.stringify(originalItemRef.current) !== JSON.stringify(updatedItem)
+        )
+      } catch {
+        // Automatic suggestion is convenience-only; manual category search remains available.
+      }
+    }, 700)
+
+    return () => window.clearTimeout(timer)
+  }, [item?.id, item?.status, item?.item_type, item?.gender, item?.reporting_category, item?.sub_category, item?.ebay_category_id])
 
   async function fetchItem() {
     let query = supabase
@@ -805,10 +977,7 @@ export default function ItemPage() {
           ...hydratedItem,
           barcode_number: barcodeIdentifier.identifier_value,
         }
-      } else if (
-        /^\d+$/.test(text(hydratedItem.sku)) &&
-        text(hydratedItem.sku_type).toLowerCase() !== 'reusable'
-      ) {
+      } else if (/^\d+$/.test(text(hydratedItem.sku)) && !isDigitalSkuType(hydratedItem.sku_type)) {
         hydratedItem = {
           ...hydratedItem,
           barcode_number: hydratedItem.sku,
@@ -979,7 +1148,9 @@ export default function ItemPage() {
     }
   }
 
-  async function startPhotoSession() {
+  async function startPhotoSession(
+    options: { askOpenMode?: boolean; askStationChoice?: boolean; calibrationPrompt?: boolean } = {}
+  ) {
     if (!item?.id) return
     if (photoStations.length === 0) {
       setMessage('No photography station found. Run the photography SQL migration first.')
@@ -988,7 +1159,7 @@ export default function ItemPage() {
 
     let stationId = selectedPhotoStationId || photoStations[0]?.id || ''
 
-    if (photoStations.length > 1) {
+    if (photoStations.length > 1 && options.askStationChoice !== false) {
       const stationList = photoStations
         .map((station, index) => `${index + 1}. ${station.name}`)
         .join('\n')
@@ -1006,8 +1177,17 @@ export default function ItemPage() {
       stationId = selectedStation.id
     }
 
+    const openInNewWindow = options.askOpenMode
+      ? window.confirm('Open Photo Monitor in a new window?\n\nOK = new window\nCancel = use this window')
+      : true
+
     if (!stationId) {
       setMessage('No photography station selected.')
+      return
+    }
+
+    if (photoSessionMatchesItem) {
+      openPhotoMonitorWindow(stationId, openInNewWindow, { calibrationPrompt: options.calibrationPrompt === true })
       return
     }
 
@@ -1035,7 +1215,7 @@ export default function ItemPage() {
 
       await fetchPhotoStations()
       setMessage(`Photo session active for ${item.sku}.`)
-      window.open(`/processing/photo-monitor?station=${stationId}`, '_blank', 'noopener,noreferrer')
+      openPhotoMonitorWindow(stationId, openInNewWindow, { calibrationPrompt: options.calibrationPrompt === true })
     } catch (error: any) {
       setMessage(error.message || 'Photo session failed to start.')
     } finally {
@@ -1139,6 +1319,64 @@ export default function ItemPage() {
       .replace(/\b([a-z])/g, (match) => match.toUpperCase())
   }
 
+  function titleCaseTypedValue(value: any) {
+    return String(value ?? '')
+      .toLowerCase()
+      .replace(/\b([a-z])/g, (match) => match.toUpperCase())
+  }
+
+  function displayLocationName(value: any) {
+    const clean = text(value)
+    const key = canonicalLocationKey(clean)
+    const matchedKey = Object.keys(locationLabels).find(
+      (locationKey) => canonicalLocationKey(locationKey) === key
+    )
+    return matchedKey ? locationLabels[matchedKey] || matchedKey : clean || '-'
+  }
+
+  function formatStockQuantity(value: any) {
+    const numeric = Number(value || 0)
+    return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2)
+  }
+
+  async function fetchLocationLabels() {
+    if (!schemaReady || !activeCompanyId) return
+
+    const { data, error } = await supabase
+      .from('locations')
+      .select('name, label')
+      .eq('company_id', activeCompanyId)
+      .eq('is_active', true)
+
+    if (error) return
+
+    const nextLabels: Record<string, string> = {}
+    ;(data || []).forEach((row: any) => {
+      const name = text(row.name)
+      if (name) nextLabels[name] = text(row.label) || name
+    })
+    setLocationLabels(nextLabels)
+  }
+
+  async function fetchStockDetails() {
+    if (!id || !schemaReady || !activeCompanyId) return
+
+    try {
+      setStockDetailsMessage('')
+      const response = await fetch(`/api/stock/diagnostics?item_id=${encodeURIComponent(id)}&limit=1`)
+      const payload = await response.json().catch(() => null)
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.message || payload?.error || 'Stock details failed to load.')
+      }
+
+      setStockDetails(payload.summaries?.[0] || null)
+    } catch (error: any) {
+      setStockDetails(null)
+      setStockDetailsMessage(error.message || 'Stock details could not be loaded.')
+    }
+  }
+
   function normaliseOptionList(values: any[]) {
     const byKey = new Map<string, string>()
 
@@ -1153,7 +1391,7 @@ export default function ItemPage() {
 
   function itemDetailValue(field: string, value: any) {
     if (!titleCaseItemDetailFields.has(field)) return value
-    return titleCaseWords(value)
+    return titleCaseTypedValue(value)
   }
 
   function cleanTags(value: any) {
@@ -1173,6 +1411,184 @@ export default function ItemPage() {
 
   function tagsText(value: any) {
     return cleanTags(value).join(', ')
+  }
+
+  function openPhotoMonitorWindow(
+    stationId: string,
+    newWindow = true,
+    options: { calibrationPrompt?: boolean } = {}
+  ) {
+    const query = new URLSearchParams({ station: stationId })
+    if (options.calibrationPrompt) query.set('calibration_prompt', '1')
+    const url = `/processing/photo-monitor?${query.toString()}`
+    if (!newWindow) {
+      window.location.href = url
+      return
+    }
+
+    const monitor = window.open(url, 'loopbase-photo-monitor')
+    monitor?.focus()
+  }
+
+  function normalizeScanIdentifier(value: string) {
+    return value.trim().replace(/\s+/g, '').toUpperCase()
+  }
+
+  function escapePostgrestOrValue(value: string) {
+    return value
+      .replaceAll('\\', '\\\\')
+      .replaceAll('%', '\\%')
+      .replaceAll('_', '\\_')
+      .replaceAll(',', '\\,')
+  }
+
+  async function findItemByCatalogueScan(scanValue: string) {
+    const clean = text(scanValue)
+    const normalized = normalizeScanIdentifier(clean)
+    const safe = escapePostgrestOrValue(clean)
+    const safeNormalized = escapePostgrestOrValue(normalized)
+
+    let directQuery = supabase
+      .from('items')
+      .select('id, sku, barcode_number, rfid_tid_normalized')
+      .or(`sku.eq.${safe},barcode_number.eq.${safe},rfid_tid_normalized.eq.${safeNormalized}`)
+      .limit(2)
+
+    if (schemaReady) directQuery = directQuery.eq('company_id', activeCompanyId)
+
+    const { data: directRows, error: directError } = await directQuery
+    if (directError) throw new Error(directError.message)
+    if ((directRows || []).length === 1) return directRows?.[0] || null
+    if ((directRows || []).length > 1) {
+      throw new Error('Scan matched more than one item. Open it from Search/Create.')
+    }
+
+    let identifierQuery = supabase
+      .from('item_identifiers')
+      .select('item_id')
+      .eq('identifier_value_normalized', normalized)
+      .eq('is_active', true)
+      .limit(2)
+
+    if (schemaReady) identifierQuery = identifierQuery.eq('company_id', activeCompanyId)
+
+    const { data: identifierRows, error: identifierError } = await identifierQuery
+    if (identifierError) throw new Error(identifierError.message)
+    if ((identifierRows || []).length > 1) {
+      throw new Error('Identifier matched more than one item. Open it from Search/Create.')
+    }
+
+    const itemId = identifierRows?.[0]?.item_id
+    if (!itemId) return null
+
+    let itemQuery = supabase
+      .from('items')
+      .select('id, sku, barcode_number')
+      .eq('id', itemId)
+
+    if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
+
+    const { data: foundItem, error: itemError } = await itemQuery.maybeSingle()
+    if (itemError) throw new Error(itemError.message)
+    return foundItem || null
+  }
+
+  async function createCatalogueItemFromScan(scanValue: string) {
+    if (!staff) throw new Error('No active staff selected. Go to staff PIN screen first.')
+
+    const sku = text(scanValue).toUpperCase()
+    if (!sku) throw new Error('Scan value is blank.')
+
+    const now = new Date().toISOString()
+    const { data: createdItem, error } = await supabase
+      .from('items')
+      .insert({
+        ...(schemaReady ? { company_id: activeCompanyId } : {}),
+        sku,
+        status: 'working',
+        stock_level: 1,
+        sku_type: 'standard',
+        location_status: 'stored',
+        current_location: WAREHOUSE_LOCATION,
+        current_bin: DEFAULT_BIN,
+        loan_status: 'not_on_loan',
+        ebay_status: 'not_listed',
+        linnworks_status: 'not_synced',
+        shopify_status: 'not_listed',
+        square_status: 'not_listed',
+        grailed_status: 'not_listed',
+        vestiaire_collective_status: 'not_listed',
+        whatnot_status: 'not_listed',
+        vinted_status: 'not_listed',
+        depop_status: 'not_listed',
+        tiktok_shop_status: 'not_listed',
+        last_saved_by: staff.id,
+        updated_at: now,
+      })
+      .select('id, sku, barcode_number')
+      .single()
+
+    if (error) throw new Error(error.message)
+
+    const response = await fetch('/api/items/stock-location', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        item_id: createdItem.id,
+        sku: createdItem.sku,
+        location_name: WAREHOUSE_LOCATION,
+        bin_code: DEFAULT_BIN,
+        stock_level: 1,
+        source: 'catalogue_scan_create',
+        company_id: schemaReady ? activeCompanyId : null,
+      }),
+    })
+    const result = await response.json().catch(() => null)
+    if (!response.ok || result?.ok === false) {
+      throw new Error(result?.error || 'Created item, but stock-location row failed.')
+    }
+
+    return createdItem
+  }
+
+  async function handleCatalogueNextScan() {
+    const scan = text(catalogueNextScanValue)
+    if (!scan) return
+
+    if (hasUnsavedChanges) {
+      setMessage('Unsaved changes. Save or send to review before scanning the next item.')
+      setCatalogueNextScanOpen(false)
+      return
+    }
+
+    setCatalogueNextScanBusy(true)
+    setMessage('')
+
+    try {
+      let nextItem = await findItemByCatalogueScan(scan)
+
+      if (!nextItem?.id) {
+        const confirmed = window.confirm(
+          `Item ${scan} is not in the system.\n\nCreate it and start a photo/catalogue session?`
+        )
+
+        if (!confirmed) {
+          setCatalogueNextScanValue('')
+          window.setTimeout(() => catalogueNextScanInputRef.current?.focus(), 50)
+          return
+        }
+
+        nextItem = await createCatalogueItemFromScan(scan)
+      }
+
+      window.location.href = `/items/${nextItem.id}?catalogue=1&start_photo=1`
+    } catch (error: any) {
+      setMessage(error.message || 'Could not open next catalogue item.')
+      setCatalogueNextScanValue('')
+      window.setTimeout(() => catalogueNextScanInputRef.current?.focus(), 50)
+    } finally {
+      setCatalogueNextScanBusy(false)
+    }
   }
 
   function ebayCategoryQuery(source: any = item) {
@@ -1485,7 +1901,38 @@ export default function ItemPage() {
     const images = data || []
 
     for (const image of images) {
-      const sourceUrl = image.original_url || image.processed_url
+      const existingProcessedUrl = String(image.processed_url || '').trim()
+      const originalUrl = String(image.original_url || '').trim()
+      const hasGenuineProcessedImage = existingProcessedUrl && (!originalUrl || existingProcessedUrl !== originalUrl)
+
+      if (hasGenuineProcessedImage) {
+        const retentionUpdate: Record<string, unknown> = {}
+        if (originalUrl && !image.original_delete_after) {
+          retentionUpdate.original_delete_after = originalDeleteAfterIso()
+          retentionUpdate.original_retention_status = 'cleanup_scheduled'
+        }
+        if (!image.baseline_processed_url) {
+          retentionUpdate.baseline_processed_url = existingProcessedUrl
+          retentionUpdate.baseline_processed_storage_bucket = image.processed_storage_bucket || 'item-images'
+          retentionUpdate.baseline_processed_storage_path = image.processed_storage_path || null
+          retentionUpdate.baseline_processed_file_size_bytes = image.processed_file_size_bytes || null
+          retentionUpdate.baseline_processed_created_at = new Date().toISOString()
+        }
+
+        if (Object.keys(retentionUpdate).length > 0) {
+          const { error: updateError } = await supabase
+            .from('item_images')
+            .update(retentionUpdate)
+            .eq('id', image.id)
+
+          if (updateError) {
+            throw new Error(updateError.message)
+          }
+        }
+        continue
+      }
+
+      const sourceUrl = originalUrl || existingProcessedUrl
 
       if (!sourceUrl) continue
 
@@ -1541,9 +1988,9 @@ export default function ItemPage() {
   }
 
   function missingFinaliseFields(itemToCheck: any, imageCount: number) {
-    const isReusableSku = itemToCheck?.sku_type === 'reusable'
+    const isDigitalSku = isDigitalSkuType(itemToCheck?.sku_type)
 
-    const required = isReusableSku
+    const required = isDigitalSku
       ? [
           ['brand', 'Brand'],
           ['reporting_category', 'Reporting Category'],
@@ -1567,7 +2014,7 @@ export default function ItemPage() {
       })
       .map(([_, label]) => label)
 
-    if (!isReusableSku && imageCount < 1) {
+    if (!isDigitalSku && imageCount < 1) {
       missing.push('Image')
     }
 
@@ -1659,40 +2106,14 @@ export default function ItemPage() {
   async function generateBarcodeNumber() {
     if (!item) return
 
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const candidate = `26${Date.now().toString().slice(-8)}${attempt ? String(attempt).padStart(2, '0') : ''}`
-      const normalized = candidate.toUpperCase()
-
-      let itemQuery = supabase
-        .from('items')
-        .select('id')
-        .eq('barcode_number', candidate)
-        .limit(1)
-
-      if (schemaReady) itemQuery = itemQuery.eq('company_id', activeCompanyId)
-
-      const { data: itemMatch } = await itemQuery.maybeSingle()
-      if (itemMatch?.id) continue
-
-      let identifierQuery = supabase
-        .from('item_identifiers')
-        .select('id')
-        .eq('identifier_type', 'barcode')
-        .eq('identifier_value_normalized', normalized)
-        .eq('is_active', true)
-        .limit(1)
-
-      if (schemaReady) identifierQuery = identifierQuery.eq('company_id', activeCompanyId)
-
-      const { data: identifierMatch } = await identifierQuery.maybeSingle()
-      if (identifierMatch?.id) continue
-
+    try {
+      const [candidate] = await reserveGeneratedSkus(1)
+      if (!candidate) throw new Error('Generated SKU reservation returned no barcode.')
       updateField('barcode_number', candidate)
       setMessage('Generated barcode. Save item to keep it.')
-      return
+    } catch (error: any) {
+      setMessage(error?.message || 'Could not generate a unique barcode. Try again.')
     }
-
-    setMessage('Could not generate a unique barcode. Try again.')
   }
 
   async function resolveComponentItemId(component: CompositionComponentRow) {
@@ -1878,7 +2299,7 @@ export default function ItemPage() {
         sku: child.sku,
         status: savedItem.status || 'working',
         stock_level: 0,
-        sku_type: savedItem.sku_type || 'single_use',
+        sku_type: 'standard',
         location_status: 'stored',
         current_location: canonicalLocationKey(savedItem.current_location) || WAREHOUSE_LOCATION,
         current_bin: text(savedItem.current_bin) || DEFAULT_BIN,
@@ -2017,9 +2438,20 @@ export default function ItemPage() {
     }
   }
 
+  function finishChannelProgress(progress: Omit<ChannelProgress, 'open'>) {
+    setChannelProgress({ ...progress, open: true })
+
+    if (progress.status === 'success') {
+      window.setTimeout(() => {
+        setChannelProgress((current) =>
+          current.status === 'success' ? { ...current, open: false } : current
+        )
+      }, 1500)
+    }
+  }
+
   async function exportItemToLinnworks(itemToExport: any) {
     setExportingLinnworks(true)
-    setMessage(`Exporting ${itemToExport.sku} to Linnworks...`)
 
     try {
       const processedImageUrls = await getProcessedImageUrls()
@@ -2107,9 +2539,38 @@ export default function ItemPage() {
     }))
   }
 
-  async function exportItemToEbay(itemToExport: any) {
-    setMessage(`Updating ${itemToExport.sku} on eBay...`)
+  function changedVariationRestrictedFields() {
+    const restrictedFields = [
+      ['item_type', 'Item type'],
+      ['reporting_category', 'Category'],
+      ['sub_category', 'Sub category'],
+      ['gender', 'Gender'],
+      ['condition', 'Condition'],
+      ['brand', 'Brand'],
+      ['colour_primary', 'Primary colour'],
+      ['colour_secondary', 'Secondary colour'],
+      ['tagged_size', 'Tagged size'],
+      ['material', 'Material'],
+      ['era', 'Era'],
+      ['style', 'Style'],
+      ['ebay_category_id', 'eBay category'],
+      ['ebay_category_name', 'eBay category name'],
+    ]
 
+    return restrictedFields
+      .filter(([field]) => text(originalItemRef.current?.[field]) !== text(item?.[field]))
+      .map(([, label]) => label)
+  }
+
+  function shouldWarnEbayVariationLock() {
+    const ebayStatus = text(originalItemRef.current?.ebay_status).toLowerCase()
+    const isEbayListed = ['listed', 'active', 'pending_update', 'failed'].includes(ebayStatus)
+    const hasChildVariations = childSkuRows.length > 0 || text(item?.item_kind) === 'parent' || text(item?.sku_type) === 'parent_child'
+
+    return isEbayListed && hasChildVariations
+  }
+
+  async function exportItemToEbay(itemToExport: any) {
     await supabase
       .from('items')
       .update({
@@ -2150,6 +2611,8 @@ export default function ItemPage() {
     const exportedItem = {
       ...itemToExport,
       ebay_status: 'listed',
+      ebay_sync_error: null,
+      channel_pending_update_at: null,
       updated_at: new Date().toISOString(),
     }
 
@@ -2198,6 +2661,13 @@ export default function ItemPage() {
 
     let nextItem = savedItem
     const results: string[] = []
+    const failures: string[] = []
+    setChannelProgress({
+      open: true,
+      status: 'working',
+      title: 'Publishing item updates',
+      message: `${savedItem.sku} to ${supportedText}`,
+    })
 
     for (const channel of supportedChannels) {
       try {
@@ -2212,6 +2682,7 @@ export default function ItemPage() {
         results.push(`${channel.label}: complete`)
       } catch (error: any) {
         const errorMessage = error.message || 'Unknown error'
+        failures.push(`${channel.label}: ${errorMessage}`)
         if (channel.updateHandler === 'ebay') {
           await supabase
             .from('items')
@@ -2237,8 +2708,12 @@ export default function ItemPage() {
     setItem(nextItem)
     originalItemRef.current = nextItem
     setHasUnsavedChanges(false)
-    window.alert(`Channel update export finished:\n\n${results.join('\n')}`)
-    setMessage(`Channel update export finished. ${results.join(' - ')}`)
+    finishChannelProgress({
+      status: failures.length > 0 ? 'failed' : 'success',
+      title: failures.length > 0 ? 'Channel update failed' : 'Channel update complete',
+      message: results.join(' - '),
+      details: failures,
+    })
 
     return nextItem
   }
@@ -2273,6 +2748,18 @@ export default function ItemPage() {
     const skuChanged =
       text(originalItemRef.current?.sku).toUpperCase() !== text(item.sku).toUpperCase()
 
+    const variationRestrictedChanges = shouldWarnEbayVariationLock()
+      ? changedVariationRestrictedFields()
+      : []
+
+    if (variationRestrictedChanges.length > 0) {
+      const confirmed = window.confirm(
+        `This SKU appears to be an eBay variation/parent listing.\n\nIf any variation has already recorded a purchase on eBay, eBay permanently locks some variation-specific fields. Price and quantity can usually still be updated, but these edits may require creating a new eBay listing:\n\n${variationRestrictedChanges.join(', ')}\n\nSave these changes in Loopbase anyway?`
+      )
+
+      if (!confirmed) return null
+    }
+
     if (skuChanged && isLinnworksManaged) {
       const confirmed = window.confirm(
         'This item is already managed by Linnworks. Linnworks may not allow the SKU/item number to be changed safely.\n\nSave the SKU change in Loopbase anyway?'
@@ -2292,6 +2779,7 @@ export default function ItemPage() {
       cost_price: blankToNull(item.cost_price),
       selling_price: blankToNull(item.selling_price),
       stock_level: newStockLevel,
+      sku_type: item.sku_type || 'standard',
       item_type: blankToNull(item.item_type),
       sub_category: blankToNull(item.sub_category),
       sub_type: blankToNull(item.sub_category),
@@ -2318,9 +2806,17 @@ export default function ItemPage() {
       package_weight_grams: blankToNull(item.package_weight_grams),
       vat_rule: item.vat_rule || 'channel_default',
       vat_rate: item.vat_rule === 'custom' ? blankToNull(item.vat_rate) : null,
+      stock_buffer: cleanNumber(item.stock_buffer) ?? 0,
+      max_channel_exposed_stock: blankToNull(item.max_channel_exposed_stock),
+      minimum_stock_alert_level: blankToNull(item.minimum_stock_alert_level),
+      pick_policy: item.pick_policy || 'company_default',
       item_kind: compositionComponents.some((component) => text(component.component_sku))
         ? 'composite'
-        : item.item_kind || 'standard',
+        : normaliseSkuType(item.sku_type) === 'composite'
+          ? 'composite'
+        : normaliseSkuType(item.sku_type) === 'parent_child'
+          ? 'parent'
+          : item.item_kind || 'standard',
       variation_group_key: blankToNull(item.variation_group_key),
       variation_options: item.variation_options && typeof item.variation_options === 'object'
         ? item.variation_options
@@ -2399,6 +2895,7 @@ export default function ItemPage() {
     originalItemRef.current = savedItem
     setItem(savedItem)
     setHasUnsavedChanges(false)
+    fetchStockDetails()
 
     if (stockLevelChanged && !isLinnworksManaged) {
       setMessage(
@@ -2432,13 +2929,16 @@ export default function ItemPage() {
     if (!confirmed) return
 
     const now = new Date().toISOString()
+    const savedItem = await saveItem()
+
+    if (!savedItem) return
 
     let updatedItem = {
-      ...item,
+      ...savedItem,
       status: 'review',
-      location_status: item.location_status || 'stored',
-      current_location: item.current_location || 'WAREHOUSE',
-      current_bin: item.current_bin || 'Default',
+      location_status: savedItem.location_status || 'stored',
+      current_location: savedItem.current_location || WAREHOUSE_LOCATION,
+      current_bin: savedItem.current_bin || DEFAULT_BIN,
       last_saved_by: staff.id,
       sent_to_review_by: staff.id,
       sent_to_review_at: now,
@@ -2490,7 +2990,11 @@ export default function ItemPage() {
     setItem(updatedItem)
     originalItemRef.current = updatedItem
     setHasUnsavedChanges(false)
-    window.location.href = '/review'
+    setDataEntryMode(false)
+    setCatalogueNextScanValue('')
+    setCatalogueNextScanOpen(true)
+    setMessage(`SKU ${updatedItem.sku} sent to review. Scan the next item to continue.`)
+    window.setTimeout(() => catalogueNextScanInputRef.current?.focus(), 100)
   }
 
   async function finaliseItem() {
@@ -2501,8 +3005,8 @@ export default function ItemPage() {
 
     if (!item) return
 
-    const isReusableSku = item.sku_type === 'reusable'
-    const imageCount = isReusableSku ? 0 : await getImageCount()
+    const isDigitalSku = isDigitalSkuType(item.sku_type)
+    const imageCount = isDigitalSku ? 0 : await getImageCount()
     const missing = missingFinaliseFields(item, imageCount)
 
     if (missing.length > 0) {
@@ -2512,9 +3016,9 @@ export default function ItemPage() {
       return
     }
 
-    if (isReusableSku) {
+    if (isDigitalSku) {
       const confirmed = window.confirm(
-        `Finalise reusable SKU ${item.sku}?\n\nThis will save the item and mark it as finalised.`
+        `Finalise digital SKU ${item.sku}?\n\nThis will save the item and mark it as finalised.`
       )
 
       if (!confirmed) return
@@ -2524,7 +3028,7 @@ export default function ItemPage() {
       )
 
       setProcessingImages(true)
-      setMessage(exportNow ? 'Saving and exporting reusable SKU...' : 'Saving reusable SKU...')
+      setMessage(exportNow ? 'Saving and exporting digital SKU...' : 'Saving digital SKU...')
 
       try {
         const savedItem = await saveItem()
@@ -2552,16 +3056,16 @@ export default function ItemPage() {
         if (exportNow) {
           try {
             updatedItem = await exportItemToLinnworks(updatedItem)
-            setMessage(`Reusable SKU ${item.sku} finalised and exported to Linnworks.`)
+            setMessage(`Digital SKU ${item.sku} finalised and exported to Linnworks.`)
           } catch (error: any) {
             setMessage(
-              `Reusable SKU finalised locally, but Linnworks export failed: ${
+              `Digital SKU finalised locally, but Linnworks export failed: ${
                 error.message || 'Unknown export error.'
               }`
             )
           }
         } else {
-          setMessage(`Reusable SKU ${item.sku} finalised locally. Not exported to Linnworks.`)
+          setMessage(`Digital SKU ${item.sku} finalised locally. Not exported to Linnworks.`)
         }
 
         setItem(updatedItem)
@@ -2835,14 +3339,14 @@ export default function ItemPage() {
   return (
     <StaffPermissionGate permission="working">
       <main className="min-h-screen bg-zinc-950 p-5 text-white">
-        <div className="app-header mb-5 flex flex-col gap-4 rounded-3xl bg-black p-4 text-white shadow-2xl sm:p-5">
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-4">
+        <div className="app-header mb-4 flex flex-col gap-2 rounded-3xl bg-black p-3 text-white shadow-2xl sm:p-4">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-black tracking-normal">SKU: {item.sku}</h1>
+              <h1 className="text-xl font-black tracking-normal">SKU: {item.sku}</h1>
 
               <p className="text-sm text-zinc-300">
                 Status: {item.status}
-                {item.sku_type === 'reusable' ? ' · Reusable SKU' : ''}
+                {item.sku_type ? ` · ${skuTypeLabel(item.sku_type)} SKU` : ''}
                 {item.linnworks_managed ? ' · Linnworks synced' : ''}
                 {hasUnsavedChanges ? ' · Unsaved changes' : ''}
               </p>
@@ -2862,7 +3366,7 @@ export default function ItemPage() {
             <AppNav current={undefined} onNavigate={confirmNavigation} />
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-800 pt-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {message && (
               <span className="mr-auto rounded-lg border border-yellow-700 bg-yellow-950 px-4 py-2 text-sm font-bold text-yellow-300">
                 {message}
@@ -2871,10 +3375,10 @@ export default function ItemPage() {
 
             <button
               type="button"
-              onClick={startPhotoSession}
+              onClick={() => startPhotoSession({ askOpenMode: true, askStationChoice: true })}
               disabled={photoSessionBusy || photoStations.length === 0}
               title={photoStations.length === 0 ? photoStationMessage || 'No photography station found.' : ''}
-              className={`rounded-lg px-5 py-2 text-sm font-bold text-white disabled:opacity-40 ${
+              className={`rounded-lg px-4 py-2 text-sm font-bold text-white disabled:opacity-40 ${
                 photoSessionMatchesItem ? 'bg-green-700' : 'bg-emerald-600 hover:bg-emerald-500'
               }`}
             >
@@ -2890,16 +3394,16 @@ export default function ItemPage() {
             <button
               onClick={() => saveItem({ promptChannelExport: true })}
               disabled={!staff || processingImages || exportingLinnworks}
-              className="rounded-xl bg-green-600 px-5 py-2 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
+              className="rounded-xl bg-green-600 px-4 py-2 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
             >
               Save Item
             </button>
 
-            {item.sku_type !== 'reusable' && (
+            {!isDigitalSkuType(item.sku_type) && (
               <button
                 onClick={sendToReview}
                 disabled={!staff || processingImages || exportingLinnworks}
-                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-40"
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
               >
                 Send to Review
               </button>
@@ -2908,7 +3412,7 @@ export default function ItemPage() {
             <button
               onClick={finaliseItem}
               disabled={!staff || processingImages || exportingLinnworks}
-              className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-40"
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
             >
               {processingImages ? 'Finalising...' : 'Finalise'}
             </button>
@@ -2918,6 +3422,102 @@ export default function ItemPage() {
         {item.review_return_reason && (
           <div className="mb-5 rounded-xl border border-yellow-600 bg-yellow-950 px-4 py-3 text-sm font-bold text-yellow-100">
             <span className="font-black">{reviewReturnLabel}:</span> {item.review_return_reason}
+          </div>
+        )}
+
+        {channelProgress.open && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-neutral-700 bg-neutral-950 p-5 text-white shadow-2xl">
+              <div className="flex items-start gap-3">
+                <div
+                  className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-black ${
+                    channelProgress.status === 'success'
+                      ? 'bg-emerald-500 text-black'
+                      : channelProgress.status === 'failed'
+                        ? 'bg-red-600 text-white'
+                        : 'bg-blue-600 text-white'
+                  }`}
+                >
+                  {channelProgress.status === 'success' ? '✓' : channelProgress.status === 'failed' ? '!' : '...'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-lg font-black text-white">{channelProgress.title}</h2>
+                  <p className="mt-1 text-sm font-bold text-neutral-300">{channelProgress.message}</p>
+                  {channelProgress.details && channelProgress.details.length > 0 && (
+                    <div className="mt-3 max-h-40 overflow-auto rounded-xl border border-neutral-800 bg-black p-3 text-xs font-bold leading-5 text-red-200">
+                      {channelProgress.details.map((detail, index) => (
+                        <p key={`${detail}-${index}`}>{detail}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {channelProgress.status === 'failed' && (
+                <div className="mt-5 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setChannelProgress((current) => ({ ...current, open: false }))}
+                    className="rounded-lg bg-white px-4 py-2 text-sm font-black text-black hover:bg-neutral-200"
+                  >
+                    Acknowledge
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {catalogueNextScanOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4">
+            <section className="w-full max-w-xl rounded-2xl border border-emerald-700 bg-zinc-950 p-5 shadow-2xl">
+              <div className="mb-4">
+                <p className="text-xs font-black uppercase tracking-wide text-emerald-300">
+                  Catalogue Session
+                </p>
+                <h2 className="text-2xl font-black text-white">Scan next item</h2>
+                <p className="mt-1 text-sm font-bold text-zinc-400">
+                  This item has been saved and sent to review. Scan the next SKU, barcode, or RFID to continue.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <input
+                  ref={catalogueNextScanInputRef}
+                  value={catalogueNextScanValue}
+                  onChange={(event) => setCatalogueNextScanValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') handleCatalogueNextScan()
+                  }}
+                  disabled={catalogueNextScanBusy}
+                  autoFocus
+                  className="min-w-0 flex-1 rounded-xl border border-zinc-700 bg-white px-4 py-3 text-lg font-black text-zinc-950 outline-none focus:border-emerald-400 disabled:opacity-50"
+                  placeholder="Scan next item"
+                />
+
+                <button
+                  type="button"
+                  onClick={handleCatalogueNextScan}
+                  disabled={catalogueNextScanBusy || !catalogueNextScanValue.trim()}
+                  className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-black text-white hover:bg-emerald-500 disabled:opacity-40"
+                >
+                  {catalogueNextScanBusy ? 'Opening...' : 'Open'}
+                </button>
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCatalogueNextScanOpen(false)
+                    window.location.href = '/'
+                  }}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-black text-white hover:border-white"
+                >
+                  Quit
+                </button>
+              </div>
+            </section>
           </div>
         )}
 
@@ -3541,6 +4141,133 @@ export default function ItemPage() {
               </section>
 
               <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-bold uppercase tracking-wide text-zinc-300">
+                      Stock Controls
+                    </h2>
+                    <p className="mt-1 text-xs font-bold text-zinc-500">
+                      Availability, channel exposure and bin-level stock for this SKU.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={fetchStockDetails}
+                    className="rounded-lg border border-zinc-700 px-3 py-2 text-xs font-black text-white hover:bg-zinc-800"
+                  >
+                    Refresh Stock
+                  </button>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  {[
+                    ['Level', stockDetails?.physical_stock ?? item.stock_level ?? 0],
+                    ['Available', stockDetails?.available_stock ?? item.stock_level ?? 0],
+                    ['Open Orders', stockDetails?.open_order_stock ?? 0],
+                    ['Channel Exposed', stockDetails?.channel_exposed_stock ?? item.stock_level ?? 0],
+                    ['Inbound', stockDetails?.inbound_stock ?? 0],
+                    ['Quarantine', stockDetails?.quarantine_stock ?? 0],
+                    ['Buffer', stockDetails?.stock_buffer ?? item.stock_buffer ?? 0],
+                    ['Negative Bins', stockDetails?.negative_locations?.length ?? 0],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                      <p className="text-[11px] font-black uppercase text-zinc-500">{label}</p>
+                      <p className="mt-1 text-lg font-black text-white">{formatStockQuantity(value)}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-4">
+                  <Field
+                    label="Buffer Level"
+                    value={item.stock_buffer}
+                    onChange={(v: string) => updateField('stock_buffer', v)}
+                    placeholder="0"
+                  />
+
+                  <Field
+                    label="Maximum Exposed"
+                    value={item.max_channel_exposed_stock}
+                    onChange={(v: string) => updateField('max_channel_exposed_stock', v)}
+                    placeholder="Blank = no cap"
+                  />
+
+                  <Field
+                    label="Minimum Alert Level"
+                    value={item.minimum_stock_alert_level}
+                    onChange={(v: string) => updateField('minimum_stock_alert_level', v)}
+                    placeholder="Optional"
+                  />
+
+                  <SelectField
+                    label="Pick Policy"
+                    value={item.pick_policy || 'company_default'}
+                    onChange={(v: string) => updateField('pick_policy', v)}
+                    options={[
+                      { value: 'company_default', label: 'Company Default' },
+                      { value: 'require_bin_scan', label: 'Require Bin Scan' },
+                      { value: 'scan_if_multiple_bins', label: 'Scan If Multiple Bins' },
+                      { value: 'no_scan', label: 'No Scan Required' },
+                    ]}
+                  />
+                </div>
+
+                {stockDetailsMessage && (
+                  <p className="mt-3 rounded-lg border border-yellow-800 bg-yellow-950 p-3 text-xs font-bold text-yellow-200">
+                    {stockDetailsMessage}
+                  </p>
+                )}
+
+                <div className="mt-4 overflow-hidden rounded-lg border border-zinc-800">
+                  <div className="grid grid-cols-[1.2fr_1fr_80px_90px] gap-2 bg-zinc-950 px-3 py-2 text-[11px] font-black uppercase text-zinc-500">
+                    <span>Location</span>
+                    <span>Bin</span>
+                    <span className="text-right">Qty</span>
+                    <span className="text-right">Type</span>
+                  </div>
+
+                  {(stockDetails?.location_rows || []).length === 0 ? (
+                    <p className="px-3 py-4 text-sm font-bold text-zinc-500">
+                      No stock-location rows found yet.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-zinc-800">
+                      {(stockDetails?.location_rows || [])
+                        .slice()
+                        .sort((a, b) => {
+                          const locationCompare = displayLocationName(a.location_name).localeCompare(
+                            displayLocationName(b.location_name),
+                            undefined,
+                            { numeric: true, sensitivity: 'base' }
+                          )
+                          if (locationCompare !== 0) return locationCompare
+                          return text(a.bin_code).localeCompare(text(b.bin_code), undefined, {
+                            numeric: true,
+                            sensitivity: 'base',
+                          })
+                        })
+                        .map((row, index) => (
+                          <div
+                            key={row.id || `${row.location_name}-${row.bin_code}-${index}`}
+                            className="grid grid-cols-[1.2fr_1fr_80px_90px] gap-2 px-3 py-2 text-sm font-bold"
+                          >
+                            <span>{displayLocationName(row.location_name)}</span>
+                            <span className="text-zinc-300">{row.bin_code || 'Default'}</span>
+                            <span className={`text-right ${Number(row.stock_level || 0) < 0 ? 'text-red-300' : 'text-white'}`}>
+                              {formatStockQuantity(row.stock_level)}
+                            </span>
+                            <span className="text-right text-xs uppercase text-zinc-500">
+                              {row.is_quarantine ? 'Quarantine' : 'Stock'}
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
                 <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-300">
                   Customs / Shipping
                 </h2>
@@ -3898,4 +4625,5 @@ export default function ItemPage() {
     </StaffPermissionGate>
   )
 }
+
 

@@ -7,6 +7,7 @@ import AppNav from '@/app/components/AppNav'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
 import { useStaff } from '@/app/context/StaffContext'
 import { useCompany } from '@/app/context/CompanyContext'
+import { isQuantityTrackedSkuType, skuTypeLabel } from '@/lib/skuTypes'
 
 type TransferItem = {
   id: string
@@ -84,7 +85,7 @@ function formatTransferNumber(value: number) {
 }
 
 function isReusableStockItem(item: StockItemRow | undefined) {
-  return text(item?.sku_type).toLowerCase() === 'reusable'
+  return isQuantityTrackedSkuType(item?.sku_type)
 }
 
 function configuredLocationRows(rows: LocationConfig[]) {
@@ -572,6 +573,11 @@ export default function TransfersPage() {
 
     try {
       const itemMap = await loadItemsBySku(receivableItems.map((item) => item.sku))
+      const blockedItem = Array.from(itemMap.values()).find((item) => !isReusableStockItem(item))
+      if (blockedItem) {
+        throw new Error(`${blockedItem.sku} is a ${skuTypeLabel(blockedItem.sku_type)} SKU and cannot be received through stock transfers.`)
+      }
+
       const reusableSkus = new Set(
         Array.from(itemMap.values())
           .filter(isReusableStockItem)

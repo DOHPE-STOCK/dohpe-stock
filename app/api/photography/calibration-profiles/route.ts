@@ -14,7 +14,13 @@ function text(value: unknown) {
   return String(value).trim()
 }
 
-const profileTypes = ['colour_white_balance', 'calibrite_colour_checker', 'geometry_scale', 'lens_geometry']
+const profileTypes = [
+  'station_daily_reference',
+  'colour_white_balance',
+  'calibrite_colour_checker',
+  'geometry_scale',
+  'lens_geometry',
+]
 const statuses = ['active', 'disabled', 'archived']
 
 export async function GET(request: Request) {

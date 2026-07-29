@@ -209,3 +209,161 @@ body {
 [data-theme="light"] .rota-page .keep-dark-text {
   color: #000000 !important;
 }
+
+.open-orders-page .open-orders-control {
+  background: #050505;
+  border-color: #404040;
+  color: #ffffff;
+}
+
+.open-orders-page .open-orders-control option {
+  background: #050505;
+  color: #ffffff;
+}
+
+[data-theme="light"] .open-orders-page .open-orders-control {
+  background: #ffffff !important;
+  border-color: #a3a3a3 !important;
+  color: #111827 !important;
+}
+
+[data-theme="light"] .open-orders-page .open-orders-control option {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+.open-orders-icon-button {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #404040;
+  border-radius: 8px;
+  background: #050505;
+  color: #f8fafc;
+}
+
+.open-orders-icon-button:hover,
+.open-orders-icon-button.active {
+  border-color: #2563eb;
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+[data-theme="light"] .open-orders-icon-button {
+  border-color: #cbd5e1 !important;
+  background: #ffffff !important;
+  color: #1f2937 !important;
+}
+
+[data-theme="light"] .open-orders-icon-button:hover,
+[data-theme="light"] .open-orders-icon-button.active {
+  border-color: #2563eb !important;
+  background: #e8f0ff !important;
+  color: #1d4ed8 !important;
+}
+
+.open-orders-action-menu button {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.open-orders-action-menu button:hover {
+  background: #1f2937;
+}
+
+[data-theme="light"] .open-orders-action-menu {
+  border-color: #d1d5db !important;
+  background: #ffffff !important;
+}
+
+[data-theme="light"] .open-orders-action-menu button {
+  color: #111827 !important;
+}
+
+[data-theme="light"] .open-orders-action-menu button:hover {
+  background: #eff6ff !important;
+}
+
+.open-order-symbol {
+  display: inline-flex;
+  width: 21px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #52525b;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  opacity: 0.35;
+}
+
+.open-order-symbol svg {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+}
+
+.open-order-symbol.active {
+  background: transparent;
+  color: #e5e7eb;
+  opacity: 1;
+}
+
+[data-theme="light"] .open-order-symbol {
+  background: transparent;
+  color: #94a3b8;
+  opacity: 0.45;
+}
+
+[data-theme="light"] .open-order-symbol.active {
+  background: transparent;
+  color: #1f2937;
+  opacity: 1;
+}
+
+.open-order-general {
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.open-order-symbol-grid {
+  display: grid;
+  width: max-content;
+  max-width: 92px;
+  grid-template-columns: repeat(4, 21px);
+  grid-auto-rows: 18px;
+  gap: 1px 2px;
+}
+
+.open-orders-page .open-order-row-selected,
+.open-orders-page .open-order-row-selected *,
+.open-orders-page .open-order-row-focused,
+.open-orders-page .open-order-row-focused * {
+  color: #111827 !important;
+}
+
+.open-orders-page .open-order-row-selected .text-blue-500,
+.open-orders-page .open-order-row-focused .text-blue-500 {
+  color: #2563eb !important;
+}
+
+.open-orders-page .open-order-row-selected .open-order-symbol,
+.open-orders-page .open-order-row-focused .open-order-symbol {
+  color: #94a3b8 !important;
+}
+
+.open-orders-page .open-order-row-selected .open-order-symbol.active,
+.open-orders-page .open-order-row-focused .open-order-symbol.active {
+  color: #111827 !important;
+}

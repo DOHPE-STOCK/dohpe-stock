@@ -3,6 +3,7 @@ import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { requireCompanyAccess } from '@/lib/serverTenant'
+import { recalculateStockSummaryForSku } from '@/lib/stockSummary'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -293,6 +294,14 @@ async function recalcItemTotalStock(supabase: any, sku: string, companyId?: stri
   if (itemError) {
     throw new Error(`item stock total update failed for ${cleanSku}: ${itemError.message}`)
   }
+
+  if (companyId) {
+    try {
+      await recalculateStockSummaryForSku(supabase, companyId, cleanSku)
+    } catch (error: any) {
+      console.warn(`stock summary update failed for ${cleanSku}:`, error.message || error)
+    }
+  }
 }
 
 async function applyLocalFirstStockAdjustments(
@@ -412,70 +421,87 @@ async function applyLocalFirstStockAdjustments(
     }
 
     const deductionAmount = Math.abs(delta)
+    const targetLocation = requestedLocation || 'LOCATION-1'
+    const targetBin = targetLocation === 'LOCATION-1' ? 'Default' : 'FLOOR'
 
-    const candidateLocations =
-      requestedLocation === 'LOCATION-1'
-        ? [{ location_name: 'LOCATION-1', bin_code: 'Default' }]
-        : [
-            { location_name: requestedLocation, bin_code: 'FLOOR' },
-            { location_name: requestedLocation, bin_code: 'STOCK' },
-            { location_name: 'LOCATION-1', bin_code: 'Default' },
-          ]
+    let stockQuery = supabase
+      .from('item_stock_locations')
+      .select('id, stock_level')
+      .eq('sku', sku)
+      .eq('location_name', targetLocation)
+      .eq('bin_code', targetBin)
 
-    let remainingToDeduct = deductionAmount
+    if (companyId) {
+      stockQuery = stockQuery.eq('company_id', companyId)
+    }
 
-    for (const candidate of candidateLocations) {
-      if (remainingToDeduct <= 0) break
+    const { data: stockRow, error: readError } = await stockQuery.maybeSingle()
 
-      let stockQuery = supabase
-        .from('item_stock_locations')
-        .select('id, stock_level')
-        .eq('sku', sku)
-        .eq('location_name', candidate.location_name)
-        .eq('bin_code', candidate.bin_code)
+    if (readError) {
+      warnings.push(`${sku}: stock read failed at ${targetLocation}/${targetBin}: ${readError.message}`)
+      continue
+    }
 
-      if (companyId) {
-        stockQuery = stockQuery.eq('company_id', companyId)
-      }
-
-      const { data: stockRow, error: readError } = await stockQuery.maybeSingle()
-
-      if (readError) {
-        warnings.push(`${sku}: stock read failed at ${candidate.location_name}/${candidate.bin_code}: ${readError.message}`)
-        continue
-      }
-
-      if (!stockRow) continue
-
+    if (stockRow) {
       const currentStock = numberValue(stockRow.stock_level)
-      if (currentStock <= 0) continue
-
-      const deductNow = Math.min(currentStock, remainingToDeduct)
-
+      const nextStock = currentStock - deductionAmount
       const { error: updateError } = await supabase
         .from('item_stock_locations')
         .update({
-          stock_level: currentStock - deductNow,
+          stock_level: nextStock,
           source: reason,
           updated_at: new Date().toISOString(),
         })
         .eq('id', stockRow.id)
 
       if (updateError) {
-        warnings.push(`${sku}: stock update failed at ${candidate.location_name}/${candidate.bin_code}: ${updateError.message}`)
+        warnings.push(`${sku}: stock update failed at ${targetLocation}/${targetBin}: ${updateError.message}`)
         continue
       }
 
-      remainingToDeduct -= deductNow
-      adjusted += deductNow
-      touchedSkus.add(sku)
+      if (nextStock < 0) {
+        warnings.push(`${sku}: ${targetLocation}/${targetBin} is now negative (${nextStock}).`)
+      }
+    } else {
+      let itemQuery = supabase
+        .from('items')
+        .select('id')
+        .eq('sku', sku)
+
+      if (companyId) {
+        itemQuery = itemQuery.eq('company_id', companyId)
+      }
+
+      const { data: item, error: itemError } = await itemQuery.maybeSingle()
+
+      if (itemError || !item?.id) {
+        warnings.push(`${sku}: item lookup failed for local negative stock.`)
+        continue
+      }
+
+      const { error: insertError } = await supabase
+        .from('item_stock_locations')
+        .insert({
+          ...(companyId ? { company_id: companyId } : {}),
+          item_id: item.id,
+          sku,
+          location_name: targetLocation,
+          bin_code: targetBin,
+          stock_level: -deductionAmount,
+          source: reason,
+          updated_at: new Date().toISOString(),
+        })
+
+      if (insertError) {
+        warnings.push(`${sku}: negative stock insert failed at ${targetLocation}/${targetBin}: ${insertError.message}`)
+        continue
+      }
+
+      warnings.push(`${sku}: ${targetLocation}/${targetBin} is now negative (-${deductionAmount}).`)
     }
 
-    if (remainingToDeduct > 0) {
-      warnings.push(
-        `${sku}: sale completed but no local stock was available for ${remainingToDeduct} unit(s).`
-      )
-    }
+    adjusted += deductionAmount
+    touchedSkus.add(sku)
   }
 
   for (const sku of touchedSkus) {

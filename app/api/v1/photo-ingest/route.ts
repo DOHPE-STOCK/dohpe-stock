@@ -133,6 +133,140 @@ async function resolveSession(params: {
   return { session: null, assignmentMethod: 'unassigned' }
 }
 
+async function consumeStationCalibrationIntent(params: {
+  companyId: string
+  stationId: string
+  sourceId: string
+}) {
+  const supabase = getSupabaseAdmin()
+  const now = new Date().toISOString()
+
+  const { error: expireError } = await supabase
+    .from('photo_station_capture_intents')
+    .update({
+      status: 'expired',
+      metadata: { expired_by: 'photo_ingest' },
+    })
+    .eq('company_id', params.companyId)
+    .eq('station_id', params.stationId)
+    .eq('status', 'queued')
+    .lt('expires_at', now)
+
+  if (expireError?.code === '42P01') return null
+  if (expireError) throw new Error(expireError.message)
+
+  const { data, error } = await supabase
+    .from('photo_station_capture_intents')
+    .select('id')
+    .eq('company_id', params.companyId)
+    .eq('station_id', params.stationId)
+    .eq('intent_type', 'station_calibration')
+    .eq('status', 'queued')
+    .or(`source_id.is.null,source_id.eq.${params.sourceId}`)
+    .gte('expires_at', now)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error?.code === '42P01') return null
+  if (error) throw new Error(error.message)
+  return data || null
+}
+
+async function saveStationCalibrationReference(params: {
+  companyId: string
+  stationId: string
+  sourceId: string
+  captureId: string
+  publicUrl: string
+  intentId: string
+}) {
+  const supabase = getSupabaseAdmin()
+  const now = new Date().toISOString()
+  const today = now.slice(0, 10)
+  const measuredReference = {
+    calibration_capture_id: params.captureId,
+    calibration_image_url: params.publicUrl,
+    reference_scope: ['colour', 'geometry', 'measurements', 'background', 'crop'],
+  }
+  const calibrationData = {
+    captured_for_date: today,
+    background_reference: {
+      enabled: true,
+      sample_method: 'calibration_image_background_estimate',
+      note: 'Processor should estimate the clean background from this calibration image before matting product photos.',
+    },
+    notes: 'Session calibration reference for colour, ArUco geometry, measurement scale, background removal and crop guidance.',
+    source: 'station_capture_intent',
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from('photography_calibration_profiles')
+    .select('id, name, measured_reference, calibration_data')
+    .eq('company_id', params.companyId)
+    .eq('station_id', params.stationId)
+    .eq('profile_type', 'station_daily_reference')
+    .neq('status', 'archived')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (existingError) throw new Error(existingError.message)
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from('photography_calibration_profiles')
+      .update({
+        source_id: params.sourceId,
+        name: existing.name || `Session reference ${new Date().toLocaleDateString('en-GB')}`,
+        status: 'active',
+        measured_reference: {
+          ...(existing.measured_reference || {}),
+          ...measuredReference,
+        },
+        calibration_data: {
+          ...(existing.calibration_data || {}),
+          ...calibrationData,
+        },
+      })
+      .eq('company_id', params.companyId)
+      .eq('id', existing.id)
+
+    if (error) throw new Error(error.message)
+  } else {
+    const { error } = await supabase
+      .from('photography_calibration_profiles')
+      .insert({
+        company_id: params.companyId,
+        station_id: params.stationId,
+        source_id: params.sourceId,
+        name: `Session reference ${new Date().toLocaleDateString('en-GB')}`,
+        profile_type: 'station_daily_reference',
+        status: 'active',
+        measured_reference: measuredReference,
+        calibration_data: calibrationData,
+      })
+
+    if (error) throw new Error(error.message)
+  }
+
+  const { error: intentError } = await supabase
+    .from('photo_station_capture_intents')
+    .update({
+      status: 'consumed',
+      consumed_capture_id: params.captureId,
+      consumed_at: now,
+      metadata: {
+        consumed_as: 'station_calibration_reference',
+        calibration_image_url: params.publicUrl,
+      },
+    })
+    .eq('company_id', params.companyId)
+    .eq('id', params.intentId)
+
+  if (intentError) throw new Error(intentError.message)
+}
+
 async function recordCameraOriginalRepresentation(params: {
   companyId: string
   captureId: string
@@ -301,7 +435,7 @@ export async function POST(request: Request) {
     const idempotencyKey = text(form.get('idempotency_key'))
     const workerVersion = text(form.get('worker_version'))
     const rawMetadata = parseJsonObject(form.get('raw_metadata'))
-    const photoRole = cleanPhotoRole(text(form.get('photo_role')) || 'other')
+    const uploadedPhotoRole = cleanPhotoRole(text(form.get('photo_role')) || 'other')
 
     const buffer = Buffer.from(await file.arrayBuffer())
     const sha = sha256Buffer(buffer)
@@ -342,16 +476,25 @@ export async function POST(request: Request) {
       })
     }
 
-    const { session, assignmentMethod } = await resolveSession({
+    const calibrationIntent = await consumeStationCalibrationIntent({
       companyId: source.company_id,
       stationId: source.station_id,
-      explicitSessionId,
-      capturedAt,
-      clockOffsetSeconds: Number(source.clock_offset_seconds || 0) || 0,
-      captureToleranceSeconds: Number(source.capture_tolerance_seconds || 90) || 90,
+      sourceId: source.id,
     })
 
+    const { session, assignmentMethod } = calibrationIntent
+      ? { session: null, assignmentMethod: 'unassigned' }
+      : await resolveSession({
+          companyId: source.company_id,
+          stationId: source.station_id,
+          explicitSessionId,
+          capturedAt,
+          clockOffsetSeconds: Number(source.clock_offset_seconds || 0) || 0,
+          captureToleranceSeconds: Number(source.capture_tolerance_seconds || 90) || 90,
+        })
+
     const itemId = session?.item_id || null
+    const photoRole = calibrationIntent ? 'station_calibration' : uploadedPhotoRole
     let itemImage = null
     const storagePath = [
       itemId ? 'camera-originals' : 'camera-unassigned',
@@ -424,6 +567,17 @@ export async function POST(request: Request) {
       .single()
 
     if (captureError) throw new Error(captureError.message)
+
+    if (calibrationIntent?.id) {
+      await saveStationCalibrationReference({
+        companyId: source.company_id,
+        stationId: source.station_id,
+        sourceId: source.id,
+        captureId: capture.id,
+        publicUrl,
+        intentId: calibrationIntent.id,
+      })
+    }
 
     await recordCameraOriginalRepresentation({
       companyId: source.company_id,

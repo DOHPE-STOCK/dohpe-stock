@@ -23,6 +23,10 @@ export type LinnworksSettings = {
   sync_description_app_to_linnworks: boolean
   sync_category_app_to_linnworks: boolean
   sync_images_app_to_linnworks: boolean
+  auto_sync_stock_poll: boolean
+  auto_sync_order_import: boolean
+  auto_sync_processed_orders: boolean
+  auto_sync_product_queue: boolean
   location_mapping: Record<string, string>
   field_mapping: Record<string, string>
 }
@@ -60,6 +64,10 @@ export const DEFAULT_LINNWORKS_SETTINGS: LinnworksSettings = {
   sync_description_app_to_linnworks: true,
   sync_category_app_to_linnworks: true,
   sync_images_app_to_linnworks: true,
+  auto_sync_stock_poll: true,
+  auto_sync_order_import: true,
+  auto_sync_processed_orders: true,
+  auto_sync_product_queue: true,
   location_mapping: {
     'LOCATION-1': 'Default',
     'LOCATION-2': 'SHOP-1',
@@ -141,6 +149,22 @@ export function shouldRunLinnworksRoute(params: {
 
   if (route === 'stock_poll' && !config.settings.sync_stock_levels_two_way) {
     return { ok: false, status: 200, reason: 'Linnworks stock level two-way sync is disabled.' }
+  }
+
+  if (route === 'stock_poll' && !config.settings.auto_sync_stock_poll) {
+    return { ok: false, status: 200, reason: 'Linnworks stock polling is disabled.' }
+  }
+
+  if (route === 'process_queue' && !config.settings.auto_sync_product_queue) {
+    return { ok: false, status: 200, reason: 'Linnworks product/export queue processing is disabled.' }
+  }
+
+  if (route === 'open_orders' && !config.settings.auto_sync_order_import) {
+    return { ok: false, status: 200, reason: 'Linnworks open-order import is disabled.' }
+  }
+
+  if (route === 'processed_orders' && !config.settings.auto_sync_processed_orders) {
+    return { ok: false, status: 200, reason: 'Linnworks processed/cancelled order polling is disabled.' }
   }
 
   if ((route === 'open_orders' || route === 'processed_orders') && !config.settings.use_app_for_transfers) {

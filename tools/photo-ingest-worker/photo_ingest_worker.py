@@ -21,7 +21,7 @@ from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
 
-WORKER_VERSION = "loopbase-photo-ingest-worker/0.1"
+WORKER_VERSION = "loopbase-photo-ingest-worker/0.3-crop-bg-preview"
 BACKGROUND_REMOVAL_TIMEOUT_SECONDS = 240
 
 
@@ -561,6 +561,53 @@ def processing_output_folder(source: SourceConfig) -> Path:
     return folder
 
 
+def source_file_from_capture_url(source: SourceConfig, job: dict[str, Any]) -> Path | None:
+    capture = job.get("capture") if isinstance(job.get("capture"), dict) else {}
+    exif = capture.get("exif") if isinstance(capture.get("exif"), dict) else {}
+    options = job.get("options") if isinstance(job.get("options"), dict) else {}
+    public_url = text(
+        exif.get("public_url")
+        or exif.get("original_url")
+        or exif.get("processed_url")
+        or options.get("manual_upload_url")
+        or options.get("source_url")
+    )
+    capture_id = text(job.get("capture_id") or capture.get("id"))
+    if not public_url or not capture_id:
+        return None
+
+    parsed_path = urlparse(public_url).path
+    suffix = Path(parsed_path).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".jpg"
+
+    folder = processing_output_folder(source) / "_remote-sources"
+    folder.mkdir(parents=True, exist_ok=True)
+    url_key = hashlib.sha256(public_url.encode("utf-8")).hexdigest()[:12]
+    target_path = folder / f"{capture_id}-{url_key}{suffix}"
+    if target_path.exists() and target_path.stat().st_size > 0:
+        return target_path
+
+    req = urlrequest.Request(public_url, headers={"User-Agent": "Loopbase photo worker"})
+    try:
+        with urlrequest.urlopen(req, timeout=90) as response:
+            content_length = int(response.headers.get("Content-Length") or 0)
+            if content_length > 50 * 1024 * 1024:
+                raise RuntimeError("Manual upload is over the 50MB worker download limit.")
+            data = response.read(50 * 1024 * 1024 + 1)
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Manual upload download failed with HTTP {exc.code}: {raw}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Manual upload download failed: {exc.reason}") from exc
+
+    if len(data) > 50 * 1024 * 1024:
+        raise RuntimeError("Manual upload is over the 50MB worker download limit.")
+
+    target_path.write_bytes(data)
+    return target_path
+
+
 def make_output_path(source: SourceConfig, input_path: Path, suffix: str, extension: str) -> Path:
     folder = processing_output_folder(source)
     safe_stem = input_path.stem.replace(" ", "_")
@@ -587,24 +634,188 @@ def create_pillow_preview(input_path: Path, output_path: Path, max_size: int = 1
         }
 
 
-def remove_background(input_path: Path, output_path: Path) -> dict[str, Any]:
+def create_crop_rotate_preview(input_path: Path, output_path: Path, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        from PIL import Image, ImageChops, ImageOps
+    except ImportError as exc:
+        raise RuntimeError("Pillow is not installed. Install with: pip install Pillow") from exc
+
+    options = options if isinstance(options, dict) else {}
+    mode = text(options.get("mode") or "auto") or "auto"
+    whitespace_percent = max(0, min(30, float(options.get("whitespace_percent") or 8)))
+    rotation_degrees = max(-45, min(45, float(options.get("rotation_degrees") or 0)))
+    skip_closeups = bool(options.get("skip_closeups", True))
+    closeup_threshold = max(0.7, min(0.98, float(options.get("closeup_threshold") or 90) / 100))
+
+    with Image.open(input_path) as opened:
+        image = ImageOps.exif_transpose(opened).convert("RGB")
+
+    if rotation_degrees:
+        image = image.rotate(rotation_degrees * -1, expand=True, fillcolor=(255, 255, 255))
+
+    original_width, original_height = image.size
+    crop_box = (0, 0, original_width, original_height)
+    skipped_closeup = False
+
+    if mode == "auto":
+        corner_sample = Image.new("RGB", image.size, image.getpixel((0, 0)))
+        diff = ImageChops.difference(image, corner_sample).convert("L")
+        mask = diff.point(lambda value: 255 if value > 18 else 0)
+        bbox = mask.getbbox()
+
+        if bbox:
+            left, top, right, bottom = bbox
+            content_width = max(1, right - left)
+            content_height = max(1, bottom - top)
+            width_ratio = content_width / original_width if original_width else 1
+            height_ratio = content_height / original_height if original_height else 1
+
+            if skip_closeups and width_ratio >= closeup_threshold and height_ratio >= closeup_threshold:
+                skipped_closeup = True
+            else:
+                pad_x = int(content_width * (whitespace_percent / 100))
+                pad_y = int(content_height * (whitespace_percent / 100))
+                crop_box = (
+                    max(0, left - pad_x),
+                    max(0, top - pad_y),
+                    min(original_width, right + pad_x),
+                    min(original_height, bottom + pad_y),
+                )
+    elif mode == "centre":
+        inset_x = int(original_width * (whitespace_percent / 200))
+        inset_y = int(original_height * (whitespace_percent / 200))
+        crop_box = (
+            min(inset_x, original_width // 3),
+            min(inset_y, original_height // 3),
+            max(original_width - inset_x, original_width // 3),
+            max(original_height - inset_y, original_height // 3),
+        )
+
+    if not skipped_closeup:
+        image = image.crop(crop_box)
+
+    image.thumbnail((2200, 2200))
+    image.save(output_path, "JPEG", quality=94, optimize=True)
+
+    return {
+        "engine": "Pillow crop/rotate",
+        "mode": mode,
+        "whitespace_percent": whitespace_percent,
+        "rotation_degrees": rotation_degrees,
+        "skip_closeups": skip_closeups,
+        "closeup_threshold": closeup_threshold * 100,
+        "skipped_closeup": skipped_closeup,
+        "crop_box": crop_box,
+        "width": image.width,
+        "height": image.height,
+    }
+
+
+def remove_background(input_path: Path, output_path: Path, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    options = options if isinstance(options, dict) else {}
+    model = text(options.get("model") or "isnet-general-use") or "isnet-general-use"
+    alpha_matting = bool(options.get("alpha_matting", True))
+    foreground_threshold = int(options.get("foreground_threshold") or 240)
+    background_threshold = int(options.get("background_threshold") or 10)
+    erode_size = int(options.get("erode_size") or 10)
+    post_process_mask = bool(options.get("post_process_mask", True))
+    skip_full_frame = bool(options.get("skip_full_frame", True))
+    full_frame_threshold = float(options.get("full_frame_threshold") or 94)
     script = """
 from pathlib import Path
+from io import BytesIO
+import json
 import sys
 
 try:
-    from rembg import remove
+    from rembg import new_session, remove
 except ImportError as exc:
-    raise SystemExit("rembg is not installed. Install with: pip install rembg") from exc
+    raise SystemExit('rembg is not installed. Install with: pip install "rembg[cpu]"') from exc
+
+try:
+    from PIL import Image, ImageOps
+except ImportError as exc:
+    raise SystemExit("Pillow is not installed. Install with: pip install Pillow") from exc
 
 input_path = Path(sys.argv[1])
 output_path = Path(sys.argv[2])
-output_path.write_bytes(remove(input_path.read_bytes()))
+options = json.loads(sys.argv[3])
+model = str(options.get("model") or "isnet-general-use")
+
+try:
+    session = new_session(model)
+except Exception:
+    if model == "u2net":
+        raise
+    model = "u2net"
+    session = new_session(model)
+
+output = remove(
+    input_path.read_bytes(),
+    session=session,
+    alpha_matting=bool(options.get("alpha_matting", True)),
+    alpha_matting_foreground_threshold=int(options.get("foreground_threshold") or 240),
+    alpha_matting_background_threshold=int(options.get("background_threshold") or 10),
+    alpha_matting_erode_size=int(options.get("erode_size") or 10),
+    post_process_mask=bool(options.get("post_process_mask", True)),
+)
+skipped_full_frame = False
+foreground_bbox_coverage = None
+foreground_width_ratio = None
+foreground_height_ratio = None
+
+if bool(options.get("skip_full_frame", True)):
+    result_image = Image.open(BytesIO(output)).convert("RGBA")
+    alpha = result_image.getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox:
+        width, height = result_image.size
+        bbox_width = max(0, bbox[2] - bbox[0])
+        bbox_height = max(0, bbox[3] - bbox[1])
+        foreground_width_ratio = bbox_width / width if width else 0
+        foreground_height_ratio = bbox_height / height if height else 0
+        foreground_bbox_coverage = foreground_width_ratio * foreground_height_ratio
+        threshold = max(0.7, min(0.99, float(options.get("full_frame_threshold") or 94) / 100))
+        touches_edges = bbox[0] <= 1 and bbox[1] <= 1 and bbox[2] >= width - 1 and bbox[3] >= height - 1
+        if touches_edges or (foreground_width_ratio >= threshold and foreground_height_ratio >= threshold):
+            original = Image.open(input_path)
+            original = ImageOps.exif_transpose(original).convert("RGBA")
+            original.save(output_path, "PNG", optimize=True)
+            skipped_full_frame = True
+
+if not skipped_full_frame:
+    output_path.write_bytes(output)
+
+print(json.dumps({
+    "model_used": model,
+    "skipped_full_frame": skipped_full_frame,
+    "foreground_bbox_coverage": foreground_bbox_coverage,
+    "foreground_width_ratio": foreground_width_ratio,
+    "foreground_height_ratio": foreground_height_ratio,
+}))
 """
 
     try:
         result = subprocess.run(
-            [sys.executable, "-c", script, str(input_path), str(output_path)],
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(input_path),
+                str(output_path),
+                json.dumps(
+                    {
+                        "model": model,
+                        "alpha_matting": alpha_matting,
+                        "foreground_threshold": foreground_threshold,
+                        "background_threshold": background_threshold,
+                        "erode_size": erode_size,
+                        "post_process_mask": post_process_mask,
+                        "skip_full_frame": skip_full_frame,
+                        "full_frame_threshold": full_frame_threshold,
+                    }
+                ),
+            ],
             capture_output=True,
             text=True,
             timeout=BACKGROUND_REMOVAL_TIMEOUT_SECONDS,
@@ -623,8 +834,32 @@ output_path.write_bytes(remove(input_path.read_bytes()))
     if not output_path.exists() or output_path.stat().st_size <= 0:
         raise RuntimeError("Background removal finished without creating an output image.")
 
+    stdout = (result.stdout or "").strip()
+    model_used = model
+    processor_metadata: dict[str, Any] = {}
+    if stdout:
+        try:
+            processor_metadata = json.loads(stdout)
+            model_used = text(processor_metadata.get("model_used") or model)
+        except Exception:
+            processor_metadata = {}
+            model_used = model
+
     return {
         "engine": "rembg",
+        "model": model_used,
+        "station_daily_reference": options.get("station_daily_reference") or None,
+        "alpha_matting": alpha_matting,
+        "foreground_threshold": foreground_threshold,
+        "background_threshold": background_threshold,
+        "erode_size": erode_size,
+        "post_process_mask": post_process_mask,
+        "skip_full_frame": skip_full_frame,
+        "full_frame_threshold": full_frame_threshold,
+        "skipped_full_frame": bool(processor_metadata.get("skipped_full_frame")),
+        "foreground_bbox_coverage": processor_metadata.get("foreground_bbox_coverage"),
+        "foreground_width_ratio": processor_metadata.get("foreground_width_ratio"),
+        "foreground_height_ratio": processor_metadata.get("foreground_height_ratio"),
         "output_format": "png",
         "timeout_seconds": BACKGROUND_REMOVAL_TIMEOUT_SECONDS,
     }
@@ -696,11 +931,22 @@ def develop_raw_preview(raw_path: Path, output_path: Path) -> dict[str, Any]:
     }
 
 
+def station_daily_reference_profile(calibration_profiles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for profile in calibration_profiles:
+        if (
+            text(profile.get("profile_type")) == "station_daily_reference"
+            and text(profile.get("status")) == "active"
+        ):
+            return profile
+    return None
+
+
 def process_photo_job(config: WorkerConfig, conn: sqlite3.Connection, source: SourceConfig, job: dict[str, Any]) -> None:
     job_id = text(job.get("id"))
     job_type = text(job.get("job_type"))
     remote_capture_id = text(job.get("capture_id"))
     attempts = int(job.get("attempts") or 0)
+    job_options = job.get("options") if isinstance(job.get("options"), dict) else {}
 
     if not job_id or not remote_capture_id:
         return
@@ -723,17 +969,49 @@ def process_photo_job(config: WorkerConfig, conn: sqlite3.Connection, source: So
         )
         conn.commit()
 
-        file_row = local_file_for_capture(conn, source, remote_capture_id)
-        if not file_row:
-            raise RuntimeError("Local source JPEG for this capture was not found on this station.")
+        local_path = None
+        has_remote_source = bool(
+            text(job_options.get("manual_upload_url") or job_options.get("source_url"))
+            or (
+                isinstance(job.get("capture"), dict)
+                and isinstance(job["capture"].get("exif"), dict)
+                and text(
+                    job["capture"]["exif"].get("public_url")
+                    or job["capture"]["exif"].get("original_url")
+                    or job["capture"]["exif"].get("processed_url")
+                )
+            )
+        )
 
-        local_path = Path(file_row["path"])
-        if not local_path.exists():
-            raise RuntimeError("Local source JPEG no longer exists on this station.")
+        if has_remote_source:
+            local_path = source_file_from_capture_url(source, job)
+
+        if not local_path:
+            file_row = local_file_for_capture(conn, source, remote_capture_id)
+            if file_row:
+                candidate_path = Path(file_row["path"])
+                if candidate_path.exists():
+                    local_path = candidate_path
+
+        if not local_path:
+            local_path = source_file_from_capture_url(source, job)
+            if not local_path:
+                raise RuntimeError(
+                    "Local source JPEG for this capture was not found on this station and no manual upload URL was available."
+                )
 
         if job_type == "background_removal":
             output_path = make_output_path(source, local_path, "background-removed", ".png")
-            metadata = remove_background(local_path, output_path)
+            daily_reference = station_daily_reference_profile(job.get("calibration_profiles") or [])
+            background_options = dict(job_options.get("background_removal") or job_options)
+            if daily_reference:
+                background_options["station_daily_reference"] = {
+                    "id": daily_reference.get("id"),
+                    "name": daily_reference.get("name"),
+                    "measured_reference": daily_reference.get("measured_reference") or {},
+                    "calibration_data": daily_reference.get("calibration_data") or {},
+                }
+            metadata = remove_background(local_path, output_path, background_options)
             upload_processing_result(
                 config,
                 source,
@@ -778,7 +1056,10 @@ def process_photo_job(config: WorkerConfig, conn: sqlite3.Connection, source: So
         if job_type in {"baseline_processed", "calibrated_preview", "processed_preview", "product_master", "derivative"}:
             suffix = job_type.replace("_", "-")
             output_path = make_output_path(source, local_path, suffix, ".jpg")
-            metadata = create_pillow_preview(local_path, output_path)
+            if job_type == "processed_preview":
+                metadata = create_crop_rotate_preview(local_path, output_path, job_options.get("crop_rotate") or job_options)
+            else:
+                metadata = create_pillow_preview(local_path, output_path)
             representation_type = job_type
             if job_type in {"product_master", "derivative"}:
                 representation_type = "processed_preview"
@@ -1082,6 +1363,7 @@ def run_worker(config: WorkerConfig) -> None:
 
     conn = connect_db(config.database_path)
     print(f"Photo ingest worker {WORKER_VERSION}")
+    print(f"Worker script: {Path(__file__).resolve()}")
     print(f"App URL: {config.app_url}")
     print(f"SQLite: {config.database_path}")
     for source in config.sources:

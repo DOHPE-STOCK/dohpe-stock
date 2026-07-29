@@ -9,6 +9,12 @@ function cleanText(value: unknown, maxLength: number) {
   return String(value || '').trim().slice(0, maxLength)
 }
 
+function cleanPinTimeoutMinutes(value: unknown) {
+  const minutes = Number(value)
+  if (!Number.isFinite(minutes)) return 30
+  return Math.min(480, Math.max(5, Math.round(minutes)))
+}
+
 export async function POST(request: Request) {
   const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager', 'member', 'viewer', 'billing'])
   if (!access.ok) return jsonError(access.message, access.status)
@@ -56,11 +62,21 @@ export async function POST(request: Request) {
   if (action === 'activity') {
     if (!appSession?.id) return NextResponse.json({ ok: true })
 
+    const { data: activeSession } = await supabase
+      .from('staff_pin_sessions')
+      .select('staff_id, staff_users(pin_timeout_minutes)')
+      .eq('company_id', access.company.id)
+      .eq('user_app_session_id', appSession.id)
+      .eq('status', 'active')
+      .maybeSingle()
+
+    const timeoutMinutes = cleanPinTimeoutMinutes((activeSession as any)?.staff_users?.pin_timeout_minutes)
+
     const { error } = await supabase
       .from('staff_pin_sessions')
       .update({
         last_activity_at: now,
-        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        expires_at: new Date(Date.now() + timeoutMinutes * 60 * 1000).toISOString(),
       })
       .eq('company_id', access.company.id)
       .eq('user_app_session_id', appSession.id)
@@ -75,7 +91,7 @@ export async function POST(request: Request) {
 
   const { data: staff, error: staffError } = await supabase
     .from('staff_users')
-    .select('id')
+    .select('id, pin_timeout_minutes')
     .eq('company_id', access.company.id)
     .eq('id', staffId)
     .eq('is_active', true)
@@ -83,6 +99,7 @@ export async function POST(request: Request) {
 
   if (staffError) return jsonError(staffError.message, 500)
   if (!staff) return jsonError('Staff user not found for this company.', 404)
+  const timeoutMinutes = cleanPinTimeoutMinutes((staff as any).pin_timeout_minutes)
 
   if (appSession?.id) {
     const { error: clearError } = await supabase
@@ -110,7 +127,7 @@ export async function POST(request: Request) {
       allowed_area: allowedArea || null,
       status: 'active',
       last_activity_at: now,
-      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      expires_at: new Date(Date.now() + timeoutMinutes * 60 * 1000).toISOString(),
     })
     .select('id, expires_at')
     .single()

@@ -373,6 +373,8 @@ export async function POST(request: NextRequest) {
       .from('items')
       .update({
         ebay_status: 'listed',
+        ebay_sync_error: null,
+        channel_pending_update_at: null,
         updated_at: new Date().toISOString(),
       })
       .eq('sku', sku)

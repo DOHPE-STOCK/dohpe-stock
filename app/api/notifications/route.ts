@@ -95,6 +95,7 @@ export async function GET(request: Request) {
     storedResult,
     dismissalsResult,
     subscriptionResult,
+    stockAlertsResult,
     staffCount,
     deviceCount,
     locationCount,
@@ -124,6 +125,13 @@ export async function GET(request: Request) {
       .order('created_at', { ascending: false, nullsFirst: false })
       .limit(1)
       .maybeSingle(),
+    supabase
+      .from('stock_alerts')
+      .select('id, alert_type, severity, title, message, sku, location_name, bin_code, quantity, created_at')
+      .eq('company_id', companyId)
+      .in('status', ['open', 'acknowledged'])
+      .order('created_at', { ascending: false })
+      .limit(8),
     countRows(supabase, 'staff_users', companyId, (query) => query.eq('is_active', true)),
     countRows(supabase, 'company_devices', companyId, (query) => query.eq('is_active', true)),
     countRows(supabase, 'locations', companyId, (query) => query.eq('is_active', true)),
@@ -140,6 +148,7 @@ export async function GET(request: Request) {
   const stored = ((storedResult.data || []) as NotificationRow[]).map(normaliseStored)
   const generated: AppNotification[] = []
   const subscription = subscriptionResult.data as any
+  const stockAlerts = stockAlertsResult.error ? [] : (stockAlertsResult.data || [])
   const limits = (subscription?.limits || {}) as Record<string, any>
   const usage: Record<string, number> = {
     staff_limit: staffCount,
@@ -215,6 +224,26 @@ export async function GET(request: Request) {
         createdAt: now.toISOString(),
       })
     }
+  }
+
+  for (const alert of stockAlerts as any[]) {
+    const sourceKey = `stock-alert:${alert.id}`
+    if (dismissedSourceKeys.has(sourceKey)) continue
+
+    generated.push({
+      id: `generated:${sourceKey}`,
+      sourceKey,
+      type: 'stock',
+      severity: alert.severity || 'warning',
+      title: alert.title || 'Stock alert',
+      body: alert.message || '',
+      href: alert.sku
+        ? `/inventory?search=${encodeURIComponent(alert.sku)}&stock_alert=${encodeURIComponent(alert.id)}`
+        : `/inventory?stock_alert=${encodeURIComponent(alert.id)}`,
+      unread: true,
+      generated: true,
+      createdAt: alert.created_at || now.toISOString(),
+    })
   }
 
   const notifications = [...generated, ...stored].slice(0, 20)

@@ -28,6 +28,35 @@ type ReceivingPanelProps = {
   onChanged?: () => void
 }
 
+type ReceivingMethod = 'photo_only' | 'barcode' | 'rfid' | 'untracked'
+
+const receivingMethods: Array<{
+  key: ReceivingMethod
+  label: string
+  description: string
+}> = [
+  {
+    key: 'photo_only',
+    label: 'Photo only',
+    description: 'Creates working SKUs from the batch with cost info. Barcode or RFID can be added later.',
+  },
+  {
+    key: 'barcode',
+    label: 'Barcode',
+    description: 'Creates working SKUs ready for barcode labelling or later barcode assignment.',
+  },
+  {
+    key: 'rfid',
+    label: 'RFID',
+    description: 'Counts unique TIDs on the RFID table and links one tag to each working SKU.',
+  },
+  {
+    key: 'untracked',
+    label: 'Do not track individually',
+    description: 'Receives the batch as a cost record only. No working SKUs are created.',
+  },
+]
+
 function text(value: any) {
   if (value === null || value === undefined) return ''
   return String(value).trim()
@@ -61,6 +90,7 @@ export default function ReceivingPanel({
   const [bridgeStatus, setBridgeStatus] = useState<any>(null)
   const [bridgeScanning, setBridgeScanning] = useState(false)
   const [rfidReceivingEnabled, setRfidReceivingEnabled] = useState(false)
+  const [receivingMethod, setReceivingMethod] = useState<ReceivingMethod>('photo_only')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [createdItems, setCreatedItems] = useState<Array<{ id: string; sku: string; rfid_tid?: string | null }>>([])
@@ -99,6 +129,8 @@ export default function ReceivingPanel({
         : countDelta > 0
           ? 'border-red-800 bg-red-950/40'
           : 'border-yellow-800 bg-yellow-950/40'
+  const usesRfid = receivingMethod === 'rfid'
+  const createsWorkingItems = receivingMethod !== 'untracked'
 
   useEffect(() => {
     return () => {
@@ -154,7 +186,9 @@ export default function ReceivingPanel({
       return
     }
 
-    setRfidReceivingEnabled(Boolean(data?.enable_rfid_receiving))
+    const enabled = Boolean(data?.enable_rfid_receiving)
+    setRfidReceivingEnabled(enabled)
+    setReceivingMethod((current) => (current === 'rfid' && !enabled ? 'photo_only' : current))
   }
 
   function bridgeEndpoint(path: string) {
@@ -300,18 +334,27 @@ export default function ReceivingPanel({
       return
     }
 
-    if (rfidReceivingEnabled && !countMatches) {
+    if (usesRfid && !rfidReceivingEnabled) {
+      setMessage('RFID receiving is disabled in Settings. Choose Photo only, Barcode, or enable RFID receiving first.')
+      return
+    }
+
+    if (usesRfid && !countMatches) {
       setMessage(`TID count must match actual quantity. Current: ${tids.length} / ${targetQuantity || 0}.`)
       return
     }
 
-    if (!rfidReceivingEnabled && targetQuantity <= 0) {
+    if (targetQuantity <= 0) {
       setMessage('Enter an actual quantity before generating the working batch.')
       return
     }
 
     setLoading(true)
-    setMessage(`Creating ${targetQuantity} working items from ${activeBatch.batch_code}...`)
+    setMessage(
+      createsWorkingItems
+        ? `Creating ${targetQuantity} working items from ${activeBatch.batch_code}...`
+        : `Receiving ${activeBatch.batch_code} without individual SKU tracking...`
+    )
     setCreatedItems([])
 
     const response = await fetch('/api/processing/receiving/generate-working-items', {
@@ -320,8 +363,9 @@ export default function ReceivingPanel({
       body: JSON.stringify({
         batch_id: activeBatch.id,
         actual_quantity: targetQuantity,
-        tids: rfidReceivingEnabled ? tids : [],
-        use_rfid: rfidReceivingEnabled,
+        tids: usesRfid ? tids : [],
+        use_rfid: usesRfid,
+        receiving_method: receivingMethod,
         staff_id: staff.id,
         company_id: schemaReady ? activeCompanyId : null,
       }),
@@ -335,7 +379,11 @@ export default function ReceivingPanel({
       return
     }
 
-    setMessage(`Created ${data.created_count} working item(s) for ${data.batch_code}.`)
+    setMessage(
+      data.created_count > 0
+        ? `Created ${data.created_count} working item(s) for ${data.batch_code}.`
+        : `Received ${data.batch_code} without creating working items.`
+    )
     setCreatedItems(data.items || [])
     setTids([])
     setManualTidText('')
@@ -355,12 +403,10 @@ export default function ReceivingPanel({
       <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
         <div className="mb-4">
           <h3 className="text-lg font-black">
-            {rfidReceivingEnabled ? 'Receive RFID Batch' : 'Receive Batch'}
+            Receive Batch
           </h3>
           <p className="text-sm font-bold text-zinc-400">
-            {rfidReceivingEnabled
-              ? 'Control the RFID table from Loopbase, count tags live, then create linked working items.'
-              : 'Confirm the actual quantity, then create the working items for this batch.'}
+            Choose how this batch is tracked. SKU is enough to continue cataloguing; barcode or RFID can be added later.
           </p>
         </div>
 
@@ -407,7 +453,36 @@ export default function ReceivingPanel({
               />
             </label>
 
-            {rfidReceivingEnabled ? (
+            <div>
+              <span className="mb-2 block text-xs font-black uppercase text-zinc-500">Receiving method</span>
+              <div className="grid gap-2">
+                {receivingMethods.map((method) => {
+                  const disabled = method.key === 'rfid' && !rfidReceivingEnabled
+                  const selected = receivingMethod === method.key
+
+                  return (
+                    <button
+                      key={method.key}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setReceivingMethod(method.key)}
+                      className={`rounded-xl border p-3 text-left transition ${
+                        selected
+                          ? 'border-green-500 bg-green-950/40 text-white'
+                          : 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-500'
+                      } ${disabled ? 'cursor-not-allowed opacity-45' : ''}`}
+                    >
+                      <span className="block text-sm font-black">{method.label}</span>
+                      <span className="mt-1 block text-xs font-bold text-zinc-400">
+                        {disabled ? 'Enable RFID receiving in Settings first.' : method.description}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {usesRfid ? (
               <div className={`rounded-xl border p-4 ${countStatusClass}`}>
                 <p className="text-sm font-black">
                   RFID count: {tids.length} / {targetQuantity || 0}
@@ -419,16 +494,24 @@ export default function ReceivingPanel({
               </div>
             ) : (
               <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-                <p className="text-sm font-black">Barcode batch mode</p>
+                <p className="text-sm font-black">
+                  {receivingMethod === 'photo_only'
+                    ? 'Photo-only cataloguing'
+                    : receivingMethod === 'untracked'
+                      ? 'Batch cost record only'
+                      : 'Barcode cataloguing'}
+                </p>
                 <p className="mt-2 text-sm font-bold text-zinc-400">
-                  Creates {targetQuantity || 0} working item(s) without the RFID table bridge. SKUs and barcodes can still be scanned through the normal workflow.
+                  {receivingMethod === 'untracked'
+                    ? 'No item rows will be created. Use this only for purchases you do not want to catalogue individually.'
+                    : `Creates ${targetQuantity || 0} working item(s) without requiring a barcode or RFID tag yet.`}
                 </p>
               </div>
             )}
           </div>
 
           <div className="space-y-4">
-            {rfidReceivingEnabled && (
+            {usesRfid && (
               <>
             <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
               <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -554,13 +637,13 @@ export default function ReceivingPanel({
               <button
                 type="button"
                 onClick={generateWorkingBatch}
-                disabled={loading || !activeBatch || (rfidReceivingEnabled ? !countMatches : targetQuantity <= 0)}
+                disabled={loading || !activeBatch || (usesRfid ? !countMatches : targetQuantity <= 0)}
                 className="rounded-xl bg-green-600 px-5 py-3 text-sm font-black text-white hover:bg-green-500 disabled:opacity-40"
               >
-                {loading ? 'Generating...' : 'Generate Working Batch'}
+                {loading ? 'Generating...' : createsWorkingItems ? 'Generate Working Batch' : 'Receive Without Items'}
               </button>
 
-              {rfidReceivingEnabled && (
+              {usesRfid && (
                 <button
                   type="button"
                   onClick={() => setTids([])}

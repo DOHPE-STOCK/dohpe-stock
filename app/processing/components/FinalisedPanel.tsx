@@ -35,6 +35,14 @@ type FinalisedPanelProps = {
   embedded?: boolean
 }
 
+type PublishProgress = {
+  open: boolean
+  status: 'working' | 'success' | 'failed'
+  title: string
+  message: string
+  details?: string[]
+}
+
 function channelOpacity(status?: string | null) {
   if (!status || status === 'not_listed' || status === 'not_synced') return 'opacity-25 grayscale'
   if (status === 'listed' || status === 'synced' || status === 'active') return 'opacity-100'
@@ -117,6 +125,12 @@ export default function FinalisedPanel({
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [publishingEbay, setPublishingEbay] = useState(false)
+  const [publishProgress, setPublishProgress] = useState<PublishProgress>({
+    open: false,
+    status: 'working',
+    title: '',
+    message: '',
+  })
   const [enabledIntegrationChannels, setEnabledIntegrationChannels] = useState<string[]>([])
 
   const visibleChannelIcons = CHANNEL_ICONS.filter((channel) =>
@@ -232,6 +246,18 @@ export default function FinalisedPanel({
     setMessage(`Saved export selection for ${selected.length} item(s) by ${staff.name}.`)
   }
 
+  function finishPublishProgress(progress: Omit<PublishProgress, 'open'>) {
+    setPublishProgress({ ...progress, open: true })
+
+    if (progress.status === 'success') {
+      window.setTimeout(() => {
+        setPublishProgress((current) =>
+          current.status === 'success' ? { ...current, open: false } : current
+        )
+      }, 1500)
+    }
+  }
+
   async function exportSelectedToLinnworks() {
     if (!staff) {
       setMessage('No active staff selected. Go to staff PIN screen first.')
@@ -248,10 +274,16 @@ export default function FinalisedPanel({
     if (!confirmed) return
 
     setExporting(true)
-    setMessage(`Exporting ${selected.length} item(s) to Linnworks...`)
+    setPublishProgress({
+      open: true,
+      status: 'working',
+      title: 'Exporting to Linnworks',
+      message: `${selected.length} selected item(s)`,
+    })
 
     let successCount = 0
     let failCount = 0
+    const failures: string[] = []
 
     for (const item of selected) {
       setItems((current) =>
@@ -310,6 +342,7 @@ export default function FinalisedPanel({
         successCount++
       } catch (error: any) {
         failCount++
+        failures.push(`${item.sku}: ${error.message || 'Unknown export error.'}`)
 
         await supabase
           .from('items')
@@ -333,13 +366,20 @@ export default function FinalisedPanel({
     setExporting(false)
 
     if (failCount > 0) {
-      setMessage(`Linnworks export finished: ${successCount} succeeded, ${failCount} failed.`)
-      window.alert(`Linnworks export finished: ${successCount} succeeded, ${failCount} failed.`)
+      finishPublishProgress({
+        status: 'failed',
+        title: 'Linnworks export failed',
+        message: `${successCount} succeeded, ${failCount} failed`,
+        details: failures.slice(0, 8),
+      })
       return
     }
 
-    setMessage(`Linnworks inventory export complete for ${successCount} item(s).`)
-    window.alert(`Linnworks inventory export complete for ${successCount} item(s).`)
+    finishPublishProgress({
+      status: 'success',
+      title: 'Linnworks export complete',
+      message: `${successCount} item(s) exported`,
+    })
   }
 
   async function publishSelectedToEbay() {
@@ -360,7 +400,12 @@ export default function FinalisedPanel({
     if (!confirmed) return
 
     setPublishingEbay(true)
-    setMessage(`Publishing ${selected.length} item(s) to eBay...`)
+    setPublishProgress({
+      open: true,
+      status: 'working',
+      title: 'Publishing to eBay',
+      message: `${selected.length} selected item(s)`,
+    })
 
     let successCount = 0
     let failCount = 0
@@ -446,13 +491,20 @@ export default function FinalisedPanel({
     setPublishingEbay(false)
 
     if (failCount > 0) {
-      setMessage(`eBay publish finished: ${successCount} succeeded, ${failCount} failed.`)
-      window.alert(`eBay publish finished:\n\n${successCount} succeeded\n${failCount} failed\n\n${failures.slice(0, 8).join('\n')}`)
+      finishPublishProgress({
+        status: 'failed',
+        title: 'eBay publish failed',
+        message: `${successCount} succeeded, ${failCount} failed`,
+        details: failures.slice(0, 8),
+      })
       return
     }
 
-    setMessage(`eBay publish complete for ${successCount} item(s).`)
-    window.alert(`eBay publish complete for ${successCount} item(s).`)
+    finishPublishProgress({
+      status: 'success',
+      title: 'eBay publish complete',
+      message: `${successCount} item(s) published`,
+    })
   }
 
   const allSelected = items.length > 0 && selectedItems.length === items.length
@@ -510,6 +562,49 @@ export default function FinalisedPanel({
           </button>
         </div>
       </div>
+
+      {publishProgress.open && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-neutral-700 bg-neutral-950 p-5 text-white shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div
+                className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-black ${
+                  publishProgress.status === 'success'
+                    ? 'bg-emerald-500 text-black'
+                    : publishProgress.status === 'failed'
+                      ? 'bg-red-600 text-white'
+                      : 'bg-blue-600 text-white'
+                }`}
+              >
+                {publishProgress.status === 'success' ? '✓' : publishProgress.status === 'failed' ? '!' : '...'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-black text-white">{publishProgress.title}</h2>
+                <p className="mt-1 text-sm font-bold text-neutral-300">{publishProgress.message}</p>
+                {publishProgress.details && publishProgress.details.length > 0 && (
+                  <div className="mt-3 max-h-40 overflow-auto rounded-xl border border-neutral-800 bg-black p-3 text-xs font-bold leading-5 text-red-200">
+                    {publishProgress.details.map((detail, index) => (
+                      <p key={`${detail}-${index}`}>{detail}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {publishProgress.status === 'failed' && (
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setPublishProgress((current) => ({ ...current, open: false }))}
+                  className="rounded-lg bg-white px-4 py-2 text-sm font-black text-black hover:bg-neutral-200"
+                >
+                  Acknowledge
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {items.length > 0 && (
         <div className="mb-2 flex items-center gap-3 px-2">

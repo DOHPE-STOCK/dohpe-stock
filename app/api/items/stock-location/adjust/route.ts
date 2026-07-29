@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireCompanyAccess } from '@/lib/serverTenant'
+import { recalculateStockSummaryForSku } from '@/lib/stockSummary'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -40,7 +41,7 @@ async function syncItemStockTotal(supabase: any, itemId: string, companyId?: str
   if (error) throw new Error(error.message)
 
   const totalStock = (data || []).reduce(
-    (sum: number, row: any) => sum + Math.max(0, Number(row.stock_level || 0)),
+    (sum: number, row: any) => sum + Number(row.stock_level || 0),
     0
   )
 
@@ -59,6 +60,23 @@ async function syncItemStockTotal(supabase: any, itemId: string, companyId?: str
   const { error: updateError } = await itemUpdate
 
   if (updateError) throw new Error(updateError.message)
+
+  if (companyId) {
+    try {
+      const { data: item, error: itemError } = await supabase
+        .from('items')
+        .select('sku')
+        .eq('id', itemId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (!itemError && item?.sku) {
+        await recalculateStockSummaryForSku(supabase, companyId, item.sku)
+      }
+    } catch (summaryError: any) {
+      console.warn(`stock summary update failed for ${itemId}:`, summaryError.message || summaryError)
+    }
+  }
 }
 
 async function resolveLocation(supabase: any, rawLocation: any, companyId?: string | null) {
