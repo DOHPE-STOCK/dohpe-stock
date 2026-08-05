@@ -78,7 +78,7 @@ fn main() {
                     if let Some(child) = guard.as_mut() {
                         let _ = child.kill();
                     }
-                }
+                };
             }
         })
         .run(tauri::generate_context!())

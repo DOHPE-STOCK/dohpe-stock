@@ -54,6 +54,7 @@ tools/rfid-zone-monitor/config.local.json
 tools/rfid-zone-monitor/__pycache__/
 tools/loopbase-station-desktop/node_modules/
 tools/loopbase-station-desktop/dist/
+tools/loopbase-station-desktop/src-tauri/gen/
 tools/loopbase-station-desktop/src-tauri/target/
 tools/loopbase-station-desktop/src-tauri/Loopbase Station Agent.exe
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.1.0'
+const STATION_AGENT_VERSION = '0.2.0'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -25,12 +25,12 @@ export async function GET(request: NextRequest) {
     download_url: downloadUrl,
     manifest_url: `${origin}/api/station-agent/releases/latest`,
     min_supported_app_version: '0.1.0',
-    published_at: '2026-07-29',
+    published_at: '2026-08-05',
     release_notes: [
-      'Runs photo ingest for Loopbase photography sessions.',
-      'Runs the RFID table bridge for live TID capture.',
-      'Runs RFID threshold/zone monitoring for entrances, exits, changing rooms and stock rooms.',
-      'Includes local ZPL/Windows printer bridge settings.',
+      'Adds the Windows desktop Station Agent app shell.',
+      'Launches the local Loopbase hardware helper without a separate browser tab.',
+      'Adds Remote Printer, Photography Station, File Watcher, RFID reader/writer and RFID Zone Monitor sections.',
+      'Supports local Windows printer discovery and remote print-job polling.',
       'Checks Loopbase for future station-agent updates while running.',
     ],
   })
