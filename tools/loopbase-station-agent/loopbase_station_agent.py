@@ -10,7 +10,6 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.request
@@ -22,7 +21,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.2.2"
+AGENT_VERSION_NUMBER = "0.2.3"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -62,6 +61,13 @@ def resource_dir() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(getattr(sys, "_MEIPASS"))
     return app_dir()
+
+
+def user_data_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if base:
+        return Path(base) / "Loopbase" / "StationAgent"
+    return app_dir() / "data"
 
 
 def repo_tools_dir() -> Path:
@@ -696,6 +702,43 @@ class StationAgent:
         self.update_checked_at = now
         return payload
 
+    def update_download_dir(self) -> Path:
+        target_dir = user_data_dir() / "updates"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir
+
+    def download_installer(self, download_url: str, version: str) -> Path:
+        safe_version = "".join(char for char in version if char.isalnum() or char in {".", "-", "_"}) or "latest"
+        target = self.update_download_dir() / f"Loopbase-Station-Agent-Setup-{safe_version}.exe"
+        partial = target.with_suffix(".download")
+
+        for stale in [partial, target]:
+            try:
+                if stale.exists():
+                    stale.unlink()
+            except OSError as exc:
+                raise RuntimeError(f"Could not remove old update file {stale}: {exc}") from exc
+
+        request = urllib.request.Request(download_url, headers={"User-Agent": AGENT_VERSION})
+        with urllib.request.urlopen(request, timeout=90) as response, partial.open("wb") as handle:
+            shutil.copyfileobj(response, handle, length=1024 * 1024)
+
+        if partial.stat().st_size < 1024 * 1024:
+            raise RuntimeError("Downloaded update was too small to be a valid installer.")
+
+        with partial.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                raise RuntimeError("Downloaded update was not a valid Windows installer.")
+
+        partial.replace(target)
+        return target
+
+    def launch_installer(self, target: Path) -> None:
+        if sys.platform.startswith("win"):
+            os.startfile(str(target))  # type: ignore[attr-defined]
+            return
+        subprocess.Popen([str(target)], close_fds=True)
+
     def download_and_start_update(self) -> Path:
         update = self.check_for_updates(force=True)
         if update.get("available") is not True:
@@ -706,12 +749,8 @@ class StationAgent:
         if not download_url:
             raise RuntimeError("The update manifest did not include a download URL.")
 
-        target = Path(tempfile.gettempdir()) / f"Loopbase-Station-Agent-Setup-{version}.exe"
-        request = urllib.request.Request(download_url, headers={"User-Agent": AGENT_VERSION})
-        with urllib.request.urlopen(request, timeout=90) as response:
-            target.write_bytes(response.read())
-
-        subprocess.Popen([str(target)], close_fds=True)
+        target = self.download_installer(download_url, version)
+        self.launch_installer(target)
 
         def stop_soon() -> None:
             time.sleep(1.5)
