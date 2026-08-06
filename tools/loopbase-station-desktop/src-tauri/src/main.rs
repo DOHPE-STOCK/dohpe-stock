@@ -4,6 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
 
 #[cfg(target_os = "windows")]
@@ -13,6 +15,24 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct AgentProcess(Mutex<Option<Child>>);
+
+fn show_main_window(app_handle: &tauri::AppHandle) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn stop_agent(app_handle: &tauri::AppHandle) {
+    let state = app_handle.state::<AgentProcess>();
+    if let Ok(mut guard) = state.0.lock() {
+        if let Some(child) = guard.as_mut() {
+            let _ = child.kill();
+        }
+        *guard = None;
+    }
+}
 
 fn candidate_agent_paths(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -88,23 +108,52 @@ fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
     }
 }
 
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open_dashboard", "Open Station Dashboard", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit_loopbase", "Quit Loopbase Station Agent", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+
+    TrayIconBuilder::with_id("loopbase-station-agent")
+        .icon(tauri::include_image!("../icons/icon.png"))
+        .tooltip("Loopbase Station Agent is running")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .on_menu_event(|app_handle, event| match event.id.as_ref() {
+            "open_dashboard" => show_main_window(app_handle),
+            "quit_loopbase" => {
+                stop_agent(app_handle);
+                app_handle.exit(0);
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AgentProcess(Mutex::new(None)))
         .setup(|app| {
+            setup_tray(app)?;
             let handle = app.handle().clone();
             let state = app.state::<AgentProcess>();
             spawn_agent(&handle, state);
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let state = window.state::<AgentProcess>();
-                if let Ok(mut guard) = state.0.lock() {
-                    if let Some(child) = guard.as_mut() {
-                        let _ = child.kill();
-                    }
-                };
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .run(tauri::generate_context!())

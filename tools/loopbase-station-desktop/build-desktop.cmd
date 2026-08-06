@@ -1,13 +1,22 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 set ORIGINAL_DIR=%CD%
 set STAGING_ROOT=C:\LoopbaseBuild
-set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop
+set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop-%RANDOM%
+set npm_config_cache=%STAGING_ROOT%\npm-cache
 
-call "..\loopbase-station-agent\build-release.cmd"
-if errorlevel 1 exit /b %errorlevel%
+if exist "..\loopbase-station-agent\dist\Loopbase Station Agent.exe" (
+  echo Reusing existing Loopbase Station Agent helper EXE.
+) else if exist "..\..\public\downloads\loopbase-station-agent\Loopbase-Station-Agent.exe" (
+  if not exist "..\loopbase-station-agent\dist" mkdir "..\loopbase-station-agent\dist"
+  copy /Y "..\..\public\downloads\loopbase-station-agent\Loopbase-Station-Agent.exe" "..\loopbase-station-agent\dist\Loopbase Station Agent.exe"
+  if errorlevel 1 exit /b %errorlevel%
+) else (
+  call "..\loopbase-station-agent\build-release.cmd"
+  if errorlevel 1 exit /b %errorlevel%
+)
 
 where rustc >nul 2>nul
 if errorlevel 1 (
@@ -28,16 +37,31 @@ if errorlevel 1 exit /b %errorlevel%
 
 if /I not "%CD%"=="%STAGING_DIR%" (
   if not exist "%STAGING_ROOT%" mkdir "%STAGING_ROOT%"
-  if exist "%STAGING_DIR%" rmdir /S /Q "%STAGING_DIR%"
+  if errorlevel 1 (
+    echo.
+    echo Could not create %STAGING_ROOT%.
+    echo Run this build from an Administrator PowerShell, or grant your Windows user write access to %STAGING_ROOT%.
+    exit /b %errorlevel%
+  )
   mkdir "%STAGING_DIR%"
-  robocopy "%ORIGINAL_DIR%" "%STAGING_DIR%" /E /XD node_modules dist src-tauri\target /XF package-lock.json >nul
+  if errorlevel 1 (
+    echo.
+    echo Could not create %STAGING_DIR%.
+    echo Close any running Loopbase Station Agent windows and rerun this from an Administrator PowerShell.
+    exit /b %errorlevel%
+  )
+  robocopy "%ORIGINAL_DIR%" "%STAGING_DIR%" /E /XD dist src-tauri\target /XF package-lock.json >nul
   if errorlevel 8 exit /b %errorlevel%
   copy /Y "%ORIGINAL_DIR%\package-lock.json" "%STAGING_DIR%\package-lock.json" >nul 2>nul
   cd /d "%STAGING_DIR%"
 )
 
-call npm install
-if errorlevel 1 exit /b %errorlevel%
+if exist "node_modules\.bin\tauri.cmd" (
+  echo Reusing existing desktop Node dependencies.
+) else (
+  call npm install --cache "%npm_config_cache%" --no-audit --no-fund
+  if errorlevel 1 exit /b %errorlevel%
+)
 
 call npm run build
 if errorlevel 1 exit /b %errorlevel%

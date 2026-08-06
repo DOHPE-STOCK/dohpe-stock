@@ -56,6 +56,19 @@ h1 {
   line-height: 1.45;
 }
 
+.tray-note {
+  max-width: 640px;
+  margin: 12px 0 0;
+  border: 1px solid #2f4d41;
+  border-radius: 12px;
+  background: #10221a;
+  color: #c8f5df;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+
 .button {
   border-radius: 12px;
   background: #17a56b;
