@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.2.1"
+AGENT_VERSION_NUMBER = "0.2.2"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -75,6 +75,7 @@ def default_python() -> str:
 def default_config() -> dict[str, Any]:
     return {
         "app_url": "https://loopbase.io",
+        "station_name": "",
         "agent_host": "127.0.0.1",
         "agent_port": 8790,
         "update_manifest_url": "",
@@ -375,9 +376,11 @@ class StationAgent:
     def write_quick_setup(self, fields: dict[str, str]) -> None:
         cfg = deep_merge(default_config(), self.config)
         app_url = text(fields.get("app_url")) or text(cfg.get("app_url")) or "https://loopbase.io"
+        station_name = text(fields.get("station_name")) or text(cfg.get("station_name")) or "This station"
         station_token = text(fields.get("station_token"))
 
         cfg["app_url"] = app_url.rstrip("/")
+        cfg["station_name"] = station_name
         printer = cfg["printer"]
         printer["enabled"] = True
         printer["remote_enabled"] = True
@@ -392,6 +395,7 @@ class StationAgent:
     def write_config_from_form(self, fields: dict[str, str]) -> None:
         cfg = deep_merge(default_config(), self.config)
         cfg["app_url"] = fields.get("app_url", cfg["app_url"]).rstrip("/")
+        cfg["station_name"] = text(fields.get("station_name")) or text(cfg.get("station_name")) or "This station"
         cfg["update_manifest_url"] = fields.get("update_manifest_url", cfg.get("update_manifest_url") or "")
         cfg["update_check_interval_seconds"] = int_value(
             fields.get("update_check_interval_seconds"),
@@ -972,7 +976,6 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           <form method="post" action="/update/install" onsubmit="return confirm('Are you sure? This will download the update and restart the software.')">
             <button>Update Now</button>
           </form>
-          <a class="button secondary" href="{html_attr(update_download_url)}" target="_blank">Download Only</a>
         </div>
         """
     elif update_message:
@@ -984,7 +987,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           </div>
         </div>
         """
-    process_cards = []
+    process_cards = {}
     for key, label in [
         ("photo", "Photo Ingest"),
         ("photo_setup", "Photo Setup UI"),
@@ -994,9 +997,15 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
         row = status["processes"].get(key, {})
         running = row.get("running") is True
         output = "\n".join(row.get("last_output") or [])[-3000:]
-        process_cards.append(
+        section = {
+            "photo": "photography",
+            "photo_setup": "photography",
+            "rfid": "rfid-reader",
+            "rfid_zone": "rfid-zone",
+        }.get(key, "config")
+        process_cards[key] = (
             f"""
-            <article class="service">
+            <article class="service module-panel" data-section="{html_attr(section)}">
               <div>
                 <p class="eyebrow">{label}</p>
                 <h3>{'Running' if running else 'Stopped'}</h3>
@@ -1021,11 +1030,11 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
         ("file-watcher", "File Watcher", "Watch camera, NAS or local folders and upload new session images."),
         ("rfid-reader", "RFID Reader / Writer", "Use table readers for receiving, TID capture and future tag writing."),
         ("rfid-zone", "RFID Zone Monitor", "Monitor exits, entrances, changing rooms and stock rooms with threshold readers."),
-        ("updates", "Updates", "Check for newer Station Agent versions while the app is running."),
+        ("config", "Config", "General station name, Loopbase URL and update checks."),
     ]
     module_grid = "".join(
         f"""
-        <a class="module-card" href="#{html_attr(anchor)}">
+        <a class="module-card" href="#{html_attr(anchor)}" data-section="{html_attr(anchor)}">
           <span class="module-icon">{index}</span>
           <strong>{html.escape(title)}</strong>
           <small>{html.escape(description)}</small>
@@ -1048,11 +1057,19 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           </div>
           <form method="post" action="/setup/token" class="setup-form">
             <label>Loopbase URL<input name="app_url" value="{html_attr(cfg.get('app_url') or 'https://loopbase.io')}"></label>
+            <label>Station name<input name="station_name" value="{html_attr(cfg.get('station_name') or '')}" placeholder="e.g. Photo Station 1"></label>
             <label>Station token<input name="station_token" value="" placeholder="Paste station token"></label>
             <button>Connect Station</button>
           </form>
         </section>
         """
+    station_label = text(cfg.get("station_name")) or "This station"
+    station_connected = bool(text(printer.get("station_token")))
+    connected_badge = (
+        f'<span class="station-badge ok">{html.escape(station_label)} <strong>✓</strong></span>'
+        if station_connected
+        else '<span class="station-badge idle">Station not connected</span>'
+    )
     body = f"""<!doctype html>
 <html>
 <head>
@@ -1099,6 +1116,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
       border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(145deg, rgba(21,27,32,.96), rgba(10,13,16,.96)); padding: 18px;
     }}
     .module-card:hover {{ border-color: #36956a; transform: translateY(-1px); }}
+    .module-card.active {{ border-color: #43c889; background: linear-gradient(145deg, rgba(26,60,45,.96), rgba(11,18,15,.96)); }}
     .module-card strong {{ font-size: 18px; }}
     .module-card small {{ color: var(--muted); font-weight: 750; line-height: 1.4; }}
     .module-icon {{
@@ -1138,6 +1156,11 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     button.secondary, .button.secondary {{ background: #273039; color: white; }}
     button.danger {{ background: var(--red); }}
     .message {{ margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: #123123; border: 1px solid #276947; color: #c8f6df; font-weight: 800; }}
+    .message {{
+      position: fixed; right: 24px; bottom: 24px; z-index: 20; max-width: min(420px, calc(100vw - 48px));
+      box-shadow: 0 20px 45px rgba(0,0,0,.32); animation: toast-out .25s ease 5s forwards;
+    }}
+    @keyframes toast-out {{ to {{ opacity: 0; transform: translateY(8px); pointer-events: none; }} }}
     .update-banner {{
       margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 16px;
       border: 1px solid #2f7d58; border-radius: 16px; background: rgba(18,49,35,.92); padding: 16px 18px;
@@ -1149,7 +1172,15 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     .setup-form {{ display: grid; grid-template-columns: 1fr; gap: 10px; }}
     .update-banner.subtle {{ border-color: #394652; background: rgba(16,20,24,.92); }}
     .top-actions {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
+    .station-badge {{
+      min-height: 36px; display: inline-flex; align-items: center; gap: 8px; border-radius: 999px;
+      border: 1px solid #2f7d58; background: rgba(18,49,35,.92); color: #d6f7e7; padding: 7px 11px;
+      font-size: 13px; font-weight: 900; white-space: nowrap;
+    }}
+    .station-badge.idle {{ border-color: #394652; background: #151b20; color: #c5cbd1; }}
     .section-stack {{ display: grid; gap: 16px; }}
+    .module-panel {{ display: none; }}
+    .module-panel.active {{ display: block; }}
     .printer-list {{ display: grid; gap: 6px; margin-top: 10px; color: #cbd3d9; font-size: 13px; font-weight: 800; }}
     @media (max-width: 900px) {{ .grid, .form-grid, .module-grid, .setup-banner {{ grid-template-columns: 1fr; }} header {{ flex-direction: column; }} }}
   </style>
@@ -1163,10 +1194,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
         <p class="muted">Photo ingest, RFID table bridge, printer bridge and station setup from one local Windows app.</p>
       </div>
       <div class="top-actions">
-        <a class="button secondary" href="{html_attr(cfg.get('app_url'))}" target="_blank">Open Loopbase</a>
-        <a class="button secondary" href="{setup_url}" target="_blank">Photo Setup</a>
-        <a class="button secondary" href="{rfid_url}" target="_blank">RFID Status</a>
-        <a class="button secondary" href="{rfid_zone_url}" target="_blank">RFID Zone</a>
+        {connected_badge}
       </div>
     </header>
     {update_banner}
@@ -1177,11 +1205,12 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     </section>
     <div class="grid">
       <section class="section-stack">
-        <div class="panel" id="photography">
-          <h2>Station Config</h2>
+        <div class="panel module-panel" id="config" data-section="config">
+          <h2>Config</h2>
           <form method="post" action="/config/save">
             <div class="form-grid">
               <label class="wide">Loopbase URL<input name="app_url" value="{html_attr(cfg.get('app_url'))}"></label>
+              <label class="wide">Station name<input name="station_name" value="{html_attr(cfg.get('station_name'))}" placeholder="e.g. Photo Station 1"></label>
               <label class="wide">Update manifest URL<input name="update_manifest_url" value="{html_attr(cfg.get('update_manifest_url'))}" placeholder="Leave blank to use /api/station-agent/releases/latest"></label>
               <label>Update check interval seconds<input name="update_check_interval_seconds" value="{html_attr(cfg.get('update_check_interval_seconds'))}"></label>
               <label class="wide">Python path override<input name="python_path" value="{html_attr(cfg.get('python_path'))}" placeholder="Leave blank to use bundled/current Python"></label>
@@ -1281,7 +1310,36 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           </form>
         </div>
 
-        <div class="panel">
+        <div class="panel module-panel" id="photography" data-section="photography">
+          <h2>Photography Stations</h2>
+          <p class="muted">Use this section for photo ingest, station setup and the local capture tools.</p>
+          <div class="actions" style="margin-top:12px">
+            <a class="button secondary" href="{setup_url}" target="_blank">Open Photography Setup</a>
+          </div>
+        </div>
+
+        <div class="panel module-panel" id="file-watcher" data-section="file-watcher">
+          <h2>File Watcher</h2>
+          <p class="muted">Folder watching is handled by the Photography Station ingest worker. Use Photography Stations to open the setup page and choose watch folders.</p>
+        </div>
+
+        <div class="panel module-panel" id="rfid-reader" data-section="rfid-reader">
+          <h2>RFID Reader / Writer</h2>
+          <p class="muted">Use this section for RFID table receiving, TID capture and future tag writing.</p>
+          <div class="actions" style="margin-top:12px">
+            <a class="button secondary" href="{rfid_url}" target="_blank">Open RFID Status</a>
+          </div>
+        </div>
+
+        <div class="panel module-panel" id="rfid-zone" data-section="rfid-zone">
+          <h2>RFID Zone Monitor</h2>
+          <p class="muted">Use this section for threshold readers at entrances, exits, changing rooms and stock rooms.</p>
+          <div class="actions" style="margin-top:12px">
+            <a class="button secondary" href="{rfid_zone_url}" target="_blank">Open Zone Monitor</a>
+          </div>
+        </div>
+
+        <div class="panel module-panel" id="remote-printer" data-section="remote-printer">
           <h2>Remote Printer</h2>
           <p class="muted">This PC can expose its connected Windows printers to Loopbase users in the same company. ZPL labels are sent raw; A4/PDF-style jobs are handed to Windows using the local default app for that file type.</p>
           <div class="printer-list">
@@ -1292,7 +1350,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           </form>
         </div>
 
-        <div class="panel" id="updates">
+        <div class="panel module-panel" id="updates" data-section="config">
           <h2>Updates</h2>
           <p class="muted">Installed version: {html.escape(AGENT_VERSION_NUMBER)}. The agent checks Loopbase while this app is running and shows a download banner when a newer build is published.</p>
           <form method="post" action="/update/check" style="margin-top:12px">
@@ -1302,10 +1360,24 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
       </section>
 
       <section class="services">
-        {''.join(process_cards)}
+        {''.join(process_cards.values())}
       </section>
     </div>
   </main>
+  <script>
+    const cards = [...document.querySelectorAll('.module-card')];
+    const panels = [...document.querySelectorAll('.module-panel')];
+    function showSection(section) {{
+      const next = section || 'remote-printer';
+      cards.forEach((card) => card.classList.toggle('active', card.dataset.section === next));
+      panels.forEach((panel) => panel.classList.toggle('active', panel.dataset.section === next));
+      if (location.hash.replace('#', '') !== next) {{
+        history.replaceState(null, '', `#${{next}}`);
+      }}
+    }}
+    window.addEventListener('hashchange', () => showSection(location.hash.replace('#', '')));
+    showSection(location.hash.replace('#', '') || 'remote-printer');
+  </script>
 </body>
 </html>"""
     return body.encode("utf-8")
