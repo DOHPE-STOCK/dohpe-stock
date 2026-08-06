@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.2.8"
+AGENT_VERSION_NUMBER = "0.2.9"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -1146,7 +1146,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
             <h2>Loopbase Station Agent {html.escape(update_version)} is ready</h2>
             <p class="muted">Current version: {html.escape(AGENT_VERSION_NUMBER)}.</p>
           </div>
-          <a class="button" href="{html_attr(update_download_url)}" target="_blank" rel="noreferrer">Update Now</a>
+          <a class="button" href="/update/download">Update Now</a>
         </div>
         """
     elif update_message:
@@ -1675,6 +1675,16 @@ def make_handler(agent: StationAgent):
                 self.send_header("content-length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if path == "/update/download":
+                info = agent.check_for_updates(force=True)
+                download_url = text(info.get("download_url"))
+                if not download_url:
+                    self.send_json(500, {"ok": False, "message": "The update manifest did not include a download URL."})
+                    return
+                self.send_response(302)
+                self.send_header("location", download_url)
+                self.end_headers()
                 return
             self.send_json(404, {"ok": False, "message": "Not found."})
 
