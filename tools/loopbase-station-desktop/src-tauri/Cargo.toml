@@ -1,6 +1,6 @@
 [package]
 name = "loopbase-station-desktop"
-version = "0.2.3"
+version = "0.2.4"
 description = "Loopbase Station Agent desktop shell"
 authors = ["Loopbase"]
 edition = "2021"

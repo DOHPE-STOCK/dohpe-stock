@@ -40,14 +40,14 @@ if /I not "%CD%"=="%STAGING_DIR%" (
   if errorlevel 1 (
     echo.
     echo Could not create %STAGING_ROOT%.
-    echo Run this build from an Administrator PowerShell, or grant your Windows user write access to %STAGING_ROOT%.
+    echo Run this build from a normal PowerShell outside Codex, or remove old locked files in %STAGING_ROOT%.
     exit /b %errorlevel%
   )
   mkdir "%STAGING_DIR%"
   if errorlevel 1 (
     echo.
     echo Could not create %STAGING_DIR%.
-    echo Close any running Loopbase Station Agent windows and rerun this from an Administrator PowerShell.
+    echo Close any running Loopbase Station Agent windows and rerun this from a normal PowerShell.
     exit /b %errorlevel%
   )
   robocopy "%ORIGINAL_DIR%" "%STAGING_DIR%" /E /XD dist src-tauri\target /XF package-lock.json >nul

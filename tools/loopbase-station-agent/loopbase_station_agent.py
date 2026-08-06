@@ -10,6 +10,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -21,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.2.3"
+AGENT_VERSION_NUMBER = "0.2.4"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -703,21 +704,39 @@ class StationAgent:
         return payload
 
     def update_download_dir(self) -> Path:
-        target_dir = user_data_dir() / "updates"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        return target_dir
+        base_dir = user_data_dir() / "updates"
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+            probe = base_dir / ".write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return base_dir
+        except OSError:
+            fallback = Path(tempfile.gettempdir()) / "Loopbase" / "StationAgent" / "updates"
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback
+
+    def cleanup_old_update_downloads(self, keep_dir: Path) -> None:
+        base_dir = keep_dir.parent
+        for stale in base_dir.glob("update-*"):
+            if stale == keep_dir:
+                continue
+            try:
+                if stale.is_dir():
+                    shutil.rmtree(stale, ignore_errors=True)
+                else:
+                    stale.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def download_installer(self, download_url: str, version: str) -> Path:
         safe_version = "".join(char for char in version if char.isalnum() or char in {".", "-", "_"}) or "latest"
-        target = self.update_download_dir() / f"Loopbase-Station-Agent-Setup-{safe_version}.exe"
-        partial = target.with_suffix(".download")
+        download_dir = self.update_download_dir() / f"update-{safe_version}-{int(time.time())}"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        self.cleanup_old_update_downloads(download_dir)
 
-        for stale in [partial, target]:
-            try:
-                if stale.exists():
-                    stale.unlink()
-            except OSError as exc:
-                raise RuntimeError(f"Could not remove old update file {stale}: {exc}") from exc
+        target = download_dir / f"Loopbase-Station-Agent-Setup-{safe_version}.exe"
+        partial = target.with_suffix(".download")
 
         request = urllib.request.Request(download_url, headers={"User-Agent": AGENT_VERSION})
         with urllib.request.urlopen(request, timeout=90) as response, partial.open("wb") as handle:
