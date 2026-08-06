@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.2.7'
+const STATION_AGENT_VERSION = '0.2.8'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -27,9 +27,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-06',
     release_notes: [
-      'Changes Update Now to a direct hosted installer link, bypassing local updater execution entirely.',
-      'Avoids starting a duplicate helper if a local Station Agent is already running.',
-      'Disables the fragile local self-install endpoint as a normal customer path.',
+      'Redesigns Station Agent sections so each card opens its own full-window settings view.',
+      'Moves file watching into Photography Stations with up to three local or network source folders.',
+      'Removes numbered module cards and starts on the six-card home screen with nothing preselected.',
     ],
   })
 }

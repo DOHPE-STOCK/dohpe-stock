@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.2.7"
+AGENT_VERSION_NUMBER = "0.2.8"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -255,6 +255,25 @@ def make_photo_worker_config(agent_config: dict[str, Any], config_path: Path) ->
     current.setdefault("enable_processing_jobs", True)
     current.setdefault("sources", [])
     return current
+
+
+def photo_worker_sources(agent_config: dict[str, Any], config_path: Path) -> list[dict[str, Any]]:
+    data = make_photo_worker_config(agent_config, config_path)
+    sources = data.get("sources") if isinstance(data.get("sources"), list) else []
+    normalised = [row for row in sources if isinstance(row, dict)]
+    while len(normalised) < 3:
+        normalised.append(
+            {
+                "name": f"Photo Source {len(normalised) + 1}",
+                "token": "",
+                "watch_folder": "",
+                "processed_folder": "",
+                "trash_folder": "",
+                "extensions": [".jpg", ".jpeg"],
+                "raw_extensions": [".nef", ".arw", ".cr2", ".cr3", ".raf", ".dng"],
+            }
+        )
+    return normalised[:3]
 
 
 def make_rfid_zone_config(agent_config: dict[str, Any], config_path: Path) -> dict[str, Any]:
@@ -495,6 +514,79 @@ class StationAgent:
         data = make_photo_worker_config(self.config, config_path)
         save_config(config_path, data)
         return config_path
+
+    def write_photo_sources_from_form(self, fields: dict[str, str]) -> None:
+        cfg = deep_merge(default_config(), self.config)
+        cfg["app_url"] = fields.get("app_url", cfg["app_url"]).rstrip("/")
+        cfg["station_name"] = text(fields.get("station_name")) or text(cfg.get("station_name")) or "This station"
+        photo = cfg["photo_worker"]
+        photo["enabled"] = bool_value(fields.get("photo_enabled"))
+        photo["config_path"] = fields.get("photo_config_path", photo["config_path"])
+        photo["setup_port"] = int_value(fields.get("photo_setup_port"), int(photo["setup_port"]))
+
+        config_path = resolve_path(photo["config_path"], self.config_path.parent)
+        data = make_photo_worker_config(cfg, config_path)
+        existing = photo_worker_sources(cfg, config_path)
+        sources: list[dict[str, Any]] = []
+        for index in range(1, 4):
+            previous = existing[index - 1]
+            name = text(fields.get(f"photo_source_name_{index}")) or f"Photo Source {index}"
+            token = text(fields.get(f"photo_source_token_{index}"))
+            watch_folder = text(fields.get(f"photo_source_watch_folder_{index}"))
+            processed_folder = text(fields.get(f"photo_source_processed_folder_{index}"))
+            trash_folder = text(fields.get(f"photo_source_trash_folder_{index}"))
+            if not any([token, watch_folder, processed_folder, trash_folder]) and index > 1:
+                continue
+            row = dict(previous)
+            row.update(
+                {
+                    "name": name,
+                    "token": token,
+                    "watch_folder": watch_folder,
+                    "processed_folder": processed_folder,
+                    "trash_folder": trash_folder,
+                    "extensions": previous.get("extensions") or [".jpg", ".jpeg"],
+                    "raw_extensions": previous.get("raw_extensions") or [".nef", ".arw", ".cr2", ".cr3", ".raf", ".dng"],
+                }
+            )
+            sources.append(row)
+        data["app_url"] = cfg["app_url"]
+        data["enable_processing_jobs"] = True
+        data["sources"] = sources
+        self.config = cfg
+        save_config(self.config_path, cfg)
+        save_config(config_path, data)
+
+    def pick_photo_source_folder(self, index: int) -> Path:
+        if index < 1 or index > 3:
+            raise RuntimeError("Photo source must be between 1 and 3.")
+        cfg = deep_merge(default_config(), self.config)
+        photo = cfg["photo_worker"]
+        config_path = resolve_path(photo["config_path"], self.config_path.parent)
+        data = make_photo_worker_config(cfg, config_path)
+        sources = photo_worker_sources(cfg, config_path)
+        if not os.name == "nt":
+            raise RuntimeError("Folder picker is currently supported on Windows station PCs.")
+        ps_script = (
+            "$shell = New-Object -ComObject Shell.Application; "
+            f"$folder = $shell.BrowseForFolder(0, 'Choose watch folder for Photo Source {index}', 0, 0); "
+            "if ($folder -ne $null) { $folder.Self.Path }"
+        )
+        try:
+            selected = subprocess.check_output(
+                ["powershell", "-NoProfile", "-STA", "-Command", ps_script],
+                text=True,
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            ).strip()
+        except Exception as exc:
+            raise RuntimeError(f"Could not open folder picker: {exc}") from exc
+        if not selected:
+            raise RuntimeError("No folder selected.")
+        sources[index - 1]["watch_folder"] = selected
+        data["sources"] = [row for row in sources if text(row.get("token")) or text(row.get("watch_folder")) or row is sources[0]]
+        save_config(config_path, data)
+        return Path(selected)
 
     def ensure_rfid_zone_config(self) -> Path:
         zone = self.config["rfid_zone_monitor"]
@@ -1103,23 +1195,45 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     rfid_url = f"http://{html_attr(rfid.get('listen_host'))}:{int(rfid.get('listen_port') or 8765)}/status"
     rfid_zone_url = f"http://{html_attr(zone.get('listen_host'))}:{int(zone.get('listen_port') or 8775)}/"
     rfid_zone_antenna_json = json.dumps(zone.get("antenna_ports") or [], indent=2)
+    photo_config_path = resolve_path(photo.get("config_path") or "photo-worker.local.json", agent.config_path.parent)
+    photo_sources = photo_worker_sources(cfg, photo_config_path)
+    photo_source_fields = "".join(
+        f"""
+        <article class="source-card">
+          <div class="source-head">
+            <h3>Source {index}</h3>
+            <form method="post" action="/photography/source/pick">
+              <input type="hidden" name="source_index" value="{index}">
+              <button class="secondary" type="submit">Choose Folder</button>
+            </form>
+          </div>
+          <div class="form-grid">
+            <label>Source name<input name="photo_source_name_{index}" value="{html_attr(source.get('name'))}" placeholder="Camera import folder"></label>
+            <label>Source token<input name="photo_source_token_{index}" value="{html_attr(source.get('token'))}" placeholder="Paste source token from Loopbase"></label>
+            <label class="wide">Watch folder<input name="photo_source_watch_folder_{index}" value="{html_attr(source.get('watch_folder'))}" placeholder="C:\\Photography\\Station 1 or \\\\NAS\\Photos\\Station 1"></label>
+            <label>Processed folder<input name="photo_source_processed_folder_{index}" value="{html_attr(source.get('processed_folder'))}" placeholder="Optional"></label>
+            <label>Trash folder<input name="photo_source_trash_folder_{index}" value="{html_attr(source.get('trash_folder'))}" placeholder="Optional"></label>
+          </div>
+        </article>
+        """
+        for index, source in enumerate(photo_sources, start=1)
+    )
     module_cards = [
         ("remote-printer", "Remote Printer", "Print ZPL labels, A4 PDFs and local Windows printer jobs from any company PC."),
-        ("photography", "Photography Stations", "Run photography sessions, phone pairing and station capture tools."),
-        ("file-watcher", "File Watcher", "Watch camera, NAS or local folders and upload new session images."),
+        ("photography", "Photography Stations", "Watch camera, NAS or local folders and upload new session images."),
         ("rfid-reader", "RFID Reader / Writer", "Use table readers for receiving, TID capture and future tag writing."),
         ("rfid-zone", "RFID Zone Monitor", "Monitor exits, entrances, changing rooms and stock rooms with threshold readers."),
         ("config", "Config", "General station name, Loopbase URL and update checks."),
+        ("updates", "Updates", "Check for newer Station Agent releases."),
     ]
     module_grid = "".join(
         f"""
         <a class="module-card" href="#{html_attr(anchor)}" data-section="{html_attr(anchor)}">
-          <span class="module-icon">{index}</span>
           <strong>{html.escape(title)}</strong>
           <small>{html.escape(description)}</small>
         </a>
         """
-        for index, (anchor, title, description) in enumerate(module_cards, start=1)
+        for anchor, title, description in module_cards
     )
     printer_options = "".join(
         f"<option value=\"{html_attr(row.get('name'))}\" {selected(printer.get('windows_printer_name'), text(row.get('name')))}>{html.escape(text(row.get('name')))}{' (default)' if row.get('default') else ''}</option>"
@@ -1188,7 +1302,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     h3 {{ font-size: 18px; }}
     .eyebrow {{ color: #8ee6bd; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }}
     .muted {{ color: var(--muted); font-weight: 700; margin-top: 6px; }}
-    .grid {{ display: grid; grid-template-columns: 1.08fr .92fr; gap: 16px; margin-top: 16px; }}
+    .grid {{ display: block; margin-top: 16px; }}
     .module-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }}
     .module-card {{
       min-height: 150px; display: grid; align-content: start; gap: 9px; text-decoration: none; color: var(--text);
@@ -1198,10 +1312,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     .module-card.active {{ border-color: #43c889; background: linear-gradient(145deg, rgba(26,60,45,.96), rgba(11,18,15,.96)); }}
     .module-card strong {{ font-size: 18px; }}
     .module-card small {{ color: var(--muted); font-weight: 750; line-height: 1.4; }}
-    .module-icon {{
-      width: 38px; height: 38px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center;
-      background: #153d2b; color: #9cf0c7; font-weight: 950; border: 1px solid #276947;
-    }}
+    body.section-open .module-grid {{ display: none; }}
     .panel, .service {{
       border: 1px solid var(--line); border-radius: 16px; background: rgba(16,20,24,.94); padding: 18px;
     }}
@@ -1260,6 +1371,11 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     .section-stack {{ display: grid; gap: 16px; }}
     .module-panel {{ display: none; }}
     .module-panel.active {{ display: block; }}
+    .panel-head {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }}
+    .panel-actions {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
+    .source-list {{ display: grid; gap: 12px; margin-top: 14px; }}
+    .source-card {{ border: 1px solid #26313a; border-radius: 14px; background: #0c1014; padding: 14px; }}
+    .source-head {{ display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }}
     .printer-list {{ display: grid; gap: 6px; margin-top: 10px; color: #cbd3d9; font-size: 13px; font-weight: 800; }}
     @media (max-width: 900px) {{ .grid, .form-grid, .module-grid, .setup-banner {{ grid-template-columns: 1fr; }} header {{ flex-direction: column; }} }}
   </style>
@@ -1285,7 +1401,13 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     <div class="grid">
       <section class="section-stack">
         <div class="panel module-panel" id="config" data-section="config">
-          <h2>Config</h2>
+          <div class="panel-head">
+            <div>
+              <h2>Config</h2>
+              <p class="muted">General station identity, Loopbase URL and update checks.</p>
+            </div>
+            <a class="button secondary" href="#">Cancel</a>
+          </div>
           <form method="post" action="/config/save">
             <div class="form-grid">
               <label class="wide">Loopbase URL<input name="app_url" value="{html_attr(cfg.get('app_url'))}"></label>
@@ -1385,42 +1507,71 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
               <label>Label width mm<input name="label_width_mm" value="{html_attr(printer.get('default_label_width_mm'))}"></label>
               <label>Label height mm<input name="label_height_mm" value="{html_attr(printer.get('default_label_height_mm'))}"></label>
             </div>
-            <p style="margin-top:12px"><button>Save Config</button></p>
+            <p style="margin-top:12px" class="panel-actions"><a class="button secondary" href="#">Cancel</a><button>Save</button></p>
           </form>
         </div>
 
         <div class="panel module-panel" id="photography" data-section="photography">
-          <h2>Photography Stations</h2>
-          <p class="muted">Use this section for photo ingest, station setup and the local capture tools.</p>
-          <div class="actions" style="margin-top:12px">
-            <a class="button secondary" href="{setup_url}" target="_blank">Open Photography Setup</a>
+          <div class="panel-head">
+            <div>
+              <h2>Photography Stations</h2>
+              <p class="muted">Choose up to three local or network folders this station can watch for incoming session photos.</p>
+            </div>
+            <a class="button secondary" href="#">Cancel</a>
           </div>
-        </div>
-
-        <div class="panel module-panel" id="file-watcher" data-section="file-watcher">
-          <h2>File Watcher</h2>
-          <p class="muted">Folder watching is handled by the Photography Station ingest worker. Use Photography Stations to open the setup page and choose watch folders.</p>
+          <form method="post" action="/photography/save">
+            <div class="form-grid">
+              <label class="wide">Loopbase URL<input name="app_url" value="{html_attr(cfg.get('app_url'))}"></label>
+              <label>Station name<input name="station_name" value="{html_attr(cfg.get('station_name'))}" placeholder="e.g. Photo Station 1"></label>
+              <label>Photo worker config<input name="photo_config_path" value="{html_attr(photo.get('config_path'))}"></label>
+              <label>Photo setup port<input name="photo_setup_port" value="{html_attr(photo.get('setup_port'))}"></label>
+              <label class="check">Photo ingest enabled<input type="checkbox" name="photo_enabled" {checked(photo.get('enabled'))}></label>
+            </div>
+            <div class="source-list">
+              {photo_source_fields}
+            </div>
+            <p style="margin-top:12px" class="panel-actions">
+              <a class="button secondary" href="#">Cancel</a>
+              <a class="button secondary" href="{setup_url}" target="_blank">Advanced Worker Setup</a>
+              <button>Save</button>
+            </p>
+          </form>
         </div>
 
         <div class="panel module-panel" id="rfid-reader" data-section="rfid-reader">
-          <h2>RFID Reader / Writer</h2>
-          <p class="muted">Use this section for RFID table receiving, TID capture and future tag writing.</p>
+          <div class="panel-head">
+            <div>
+              <h2>RFID Reader / Writer</h2>
+              <p class="muted">Use this section for RFID table receiving, TID capture and future tag writing.</p>
+            </div>
+            <a class="button secondary" href="#">Cancel</a>
+          </div>
           <div class="actions" style="margin-top:12px">
             <a class="button secondary" href="{rfid_url}" target="_blank">Open RFID Status</a>
           </div>
         </div>
 
         <div class="panel module-panel" id="rfid-zone" data-section="rfid-zone">
-          <h2>RFID Zone Monitor</h2>
-          <p class="muted">Use this section for threshold readers at entrances, exits, changing rooms and stock rooms.</p>
+          <div class="panel-head">
+            <div>
+              <h2>RFID Zone Monitor</h2>
+              <p class="muted">Use this section for threshold readers at entrances, exits, changing rooms and stock rooms.</p>
+            </div>
+            <a class="button secondary" href="#">Cancel</a>
+          </div>
           <div class="actions" style="margin-top:12px">
             <a class="button secondary" href="{rfid_zone_url}" target="_blank">Open Zone Monitor</a>
           </div>
         </div>
 
         <div class="panel module-panel" id="remote-printer" data-section="remote-printer">
-          <h2>Remote Printer</h2>
-          <p class="muted">This PC can expose its connected Windows printers to Loopbase users in the same company. ZPL labels are sent raw; A4/PDF-style jobs are handed to Windows using the local default app for that file type.</p>
+          <div class="panel-head">
+            <div>
+              <h2>Remote Printer</h2>
+              <p class="muted">This PC can expose its connected Windows printers to Loopbase users in the same company. ZPL labels are sent raw; A4/PDF-style jobs are handed to Windows using the local default app for that file type.</p>
+            </div>
+            <a class="button secondary" href="#">Cancel</a>
+          </div>
           <div class="printer-list">
             {''.join(f"<span>{'Default: ' if row.get('default') else ''}{html.escape(text(row.get('name')))}</span>" for row in printers) or '<span>No Windows printers detected. Install pywin32 and check Windows printer settings.</span>'}
           </div>
@@ -1429,9 +1580,14 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           </form>
         </div>
 
-        <div class="panel module-panel" id="updates" data-section="config">
-          <h2>Updates</h2>
-          <p class="muted">Installed version: {html.escape(AGENT_VERSION_NUMBER)}. The agent checks Loopbase while this app is running and shows a download banner when a newer build is published.</p>
+        <div class="panel module-panel" id="updates" data-section="updates">
+          <div class="panel-head">
+            <div>
+              <h2>Updates</h2>
+              <p class="muted">Installed version: {html.escape(AGENT_VERSION_NUMBER)}. The agent checks Loopbase while this app is running and shows a download banner when a newer build is published.</p>
+            </div>
+            <a class="button secondary" href="#">Cancel</a>
+          </div>
           <form method="post" action="/update/check" style="margin-top:12px">
             <button class="secondary">Check For Updates</button>
           </form>
@@ -1447,15 +1603,18 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     const cards = [...document.querySelectorAll('.module-card')];
     const panels = [...document.querySelectorAll('.module-panel')];
     function showSection(section) {{
-      const next = section || 'remote-printer';
+      const next = section || '';
+      document.body.classList.toggle('section-open', Boolean(next));
       cards.forEach((card) => card.classList.toggle('active', card.dataset.section === next));
       panels.forEach((panel) => panel.classList.toggle('active', panel.dataset.section === next));
-      if (location.hash.replace('#', '') !== next) {{
+      if (!next && location.hash) {{
+        history.replaceState(null, '', location.pathname + location.search);
+      }} else if (next && location.hash.replace('#', '') !== next) {{
         history.replaceState(null, '', `#${{next}}`);
       }}
     }}
     window.addEventListener('hashchange', () => showSection(location.hash.replace('#', '')));
-    showSection(location.hash.replace('#', '') || 'remote-printer');
+    showSection(location.hash.replace('#', ''));
   </script>
 </body>
 </html>"""
@@ -1535,6 +1694,14 @@ def make_handler(agent: StationAgent):
                 if path == "/config/save":
                     agent.write_config_from_form(fields)
                     redirect(self, "Config saved")
+                    return
+                if path == "/photography/save":
+                    agent.write_photo_sources_from_form(fields)
+                    redirect(self, "Photography station settings saved")
+                    return
+                if path == "/photography/source/pick":
+                    selected_path = agent.pick_photo_source_folder(int_value(fields.get("source_index"), 1))
+                    redirect(self, f"Photo source folder selected: {selected_path}")
                     return
                 if path == "/service/start":
                     service = fields.get("service", "")

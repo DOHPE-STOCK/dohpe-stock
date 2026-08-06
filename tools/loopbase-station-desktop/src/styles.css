@@ -81,7 +81,7 @@ h1 {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 18px;
 }
@@ -95,19 +95,6 @@ article {
   border-radius: 18px;
   background: linear-gradient(145deg, rgba(21, 27, 32, .96), rgba(10, 13, 16, .96));
   padding: 16px;
-}
-
-article span {
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #276947;
-  border-radius: 12px;
-  background: #153d2b;
-  color: #9cf0c7;
-  font-weight: 950;
 }
 
 article strong {
