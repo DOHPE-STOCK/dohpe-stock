@@ -7,12 +7,16 @@ if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies
   set PYTHON_EXE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe
 )
 
-"%PYTHON_EXE%" -m pip install -r requirements.txt
-if errorlevel 1 exit /b %errorlevel%
+"%PYTHON_EXE%" -m PyInstaller --version >nul 2>nul
+if errorlevel 1 (
+  "%PYTHON_EXE%" -m pip install -r requirements.txt
+  if errorlevel 1 exit /b %errorlevel%
+)
 
 "%PYTHON_EXE%" -m PyInstaller ^
   --name "Loopbase Station Agent" ^
   --onefile ^
+  --noconsole ^
   --clean ^
   --add-data "..\photo-ingest-worker\photo_ingest_worker.py;photo-ingest-worker" ^
   --add-data "..\rfid-bridge\rfid_bridge.py;rfid-bridge" ^

@@ -6,11 +6,8 @@ set ORIGINAL_DIR=%CD%
 set STAGING_ROOT=C:\LoopbaseBuild
 set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop
 
-if not exist "..\loopbase-station-agent\dist\Loopbase Station Agent.exe" (
-  echo Build the Python station agent first:
-  echo ..\loopbase-station-agent\build-release.cmd
-  exit /b 1
-)
+call "..\loopbase-station-agent\build-release.cmd"
+if errorlevel 1 exit /b %errorlevel%
 
 where rustc >nul 2>nul
 if errorlevel 1 (
@@ -52,4 +49,15 @@ if /I "%CD%"=="%STAGING_DIR%" (
   echo.
   echo Tauri build copied back to:
   echo %ORIGINAL_DIR%\src-tauri\target
+)
+
+set RELEASE_DIR=%ORIGINAL_DIR%\..\..\public\downloads\loopbase-station-agent
+if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
+set SETUP_FILE=
+for %%F in ("%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis\Loopbase Station Agent_*_x64-setup.exe") do set SETUP_FILE=%%~fF
+if not "%SETUP_FILE%"=="" (
+  copy /Y "%SETUP_FILE%" "%RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe"
+  if errorlevel 1 exit /b %errorlevel%
+  echo Desktop installer copied to:
+  echo %RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe
 )

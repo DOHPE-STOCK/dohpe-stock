@@ -1,9 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{Manager, State};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct AgentProcess(Mutex<Option<Child>>);
 
@@ -29,11 +36,26 @@ fn candidate_agent_paths(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
     paths
 }
 
+fn agent_config_path(app_handle: &tauri::AppHandle) -> PathBuf {
+    if let Ok(config_dir) = app_handle.path().app_config_dir() {
+        let _ = fs::create_dir_all(&config_dir);
+        return config_dir.join("config.local.json");
+    }
+
+    PathBuf::from("config.local.json")
+}
+
 fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
     let mut process_guard = state.0.lock().expect("agent process lock");
     if process_guard.is_some() {
         return;
     }
+
+    let config_path = agent_config_path(app_handle);
+    let config_dir = config_path
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
 
     for path in candidate_agent_paths(app_handle) {
         if !path.exists() {
@@ -50,10 +72,14 @@ fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
 
         command
             .arg("--config")
-            .arg("config.local.json")
+            .arg(&config_path)
+            .current_dir(&config_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        command.creation_flags(CREATE_NO_WINDOW);
 
         if let Ok(child) = command.spawn() {
             *process_guard = Some(child);

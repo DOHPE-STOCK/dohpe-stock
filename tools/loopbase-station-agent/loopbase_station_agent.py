@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.1.0"
+AGENT_VERSION_NUMBER = "0.2.1"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -372,6 +372,23 @@ class StationAgent:
     def reload(self) -> None:
         self.config = load_config(self.config_path)
 
+    def write_quick_setup(self, fields: dict[str, str]) -> None:
+        cfg = deep_merge(default_config(), self.config)
+        app_url = text(fields.get("app_url")) or text(cfg.get("app_url")) or "https://loopbase.io"
+        station_token = text(fields.get("station_token"))
+
+        cfg["app_url"] = app_url.rstrip("/")
+        printer = cfg["printer"]
+        printer["enabled"] = True
+        printer["remote_enabled"] = True
+        printer["remote_poll_enabled"] = bool(station_token)
+        printer["station_token"] = station_token or printer.get("station_token") or ""
+
+        self.config = cfg
+        save_config(self.config_path, cfg)
+        self.ensure_photo_config()
+        self.ensure_rfid_zone_config()
+
     def write_config_from_form(self, fields: dict[str, str]) -> None:
         cfg = deep_merge(default_config(), self.config)
         cfg["app_url"] = fields.get("app_url", cfg["app_url"]).rstrip("/")
@@ -675,6 +692,32 @@ class StationAgent:
         self.update_checked_at = now
         return payload
 
+    def download_and_start_update(self) -> Path:
+        update = self.check_for_updates(force=True)
+        if update.get("available") is not True:
+            raise RuntimeError("No newer Station Agent update is available.")
+
+        download_url = text(update.get("download_url"))
+        version = text(update.get("version")) or "latest"
+        if not download_url:
+            raise RuntimeError("The update manifest did not include a download URL.")
+
+        target = Path(tempfile.gettempdir()) / f"Loopbase-Station-Agent-Setup-{version}.exe"
+        request = urllib.request.Request(download_url, headers={"User-Agent": AGENT_VERSION})
+        with urllib.request.urlopen(request, timeout=90) as response:
+            target.write_bytes(response.read())
+
+        subprocess.Popen([str(target)], close_fds=True)
+
+        def stop_soon() -> None:
+            time.sleep(1.5)
+            self.stop_event.set()
+            self.stop_all()
+            os._exit(0)
+
+        threading.Thread(target=stop_soon, daemon=True).start()
+        return target
+
     def stop_all(self) -> None:
         self.stop_event.set()
         with self.lock:
@@ -924,9 +967,12 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           <div>
             <p class="eyebrow">Update Available</p>
             <h2>Loopbase Station Agent {html.escape(update_version)} is ready</h2>
-            <p class="muted">Current version: {html.escape(AGENT_VERSION_NUMBER)}. Download the installer, close this agent, then run the new version.</p>
+            <p class="muted">Current version: {html.escape(AGENT_VERSION_NUMBER)}.</p>
           </div>
-          <a class="button" href="{html_attr(update_download_url)}" target="_blank">Download Update</a>
+          <form method="post" action="/update/install" onsubmit="return confirm('Are you sure? This will download the update and restart the software.')">
+            <button>Update Now</button>
+          </form>
+          <a class="button secondary" href="{html_attr(update_download_url)}" target="_blank">Download Only</a>
         </div>
         """
     elif update_message:
@@ -991,6 +1037,22 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
         f"<option value=\"{html_attr(row.get('name'))}\" {selected(printer.get('windows_printer_name'), text(row.get('name')))}>{html.escape(text(row.get('name')))}{' (default)' if row.get('default') else ''}</option>"
         for row in printers
     )
+    first_run_setup = ""
+    if not text(printer.get("station_token")):
+        first_run_setup = f"""
+        <section class="setup-banner">
+          <div>
+            <p class="eyebrow">First Run Setup</p>
+            <h2>Connect this PC to Loopbase</h2>
+            <p class="muted">Enter station token for this device here.</p>
+          </div>
+          <form method="post" action="/setup/token" class="setup-form">
+            <label>Loopbase URL<input name="app_url" value="{html_attr(cfg.get('app_url') or 'https://loopbase.io')}"></label>
+            <label>Station token<input name="station_token" value="" placeholder="Paste station token"></label>
+            <button>Connect Station</button>
+          </form>
+        </section>
+        """
     body = f"""<!doctype html>
 <html>
 <head>
@@ -1080,11 +1142,16 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
       margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 16px;
       border: 1px solid #2f7d58; border-radius: 16px; background: rgba(18,49,35,.92); padding: 16px 18px;
     }}
+    .setup-banner {{
+      margin-top: 14px; display: grid; grid-template-columns: 1fr minmax(320px, 480px); gap: 16px; align-items: end;
+      border: 1px solid #2f7d58; border-radius: 16px; background: rgba(12,37,27,.94); padding: 18px;
+    }}
+    .setup-form {{ display: grid; grid-template-columns: 1fr; gap: 10px; }}
     .update-banner.subtle {{ border-color: #394652; background: rgba(16,20,24,.92); }}
     .top-actions {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
     .section-stack {{ display: grid; gap: 16px; }}
     .printer-list {{ display: grid; gap: 6px; margin-top: 10px; color: #cbd3d9; font-size: 13px; font-weight: 800; }}
-    @media (max-width: 900px) {{ .grid, .form-grid, .module-grid {{ grid-template-columns: 1fr; }} header {{ flex-direction: column; }} }}
+    @media (max-width: 900px) {{ .grid, .form-grid, .module-grid, .setup-banner {{ grid-template-columns: 1fr; }} header {{ flex-direction: column; }} }}
   </style>
 </head>
 <body>
@@ -1103,6 +1170,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
       </div>
     </header>
     {update_banner}
+    {first_run_setup}
     {f'<div class="message">{html.escape(message)}</div>' if message else ''}
     <section class="module-grid">
       {module_grid}
@@ -1299,6 +1367,10 @@ def make_handler(agent: StationAgent):
                     return
 
                 fields = parse_form(self)
+                if path == "/setup/token":
+                    agent.write_quick_setup(fields)
+                    redirect(self, "Station connected")
+                    return
                 if path == "/config/save":
                     agent.write_config_from_form(fields)
                     redirect(self, "Config saved")
@@ -1336,6 +1408,10 @@ def make_handler(agent: StationAgent):
                         redirect(self, "Station Agent is up to date")
                     else:
                         redirect(self, text(info.get("message")) or "Update check failed")
+                    return
+                if path == "/update/install":
+                    target = agent.download_and_start_update()
+                    redirect(self, f"Starting installer: {target.name}")
                     return
                 self.send_json(404, {"ok": False, "message": "Not found."})
             except Exception as exc:
