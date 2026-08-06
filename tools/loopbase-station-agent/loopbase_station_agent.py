@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.2.9"
+AGENT_VERSION_NUMBER = "0.3.0"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -1146,7 +1146,9 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
             <h2>Loopbase Station Agent {html.escape(update_version)} is ready</h2>
             <p class="muted">Current version: {html.escape(AGENT_VERSION_NUMBER)}.</p>
           </div>
-          <a class="button" href="/update/download">Update Now</a>
+          <form method="post" action="/update/open-browser">
+            <button type="submit">Update Now</button>
+          </form>
         </div>
         """
     elif update_message:
@@ -1646,6 +1648,21 @@ def redirect(handler: BaseHTTPRequestHandler, message: str = "") -> None:
     handler.end_headers()
 
 
+def open_url_in_default_browser(url: str) -> None:
+    if not url:
+        raise RuntimeError("No URL was provided.")
+    if os.name == "nt":
+        subprocess.Popen(
+            ["cmd.exe", "/c", "start", "", url],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return
+    webbrowser.open(url)
+
+
 def make_handler(agent: StationAgent):
     class Handler(BaseHTTPRequestHandler):
         def end_headers(self) -> None:
@@ -1746,6 +1763,14 @@ def make_handler(agent: StationAgent):
                         redirect(self, "Station Agent is up to date")
                     else:
                         redirect(self, text(info.get("message")) or "Update check failed")
+                    return
+                if path == "/update/open-browser":
+                    info = agent.check_for_updates(force=True)
+                    download_url = text(info.get("download_url"))
+                    if not download_url:
+                        raise RuntimeError("The update manifest did not include a download URL.")
+                    open_url_in_default_browser(download_url)
+                    redirect(self, f"Opening installer download in your browser: {download_url}")
                     return
                 if path == "/update/install":
                     redirect(self, "Use Update Now to download the latest installer from Loopbase.")
