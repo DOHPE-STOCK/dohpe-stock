@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
 
 #[cfg(target_os = "windows")]
@@ -31,7 +31,7 @@ fn stop_agent(app_handle: &tauri::AppHandle) {
             let _ = child.kill();
         }
         *guard = None;
-    }
+    };
 }
 
 fn candidate_agent_paths(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
@@ -114,7 +114,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&open, &quit])?;
 
     TrayIconBuilder::with_id("loopbase-station-agent")
-        .icon(tauri::include_image!("../icons/icon.png"))
+        .icon(tauri::include_image!("icons/icon.png"))
         .tooltip("Loopbase Station Agent is running")
         .menu(&menu)
         .show_menu_on_left_click(false)

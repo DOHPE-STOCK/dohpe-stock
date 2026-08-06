@@ -29,6 +29,7 @@
     "publisher": "Loopbase",
     "shortDescription": "Loopbase local hardware station companion",
     "longDescription": "Local hardware companion for Loopbase remote printing, photography stations, file watchers, RFID reader/writers and RFID zone monitors.",
+    "icon": ["icons/icon.ico"],
     "resources": ["Loopbase Station Agent.exe"],
     "externalBin": []
   }
