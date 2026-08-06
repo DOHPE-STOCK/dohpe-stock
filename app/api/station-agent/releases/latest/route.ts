@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.2.6'
+const STATION_AGENT_VERSION = '0.2.7'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -27,9 +27,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-06',
     release_notes: [
-      'Changes Update Now to open the latest installer download in the browser instead of using a fragile local cache.',
+      'Changes Update Now to a direct hosted installer link, bypassing local updater execution entirely.',
       'Avoids starting a duplicate helper if a local Station Agent is already running.',
-      'Keeps the self-install route available internally, but no longer uses it as the normal customer update path.',
+      'Disables the fragile local self-install endpoint as a normal customer path.',
     ],
   })
 }
