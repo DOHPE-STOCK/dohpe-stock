@@ -117,6 +117,21 @@ article small {
   font-weight: 850;
 }
 
+.fallback {
+  margin: 10px 0 0;
+  color: #9ca8b3;
+  font-weight: 800;
+}
+
+.fallback a {
+  color: #9cf0c7;
+  font-weight: 950;
+}
+
+.hidden {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .hero {
     flex-direction: column;
