@@ -1,9 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
@@ -15,6 +17,11 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct AgentProcess(Mutex<Option<Child>>);
+
+fn local_agent_ready() -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], 8790));
+    TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
+}
 
 fn show_main_window(app_handle: &tauri::AppHandle) {
     if let Some(window) = app_handle.get_webview_window("main") {
@@ -68,6 +75,10 @@ fn agent_config_path(app_handle: &tauri::AppHandle) -> PathBuf {
 fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
     let mut process_guard = state.0.lock().expect("agent process lock");
     if process_guard.is_some() {
+        return;
+    }
+
+    if local_agent_ready() {
         return;
     }
 

@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.2.4"
+AGENT_VERSION_NUMBER = "0.2.5"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -754,7 +754,30 @@ class StationAgent:
 
     def launch_installer(self, target: Path) -> None:
         if sys.platform.startswith("win"):
-            os.startfile(str(target))  # type: ignore[attr-defined]
+            script = target.parent / "run-loopbase-update.cmd"
+            parent_pid = os.getppid()
+            script.write_text(
+                "\r\n".join(
+                    [
+                        "@echo off",
+                        "timeout /t 2 /nobreak >nul",
+                        f'taskkill /PID {parent_pid} /F >nul 2>nul',
+                        'taskkill /IM "loopbase-station-desktop.exe" /F >nul 2>nul',
+                        'taskkill /IM "Loopbase Station Agent.exe" /F >nul 2>nul',
+                        f'start "" "{target}"',
+                    ]
+                )
+                + "\r\n",
+                encoding="utf-8",
+            )
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(script)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
             return
         subprocess.Popen([str(target)], close_fds=True)
 

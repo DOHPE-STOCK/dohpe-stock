@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.2.4'
+const STATION_AGENT_VERSION = '0.2.5'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -27,10 +27,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-06',
     release_notes: [
-      'Downloads updates into a fresh folder each time to avoid damaged Windows cache paths.',
-      'Falls back to the Windows temp folder if the normal Loopbase update cache is unreadable.',
-      'Validates the downloaded installer before launching it.',
-      'Launches updates through the Windows shell to avoid temp-file execution issues.',
+      'Closes the desktop shell and helper automatically before launching an update installer.',
+      'Avoids starting a duplicate helper if a local Station Agent is already running.',
+      'Downloads updates into a fresh folder each time and falls back to Windows temp if needed.',
     ],
   })
 }
