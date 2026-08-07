@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.23'
+const CURRENT_VERSION = '0.3.25'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -243,6 +243,8 @@ async function checkForUpdates(showStatus = false) {
       if (buildNumberEl) buildNumberEl.classList.remove('hidden')
       if (showStatus) {
         setBuildNumberNotice('Up to date', 'success', 2000)
+        setStatus('Station Agent is up to date.')
+        fadeStatusSoon()
       }
       return
     }
@@ -251,11 +253,13 @@ async function checkForUpdates(showStatus = false) {
     if (headerUpdateNowEl) headerUpdateNowEl.textContent = `Build ${latestVersion} available - Update now`
     headerUpdateNowEl?.classList.remove('hidden')
     buildNumberEl?.classList.add('hidden')
+    if (showStatus) setStatus(`Loopbase Station Agent ${latestVersion} is ready.`)
   } catch {
     headerUpdateNowEl?.classList.add('hidden')
     buildNumberEl?.classList.remove('hidden')
     if (showStatus) {
       setBuildNumberNotice('Check failed', 'failed', 2500)
+      setStatus('Update check failed. Check your internet connection and Loopbase URL.')
     }
     // Update checks are non-blocking. The local station should still run.
   }
@@ -372,11 +376,6 @@ async function installAvailableUpdate(button) {
     setStatus('Station Agent desktop API did not load, so the app cannot run the installer from inside Windows.')
     return
   }
-
-  const confirmed = window.confirm(
-    `Update Loopbase Station Agent to ${availableUpdate.version}? Loopbase will close, update automatically, keep saved station settings, and reopen.`
-  )
-  if (!confirmed) return
 
   button.disabled = true
   button.textContent = 'Updating...'
