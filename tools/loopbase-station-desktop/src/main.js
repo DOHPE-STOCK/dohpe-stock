@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.15'
+const CURRENT_VERSION = '0.3.16'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 const invoke = window.__TAURI__?.core?.invoke
@@ -27,6 +27,7 @@ const configAppUrlEl = document.querySelector('#configAppUrl')
 
 let availableUpdate = null
 let statusFadeTimer = null
+let buildNumberResetTimer = null
 let currentStationConfig = null
 
 const sections = {
@@ -63,6 +64,31 @@ function fadeStatusSoon() {
   }, 2000)
 }
 
+function resetBuildNumberLabel(delay = 0) {
+  if (!buildNumberEl) return
+  clearTimeout(buildNumberResetTimer)
+  const reset = () => {
+    buildNumberEl.disabled = false
+    buildNumberEl.textContent = `Build ${CURRENT_VERSION}`
+    buildNumberEl.classList.remove('checking', 'success', 'failed')
+  }
+  if (delay > 0) {
+    buildNumberResetTimer = setTimeout(reset, delay)
+    return
+  }
+  reset()
+}
+
+function setBuildNumberNotice(message, className = '', resetDelay = 0) {
+  if (!buildNumberEl) return
+  clearTimeout(buildNumberResetTimer)
+  buildNumberEl.disabled = false
+  buildNumberEl.textContent = message
+  buildNumberEl.classList.remove('checking', 'success', 'failed')
+  if (className) buildNumberEl.classList.add(className)
+  if (resetDelay > 0) resetBuildNumberLabel(resetDelay)
+}
+
 function setBadge(message, className = '') {
   if (!connectionBadgeEl) return
   connectionBadgeEl.textContent = message
@@ -94,7 +120,7 @@ function renderStationConfig(config) {
 
 function renderSectionData(config = currentStationConfig) {
   if (!config) return
-  if (buildNumberEl) buildNumberEl.textContent = `Build ${CURRENT_VERSION}`
+  resetBuildNumberLabel()
   if (configStationNameEl) configStationNameEl.textContent = config.display_station_name || config.station_name || 'Unnamed station'
   if (configAppUrlEl) configAppUrlEl.textContent = config.app_url || 'https://loopbase.io'
   if (remotePrintStateEl) remotePrintStateEl.textContent = config.remote_print_enabled ? 'Enabled' : 'Not enabled'
@@ -175,12 +201,13 @@ async function waitForAgent() {
 }
 
 async function checkForUpdates(showStatus = false) {
+  resetBuildNumberLabel()
   if (showStatus) {
-    setStatus('Checking for Station Agent updates...')
+    setBuildNumberNotice('Checking...', 'checking')
   }
   try {
     const response = await fetch(manifestUrl, { cache: 'no-store' })
-    if (!response.ok) return
+    if (!response.ok) throw new Error('Manifest unavailable')
     const manifest = await response.json()
     const latestVersion = manifest?.version
     const downloadUrl = manifest?.download_url
@@ -189,23 +216,20 @@ async function checkForUpdates(showStatus = false) {
       headerUpdateNowEl?.classList.add('hidden')
       if (buildNumberEl) buildNumberEl.classList.remove('hidden')
       if (showStatus) {
-        setStatus('Station Agent is up to date.')
-        fadeStatusSoon()
+        setBuildNumberNotice('Up to date', 'success', 2000)
       }
       return
     }
 
     availableUpdate = manifest
-    if (headerUpdateNowEl) headerUpdateNowEl.textContent = `Update ${latestVersion} available`
+    if (headerUpdateNowEl) headerUpdateNowEl.textContent = `Build ${latestVersion} available - Update now`
     headerUpdateNowEl?.classList.remove('hidden')
     buildNumberEl?.classList.add('hidden')
-    if (showStatus) setStatus(`Loopbase Station Agent ${latestVersion} is ready.`)
   } catch {
     headerUpdateNowEl?.classList.add('hidden')
     buildNumberEl?.classList.remove('hidden')
     if (showStatus) {
-      setStatus('Update check failed.')
-      fadeStatusSoon()
+      setBuildNumberNotice('Check failed', 'failed', 2500)
     }
     // Update checks are non-blocking. The local station should still run.
   }
@@ -224,6 +248,14 @@ async function loadPrinterSummary() {
 
 headerUpdateNowEl?.addEventListener('click', async () => {
   void installAvailableUpdate(headerUpdateNowEl)
+})
+
+buildNumberEl?.addEventListener('click', async () => {
+  if (buildNumberEl.disabled) return
+  buildNumberEl.disabled = true
+  void checkForUpdates(true).finally(() => {
+    if (!availableUpdate && buildNumberEl) buildNumberEl.disabled = false
+  })
 })
 
 async function installAvailableUpdate(button) {

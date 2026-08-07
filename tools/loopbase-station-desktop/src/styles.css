@@ -43,10 +43,39 @@ body {
 }
 
 .build-number {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
   color: #8e949e;
+  cursor: pointer;
+  font: inherit;
   font-size: 12px;
   font-weight: 850;
+  padding: 6px 9px;
   white-space: nowrap;
+}
+
+.build-number:hover {
+  border-color: rgba(255, 255, 255, .12);
+  background: rgba(255, 255, 255, .05);
+  color: #d7dbe2;
+}
+
+.build-number:disabled {
+  cursor: default;
+  opacity: .9;
+}
+
+.build-number.checking {
+  color: #d9e7ff;
+}
+
+.build-number.success {
+  color: #9bf2bb;
+}
+
+.build-number.failed {
+  color: #ffb4b4;
 }
 
 .header-update {
