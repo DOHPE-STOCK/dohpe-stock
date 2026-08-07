@@ -294,14 +294,20 @@ fn install_station_agent_update(
 
     let update_script = base_dir.join("run-loopbase-update.cmd");
     let current_pid = std::process::id();
+    let restart_line = std::env::current_exe()
+        .ok()
+        .map(|path| format!("start \"\" \"{}\"\r\n", path.display()))
+        .unwrap_or_default();
     let script = format!(
         "@echo off\r\n\
 timeout /t 2 /nobreak >nul\r\n\
 taskkill /PID {current_pid} /F >nul 2>nul\r\n\
 taskkill /IM \"loopbase-station-desktop.exe\" /F >nul 2>nul\r\n\
 taskkill /IM \"Loopbase Station Agent.exe\" /F >nul 2>nul\r\n\
-start \"\" \"{installer}\"\r\n",
-        installer = installer_path.display()
+start \"\" /wait \"{installer}\" /S\r\n\
+{restart_line}",
+        installer = installer_path.display(),
+        restart_line = restart_line
     );
     let mut handle = fs::File::create(&update_script)
         .map_err(|error| format!("Could not create update launcher: {error}"))?;
@@ -319,7 +325,7 @@ start \"\" \"{installer}\"\r\n",
         .map_err(|error| format!("Could not start update installer: {error}"))?;
 
     Ok(format!(
-        "Loopbase Station Agent {safe_version} installer started. Your station settings are kept."
+        "Loopbase Station Agent {safe_version} update started. The app will restart automatically and your station settings are kept."
     ))
 }
 
