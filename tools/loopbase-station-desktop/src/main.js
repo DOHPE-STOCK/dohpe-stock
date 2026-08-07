@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.18'
+const CURRENT_VERSION = '0.3.19'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -334,9 +334,8 @@ function renderPhotoConfig(data) {
     photoSourcesEl.innerHTML = sources.map((source, index) => `
       <div class="source-card" data-source-index="${index}">
         <h3>Source ${index + 1}</h3>
-        <div class="form-grid">
+        <div>
           <label>Source name<input data-photo-field="name" value="${escapeHtml(source.name || `Photo Source ${index + 1}`)}" placeholder="Camera import folder"></label>
-          <label>Source token<input data-photo-field="token" value="${escapeHtml(source.token || '')}" placeholder="Paste source token from Loopbase"></label>
         </div>
         <div class="path-row">
           <label>Watch folder<input data-photo-field="watch_folder" value="${escapeHtml(source.watch_folder || '')}" placeholder="C:\\Photography\\Station 1 or \\\\NAS\\Photos\\Station 1"></label>

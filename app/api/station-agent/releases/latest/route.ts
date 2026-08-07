@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
-const STATION_AGENT_VERSION = '0.3.18'
+const STATION_AGENT_VERSION = '0.3.19'
 const INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
 const UPDATER_INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.download'
 
@@ -49,9 +49,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Adds printer selection and allowed-printer controls to the Remote Printer section.',
-      'Adds Windows folder selection for photography watch folders.',
-      'Keeps update checks routed through the local Station Agent service.',
+      'Automatically links photography watch folders to the connected station token.',
+      'Removes manual photo source token entry from the Station Agent desktop flow.',
+      'Keeps the neutral installer download used by the in-app updater.',
     ],
   })
 }

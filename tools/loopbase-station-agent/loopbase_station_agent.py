@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.18"
+AGENT_VERSION_NUMBER = "0.3.19"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -651,7 +651,7 @@ class StationAgent:
             row.update(
                 {
                     "name": text(incoming.get("name")) or f"Photo Source {index + 1}",
-                    "token": text(incoming.get("token")),
+                    "token": text(incoming.get("token")) or text(previous.get("token")),
                     "watch_folder": text(incoming.get("watch_folder")),
                     "processed_folder": text(incoming.get("processed_folder")),
                     "trash_folder": text(incoming.get("trash_folder")),
@@ -664,11 +664,66 @@ class StationAgent:
 
         data["app_url"] = cfg["app_url"]
         data["enable_processing_jobs"] = True
-        data["sources"] = sources
+        data["sources"] = self.provision_photo_source_tokens(cfg, sources)
         self.config = cfg
         save_config(self.config_path, cfg)
         save_config(config_path, data)
         return self.photo_config_payload()
+
+    def provision_photo_source_tokens(self, cfg: dict[str, Any], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        active_sources = [row for row in sources if text(row.get("watch_folder"))]
+        if not active_sources:
+            return sources
+
+        station_token = text((cfg.get("printer") or {}).get("station_token"))
+        if not station_token:
+            raise RuntimeError("Connect this station with a station token before saving photography folders.")
+
+        app_url = text(cfg.get("app_url")) or "https://loopbase.io"
+        payload = {
+            "station_token": station_token,
+            "station_name": text(cfg.get("station_name")) or "Station Agent",
+            "sources": [
+                {
+                    "name": text(row.get("name")),
+                    "watch_folder": text(row.get("watch_folder")),
+                    "processed_folder": text(row.get("processed_folder")),
+                    "trash_folder": text(row.get("trash_folder")),
+                }
+                for row in active_sources
+            ],
+        }
+        request = urllib.request.Request(
+            absolute_app_url(app_url, "/api/station-agent/photo-sources"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": AGENT_VERSION,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = response.read().decode("utf-8")
+        result = json.loads(body)
+        if not result.get("ok"):
+            raise RuntimeError(text(result.get("message")) or "Loopbase could not create photo sources.")
+
+        provisioned = {
+            text(row.get("name")).lower(): row
+            for row in result.get("sources", [])
+            if isinstance(row, dict) and text(row.get("name"))
+        }
+        merged: list[dict[str, Any]] = []
+        for row in sources:
+            match = provisioned.get(text(row.get("name")).lower())
+            if match and text(match.get("token")):
+                row = dict(row)
+                row["token"] = text(match.get("token"))
+                row["source_id"] = text(match.get("id"))
+                row["station_id"] = text(match.get("station_id"))
+            merged.append(row)
+        return merged
 
     def photo_config_payload(self) -> dict[str, Any]:
         cfg = deep_merge(default_config(), self.config)
