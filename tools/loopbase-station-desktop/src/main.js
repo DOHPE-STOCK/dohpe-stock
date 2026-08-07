@@ -1,13 +1,11 @@
-const CURRENT_VERSION = '0.3.14'
+const CURRENT_VERSION = '0.3.15'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 const invoke = window.__TAURI__?.core?.invoke
 
 const statusEl = document.querySelector('#status')
-const updateBannerEl = document.querySelector('#updateBanner')
-const updateTitleEl = document.querySelector('#updateTitle')
-const updateNotesEl = document.querySelector('#updateNotes')
-const updateNowEl = document.querySelector('#updateNow')
+const headerUpdateNowEl = document.querySelector('#headerUpdateNow')
+const buildNumberEl = document.querySelector('#buildNumber')
 const connectionBadgeEl = document.querySelector('#connectionBadge')
 const setupPanelEl = document.querySelector('#setupPanel')
 const setupFormEl = document.querySelector('#setupForm')
@@ -22,10 +20,6 @@ const sectionEyebrowEl = document.querySelector('#sectionEyebrow')
 const sectionTitleEl = document.querySelector('#sectionTitle')
 const moduleCards = [...document.querySelectorAll('[data-section]')]
 const sectionPanels = [...document.querySelectorAll('[data-panel]')]
-const checkUpdatesEl = document.querySelector('#checkUpdates')
-const sectionUpdateNowEl = document.querySelector('#sectionUpdateNow')
-const currentVersionEl = document.querySelector('#currentVersion')
-const latestVersionEl = document.querySelector('#latestVersion')
 const printerCountEl = document.querySelector('#printerCount')
 const remotePrintStateEl = document.querySelector('#remotePrintState')
 const configStationNameEl = document.querySelector('#configStationName')
@@ -41,7 +35,6 @@ const sections = {
   rfid: { eyebrow: 'RFID', title: 'RFID Reader / Writer' },
   zones: { eyebrow: 'Zone', title: 'RFID Zone Monitor' },
   config: { eyebrow: 'Config', title: 'Station Config' },
-  updates: { eyebrow: 'Build', title: 'Updates' },
 }
 
 function compareVersions(left, right) {
@@ -101,8 +94,7 @@ function renderStationConfig(config) {
 
 function renderSectionData(config = currentStationConfig) {
   if (!config) return
-  if (currentVersionEl) currentVersionEl.textContent = CURRENT_VERSION
-  if (latestVersionEl) latestVersionEl.textContent = availableUpdate?.version || config.update?.version || 'Not checked yet'
+  if (buildNumberEl) buildNumberEl.textContent = `Build ${CURRENT_VERSION}`
   if (configStationNameEl) configStationNameEl.textContent = config.display_station_name || config.station_name || 'Unnamed station'
   if (configAppUrlEl) configAppUrlEl.textContent = config.app_url || 'https://loopbase.io'
   if (remotePrintStateEl) remotePrintStateEl.textContent = config.remote_print_enabled ? 'Enabled' : 'Not enabled'
@@ -118,11 +110,7 @@ function openSection(section) {
   })
   moduleGridEl?.classList.add('hidden')
   moduleViewEl?.classList.remove('hidden')
-  updateBannerEl?.classList.add('hidden')
   renderSectionData()
-  if (section === 'updates') {
-    void checkForUpdates(true)
-  }
   if (section === 'printer') {
     void loadPrinterSummary()
   }
@@ -189,7 +177,6 @@ async function waitForAgent() {
 async function checkForUpdates(showStatus = false) {
   if (showStatus) {
     setStatus('Checking for Station Agent updates...')
-    if (latestVersionEl) latestVersionEl.textContent = 'Checking...'
   }
   try {
     const response = await fetch(manifestUrl, { cache: 'no-store' })
@@ -199,8 +186,8 @@ async function checkForUpdates(showStatus = false) {
     const downloadUrl = manifest?.download_url
     if (!latestVersion || !downloadUrl || compareVersions(latestVersion, CURRENT_VERSION) <= 0) {
       availableUpdate = null
-      if (latestVersionEl) latestVersionEl.textContent = latestVersion || 'Up to date'
-      if (sectionUpdateNowEl) sectionUpdateNowEl.disabled = true
+      headerUpdateNowEl?.classList.add('hidden')
+      if (buildNumberEl) buildNumberEl.classList.remove('hidden')
       if (showStatus) {
         setStatus('Station Agent is up to date.')
         fadeStatusSoon()
@@ -209,15 +196,17 @@ async function checkForUpdates(showStatus = false) {
     }
 
     availableUpdate = manifest
-    updateTitleEl.textContent = `Loopbase Station Agent ${latestVersion} is ready`
-    updateNotesEl.textContent = `Current version: ${CURRENT_VERSION}. This will download and install inside the Windows app. Saved station settings will be kept.`
-    if (latestVersionEl) latestVersionEl.textContent = latestVersion
-    if (sectionUpdateNowEl) sectionUpdateNowEl.disabled = false
-    if (moduleViewEl?.classList.contains('hidden')) updateBannerEl?.classList.remove('hidden')
+    if (headerUpdateNowEl) headerUpdateNowEl.textContent = `Update ${latestVersion} available`
+    headerUpdateNowEl?.classList.remove('hidden')
+    buildNumberEl?.classList.add('hidden')
     if (showStatus) setStatus(`Loopbase Station Agent ${latestVersion} is ready.`)
   } catch {
-    if (latestVersionEl) latestVersionEl.textContent = 'Check failed'
-    if (showStatus) setStatus('Update check failed. Check your internet connection and Loopbase URL.')
+    headerUpdateNowEl?.classList.add('hidden')
+    buildNumberEl?.classList.remove('hidden')
+    if (showStatus) {
+      setStatus('Update check failed.')
+      fadeStatusSoon()
+    }
     // Update checks are non-blocking. The local station should still run.
   }
 }
@@ -233,12 +222,8 @@ async function loadPrinterSummary() {
   }
 }
 
-updateNowEl?.addEventListener('click', async () => {
-  void installAvailableUpdate(updateNowEl)
-})
-
-sectionUpdateNowEl?.addEventListener('click', async () => {
-  void installAvailableUpdate(sectionUpdateNowEl)
+headerUpdateNowEl?.addEventListener('click', async () => {
+  void installAvailableUpdate(headerUpdateNowEl)
 })
 
 async function installAvailableUpdate(button) {
@@ -312,9 +297,5 @@ moduleCards.forEach((card) => {
 })
 
 backToModulesEl?.addEventListener('click', closeSection)
-checkUpdatesEl?.addEventListener('click', () => {
-  void checkForUpdates(true)
-})
-
 waitForAgent()
 checkForUpdates()

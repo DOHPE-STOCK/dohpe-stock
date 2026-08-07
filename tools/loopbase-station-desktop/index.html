@@ -10,21 +10,14 @@
     <main class="app-window">
       <div class="window-bar">
         <div id="connectionBadge" class="connection-badge">Starting</div>
+        <button id="headerUpdateNow" class="header-update hidden" type="button">Update available</button>
+        <span id="buildNumber" class="build-number">Build 0.3.15</span>
       </div>
 
       <section class="hero">
         <div class="logo-mark">LB</div>
         <h1>Loopbase Station</h1>
         <p class="muted">Local hardware, printing, photography and RFID services for this PC.</p>
-      </section>
-
-      <section id="updateBanner" class="update-banner hidden">
-        <div>
-          <p class="eyebrow">Update available</p>
-          <h2 id="updateTitle">Loopbase Station Agent update is ready</h2>
-          <p id="updateNotes" class="muted">This will install inside the Windows app and keep saved station settings.</p>
-        </div>
-        <button id="updateNow" class="button" type="button">Update Now</button>
       </section>
 
       <section id="setupPanel" class="setup-panel hidden">
@@ -56,7 +49,6 @@
         <button class="module-card" type="button" data-section="rfid"><span>RFID</span><strong>RFID Reader / Writer</strong><small>RFID table receiving and tag control.</small></button>
         <button class="module-card" type="button" data-section="zones"><span>Zone</span><strong>RFID Zone Monitor</strong><small>Entrances, exits, changing rooms and stock rooms.</small></button>
         <button class="module-card" type="button" data-section="config"><span>Config</span><strong>Station Config</strong><small>Token, Loopbase URL and local service settings.</small></button>
-        <button class="module-card" type="button" data-section="updates"><span>Build</span><strong>Updates</strong><small>Install the latest Loopbase Station Agent.</small></button>
       </section>
 
       <section id="moduleView" class="module-view hidden">
@@ -111,18 +103,6 @@
           <div class="setting-row"><span>Loopbase URL</span><strong id="configAppUrl">Loading...</strong></div>
         </div>
 
-        <div class="section-body hidden" data-panel="updates">
-          <div class="summary-card">
-            <strong>Updates</strong>
-            <p class="muted">Check for the latest Loopbase Station Agent and install it inside this Windows app.</p>
-          </div>
-          <div class="setting-row"><span>Current version</span><strong id="currentVersion">Loading...</strong></div>
-          <div class="setting-row"><span>Latest version</span><strong id="latestVersion">Not checked yet</strong></div>
-          <div class="action-row">
-            <button id="checkUpdates" class="button" type="button">Check for Updates</button>
-            <button id="sectionUpdateNow" class="button secondary-button" type="button" disabled>Update Now</button>
-          </div>
-        </div>
       </section>
 
       <p id="status" class="status">Desktop script has not loaded yet...</p>
