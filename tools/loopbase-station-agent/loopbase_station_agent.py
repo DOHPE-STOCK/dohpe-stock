@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.12"
+AGENT_VERSION_NUMBER = "0.3.13"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -402,7 +402,7 @@ class StationAgent:
     def write_quick_setup(self, fields: dict[str, str]) -> None:
         cfg = deep_merge(default_config(), self.config)
         app_url = text(fields.get("app_url")) or text(cfg.get("app_url")) or "https://loopbase.io"
-        station_name = text(fields.get("station_name")) or text(cfg.get("station_name")) or "This station"
+        station_name = text(fields.get("station_name")) or text(cfg.get("station_name"))
         station_token = text(fields.get("station_token"))
 
         cfg["app_url"] = app_url.rstrip("/")
@@ -787,13 +787,14 @@ class StationAgent:
     def desktop_config(self) -> dict[str, Any]:
         cfg = deep_merge(default_config(), self.config)
         printer = cfg["printer"]
-        station_name = text(cfg.get("station_name")) or "This station"
+        station_name = text(cfg.get("station_name"))
         station_token = text(printer.get("station_token"))
         return {
             "ok": True,
             "version": AGENT_VERSION,
             "version_number": AGENT_VERSION_NUMBER,
             "station_name": station_name,
+            "display_station_name": station_name or "Unnamed station",
             "app_url": text(cfg.get("app_url")) or "https://loopbase.io",
             "connected": bool(station_token),
             "remote_print_enabled": bool_value(printer.get("remote_enabled")) and bool_value(printer.get("remote_poll_enabled")),

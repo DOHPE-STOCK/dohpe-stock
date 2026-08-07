@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.12'
+const CURRENT_VERSION = '0.3.13'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 const invoke = window.__TAURI__?.core?.invoke
@@ -18,6 +18,7 @@ const moduleGridEl = document.querySelector('#moduleGrid')
 const saveSetupEl = document.querySelector('#saveSetup')
 
 let availableUpdate = null
+let statusFadeTimer = null
 
 function compareVersions(left, right) {
   const a = String(left || '').split('.').map((part) => Number.parseInt(part, 10) || 0)
@@ -31,7 +32,18 @@ function compareVersions(left, right) {
 }
 
 function setStatus(message) {
-  if (statusEl) statusEl.textContent = message
+  if (!statusEl) return
+  clearTimeout(statusFadeTimer)
+  statusEl.textContent = message
+  statusEl.classList.remove('status-faded')
+}
+
+function fadeStatusSoon() {
+  if (!statusEl) return
+  clearTimeout(statusFadeTimer)
+  statusFadeTimer = setTimeout(() => {
+    statusEl.classList.add('status-faded')
+  }, 2000)
 }
 
 function setBadge(message, className = '') {
@@ -42,13 +54,16 @@ function setBadge(message, className = '') {
 
 function renderStationConfig(config) {
   if (appUrlEl && config?.app_url) appUrlEl.value = config.app_url
-  if (stationNameEl && config?.station_name) stationNameEl.value = config.station_name
+  if (stationNameEl) {
+    stationNameEl.value = config?.connected && config?.station_name ? config.station_name : ''
+  }
 
   if (config?.connected) {
-    setBadge(`✓ ${config.station_name || 'Station connected'}`, 'connected')
+    setBadge(config.display_station_name || config.station_name || 'Station connected', 'connected')
     setupPanelEl?.classList.add('hidden')
     moduleGridEl?.classList.remove('hidden')
-    setStatus(`Connected to Loopbase as ${config.station_name || 'this station'}.`)
+    setStatus('Station connected.')
+    fadeStatusSoon()
     return
   }
 

@@ -7,18 +7,26 @@
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <section class="hero">
-        <div>
-          <p class="eyebrow">Loopbase Station Agent</p>
-          <h1>Station Control</h1>
+    <main class="app-window">
+      <div class="window-bar">
+        <div class="window-dots" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
         </div>
-        <div id="connectionBadge" class="connection-badge">Starting...</div>
+        <strong>Loopbase Station Agent</strong>
+        <div id="connectionBadge" class="connection-badge">Starting</div>
+      </div>
+
+      <section class="hero">
+        <div class="logo-mark">LB</div>
+        <h1>Loopbase Station</h1>
+        <p class="muted">Local hardware, printing, photography and RFID services for this PC.</p>
       </section>
 
       <section id="updateBanner" class="update-banner hidden">
         <div>
-          <p class="eyebrow">Update Available</p>
+          <p class="eyebrow">Update available</p>
           <h2 id="updateTitle">Loopbase Station Agent update is ready</h2>
           <p id="updateNotes" class="muted">This will install inside the Windows app and keep saved station settings.</p>
         </div>
@@ -27,14 +35,14 @@
 
       <section id="setupPanel" class="setup-panel hidden">
         <div>
-          <p class="eyebrow">First Run</p>
+          <p class="eyebrow">First run</p>
           <h2>Connect this station</h2>
-          <p class="muted">Enter station token for this device here.</p>
+          <p class="muted">Paste the token generated in Loopbase settings to link this PC to your company.</p>
         </div>
         <form id="setupForm" class="setup-form">
           <label>
             Station name
-            <input id="stationName" name="station_name" autocomplete="off" placeholder="Photo station 1" />
+            <input id="stationName" name="station_name" autocomplete="off" placeholder="Enter the name for your station here" />
           </label>
           <label>
             Station token
@@ -49,12 +57,12 @@
       </section>
 
       <section id="moduleGrid" class="grid hidden">
-        <article><strong>Remote Printer</strong><small>ZPL labels and A4 jobs from other company PCs.</small></article>
-        <article><strong>Photography Stations</strong><small>Photo sources, station setup and phone pairing.</small></article>
-        <article><strong>RFID Reader / Writer</strong><small>RFID table receiving and tag control.</small></article>
-        <article><strong>RFID Zone Monitor</strong><small>Entrances, exits, changing rooms and stock rooms.</small></article>
-        <article><strong>Config</strong><small>Station token, Loopbase URL and general settings.</small></article>
-        <article><strong>Updates</strong><small>Check for and download the latest Station Agent.</small></article>
+        <article><span>Print</span><strong>Remote Printer</strong><small>ZPL labels and A4 jobs from company devices.</small></article>
+        <article><span>Photo</span><strong>Photography Stations</strong><small>Watched folders, photo sources and phone pairing.</small></article>
+        <article><span>RFID</span><strong>RFID Reader / Writer</strong><small>RFID table receiving and tag control.</small></article>
+        <article><span>Zone</span><strong>RFID Zone Monitor</strong><small>Entrances, exits, changing rooms and stock rooms.</small></article>
+        <article><span>Config</span><strong>Station Config</strong><small>Token, Loopbase URL and local service settings.</small></article>
+        <article><span>Build</span><strong>Updates</strong><small>Install the latest Loopbase Station Agent.</small></article>
       </section>
 
       <p id="status" class="status">Desktop script has not loaded yet...</p>
