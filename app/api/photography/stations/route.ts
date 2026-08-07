@@ -18,6 +18,18 @@ function stationCode(value: string) {
   return value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
+function isLegacyDefaultStation(station: any) {
+  const name = text(station?.name).toLowerCase()
+  const code = text(station?.code).toLowerCase()
+  return (
+    name === 'default photo station' ||
+    code === 'default-photo-station' ||
+    code === 'default' ||
+    code === 'photo-station' ||
+    code === 'photo-1'
+  )
+}
+
 export async function GET(request: Request) {
   const access = await requireCompanyAccess(request)
   if (!access.ok) return failure(access.status, access.message)
@@ -54,7 +66,13 @@ export async function GET(request: Request) {
 
   if (error) return failure(500, error.message)
 
-  return NextResponse.json({ ok: true, stations: data || [] })
+  const stations = data || []
+  const hasRealStation = stations.some((station) => !isLegacyDefaultStation(station))
+  const visibleStations = hasRealStation
+    ? stations.filter((station) => !isLegacyDefaultStation(station))
+    : stations
+
+  return NextResponse.json({ ok: true, stations: visibleStations })
 }
 
 export async function POST(request: Request) {

@@ -204,3 +204,27 @@ export async function PATCH(request: Request) {
 
   return NextResponse.json({ ok: true, source: data })
 }
+
+export async function DELETE(request: Request) {
+  const access = await requireCompanyAccess(request, ['owner', 'admin', 'manager'])
+  if (!access.ok) return failure(access.status, access.message)
+  if (!companyHasOperationalAccess(access.company)) {
+    return failure(402, 'Company subscription is not active.')
+  }
+
+  const url = new URL(request.url)
+  const sourceId = text(url.searchParams.get('id') || url.searchParams.get('source_id'))
+
+  if (!sourceId) return failure(400, 'Source is required.')
+
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase
+    .from('photo_sources')
+    .delete()
+    .eq('company_id', access.company.id)
+    .eq('id', sourceId)
+
+  if (error) return failure(500, error.message)
+
+  return NextResponse.json({ ok: true })
+}

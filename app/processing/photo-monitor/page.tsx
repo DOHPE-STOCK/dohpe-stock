@@ -202,6 +202,10 @@ function originalImageUrl(image: ItemImage | null) {
   return image?.original_url || image?.processed_url || ''
 }
 
+function sourceIsUsable(source: PhotoSource) {
+  return source.enabled && !source.token_revoked_at && Boolean(source.token_last_four)
+}
+
 function itemTitle(item: any) {
   return item?.final_title || item?.ai_title || item?.basic_title || item?.website_title || item?.brand || 'Active item'
 }
@@ -1000,6 +1004,32 @@ export default function PhotoMonitorPage() {
       setMessage(data.token ? 'Photo source token rotated. Store the new token now.' : 'Photo source updated.')
     } catch (error: any) {
       setMessage(error.message || 'Could not update photo source.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deletePhotoSource(source: PhotoSource) {
+    const confirmed = window.confirm(`Remove photo source "${source.name}" from this station?`)
+    if (!confirmed) return
+
+    setBusy(true)
+    setMessage('')
+
+    try {
+      const response = await fetch(`/api/photography/sources?id=${encodeURIComponent(source.id)}`, {
+        method: 'DELETE',
+      })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Could not remove photo source.')
+      }
+
+      await fetchSources(false)
+      setMessage('Photo source removed.')
+    } catch (error: any) {
+      setMessage(error.message || 'Could not remove photo source.')
     } finally {
       setBusy(false)
     }
@@ -2398,6 +2428,10 @@ export default function PhotoMonitorPage() {
           ? calibratedRepresentation
           : null
   const phonePairExpanded = Boolean(phonePairUrl && (phonePairHoverExpanded || phonePairPinned))
+  const usablePhoneSources = sources.filter((source) => source.source_type === 'phone' && sourceIsUsable(source))
+  const usableFolderSources = sources.filter((source) => source.source_type === 'watched_folder' && sourceIsUsable(source))
+  const pairedDeviceLabel = `${usablePhoneSources.length} device${usablePhoneSources.length === 1 ? '' : 's'} paired`
+  const watchedFolderLabel = `${usableFolderSources.length} folder${usableFolderSources.length === 1 ? '' : 's'} active`
 
   function makeWorkerSetupUrl(sourceName: string, token: string) {
     if (!token) return ''
@@ -3119,18 +3153,28 @@ export default function PhotoMonitorPage() {
                                 Last activity: {formatShortDateTime(source.last_activity_at)}
                               </p>
                             </div>
-                            <span
-                              className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${
-                                source.enabled && !source.token_revoked_at
-                                  ? 'bg-green-600 text-white'
-                                  : 'bg-zinc-700 text-zinc-300'
-                              }`}
-                            >
-                              {source.enabled && !source.token_revoked_at ? 'ACTIVE' : 'OFF'}
-                            </span>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span
+                                className={`rounded-full px-2 py-1 text-[10px] font-black ${
+                                  sourceIsUsable(source)
+                                    ? 'bg-green-600 text-white'
+                                    : 'bg-zinc-700 text-zinc-300'
+                                }`}
+                              >
+                                {sourceIsUsable(source) ? 'READY' : 'OFF'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => deletePhotoSource(source)}
+                                disabled={busy}
+                                className="rounded bg-red-900 px-2 py-1 text-[10px] font-black text-red-100 disabled:opacity-50"
+                              >
+                                Remove
+                              </button>
+                            </div>
                           </div>
                           <p className="mt-2 text-xs font-bold text-zinc-500">
-                            {source.source_type} - token ****{source.token_last_four || 'none'}
+                            {source.source_type === 'phone' ? 'Paired phone' : 'Watched folder'} - token ****{source.token_last_four || 'none'}
                           </p>
                         </div>
                       ))
@@ -3905,6 +3949,9 @@ export default function PhotoMonitorPage() {
                   <h2 className="text-lg font-black">Session</h2>
                   <p className="text-xs font-bold text-zinc-300">
                     {session?.status === 'active' ? `${images.length} photo${images.length === 1 ? '' : 's'} ready` : 'No active session'}
+                  </p>
+                  <p className="mt-1 text-[11px] font-black text-emerald-300">
+                    {pairedDeviceLabel} - {watchedFolderLabel}
                   </p>
                 </div>
                 <span
