@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
-const STATION_AGENT_VERSION = '0.3.16'
+const STATION_AGENT_VERSION = '0.3.17'
 const INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
 
 function baseUrl(request: NextRequest) {
@@ -39,8 +39,8 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Makes the header build number check for updates when clicked.',
-      'Shows a short up-to-date confirmation when no update is available.',
+      'Routes desktop update checks through the local Station Agent service.',
+      'Keeps the build number as the quiet manual update check control.',
       'Shows a compact build-specific update action only when a newer build is available.',
     ],
   })

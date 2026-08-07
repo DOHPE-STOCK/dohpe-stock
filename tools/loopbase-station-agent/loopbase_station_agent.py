@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.16"
+AGENT_VERSION_NUMBER = "0.3.17"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -1804,6 +1804,9 @@ def make_handler(agent: StationAgent):
                 return
             if path == "/api/printers":
                 self.send_json(200, {"ok": True, "printers": list_windows_printers()})
+                return
+            if path == "/api/update/check":
+                self.send_json(200, agent.check_for_updates(force=True))
                 return
             if path == "/":
                 message = text((query.get("message") or [""])[0]).replace("+", " ")

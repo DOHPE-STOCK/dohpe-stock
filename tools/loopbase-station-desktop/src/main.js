@@ -1,6 +1,5 @@
-const CURRENT_VERSION = '0.3.16'
+const CURRENT_VERSION = '0.3.17'
 const dashboardUrl = 'http://127.0.0.1:8790'
-const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 const invoke = window.__TAURI__?.core?.invoke
 
 const statusEl = document.querySelector('#status')
@@ -206,9 +205,10 @@ async function checkForUpdates(showStatus = false) {
     setBuildNumberNotice('Checking...', 'checking')
   }
   try {
-    const response = await fetch(manifestUrl, { cache: 'no-store' })
-    if (!response.ok) throw new Error('Manifest unavailable')
+    const response = await fetch(`${dashboardUrl}/api/update/check`, { cache: 'no-store' })
+    if (!response.ok) throw new Error('Update service unavailable')
     const manifest = await response.json()
+    if (manifest?.ok === false) throw new Error(manifest?.message || 'Update check failed')
     const latestVersion = manifest?.version
     const downloadUrl = manifest?.download_url
     if (!latestVersion || !downloadUrl || compareVersions(latestVersion, CURRENT_VERSION) <= 0) {
