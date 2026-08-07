@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.26'
+const STATION_AGENT_VERSION = '0.3.27'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -25,9 +25,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Adds an explicit Windows printer picker so each station can expose multiple saved local printers.',
-      'Keeps the existing Station Agent UI layout unchanged.',
-      'Uses the corrected setup installer path for in-app updates.',
+      'Requires the build script to publish the desktop installer that matches the release version.',
+      'Keeps the Remote Printer picker for saving multiple local Windows printers.',
+      'Prevents stale setup installers being served as a newer update.',
     ],
   })
 }

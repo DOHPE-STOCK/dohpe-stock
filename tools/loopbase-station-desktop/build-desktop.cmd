@@ -6,6 +6,14 @@ set ORIGINAL_DIR=%CD%
 set STAGING_ROOT=C:\LoopbaseBuild
 set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop-%RANDOM%-%RANDOM%-%RANDOM%
 set npm_config_cache=%STAGING_ROOT%\npm-cache
+set APP_VERSION=
+for /F "usebackq delims=" %%V in (`node -p "require('./package.json').version"`) do (
+  set APP_VERSION=%%V
+)
+if "%APP_VERSION%"=="" (
+  echo Could not read desktop package version from package.json.
+  exit /b 1
+)
 
 call "..\loopbase-station-agent\build-release.cmd"
 if errorlevel 1 exit /b %errorlevel%
@@ -71,7 +79,7 @@ set RELEASE_DIR=%ORIGINAL_DIR%\..\..\public\downloads\loopbase-station-agent
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 set NSIS_DIR=%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis
 set SETUP_FILE=
-for /F "usebackq delims=" %%F in (`powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%NSIS_DIR%' -Filter 'Loopbase Station Agent_*_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName"`) do (
+for /F "usebackq delims=" %%F in (`powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%NSIS_DIR%' -Filter 'Loopbase Station Agent_%APP_VERSION%_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName"`) do (
   set SETUP_FILE=%%F
 )
 if not "%SETUP_FILE%"=="" (
@@ -79,4 +87,11 @@ if not "%SETUP_FILE%"=="" (
   if errorlevel 1 exit /b %errorlevel%
   echo Desktop installer copied to:
   echo %RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe
+  exit /b 0
 )
+echo.
+echo Could not find desktop setup installer for version %APP_VERSION%.
+echo Expected:
+echo %NSIS_DIR%\Loopbase Station Agent_%APP_VERSION%_x64-setup.exe
+echo Refusing to publish a stale installer.
+exit /b 1
