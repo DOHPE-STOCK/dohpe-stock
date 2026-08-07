@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.22"
+AGENT_VERSION_NUMBER = "0.3.21"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -1057,7 +1057,7 @@ class StationAgent:
                         f'taskkill /PID {parent_pid} /F >nul 2>nul',
                         'taskkill /IM "loopbase-station-desktop.exe" /F >nul 2>nul',
                         'taskkill /IM "Loopbase Station Agent.exe" /F >nul 2>nul',
-                        f'start "" "{target}" /S',
+                        f'start "" "{target}"',
                     ]
                 )
                 + "\r\n",
