@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.6'
+const STATION_AGENT_VERSION = '0.3.7'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -27,10 +27,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Adds a native Tauri update button so updates install from inside the Windows app.',
-      'Keeps station config, token, printer selections and photo source paths outside the installer.',
-      'Stops auto-redirecting the desktop shell so the native update control stays available.',
-      'Keeps local and network printer setup from the previous release.',
+      'Updater validation release for testing the native Windows app update flow from 0.3.6.',
+      'No station settings should be reset during this update.',
+      'Keeps the native update control available inside the Tauri desktop shell.',
     ],
   })
 }
