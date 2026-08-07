@@ -324,7 +324,7 @@ start \"\" \"{installer}\"\r\n",
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open_dashboard", "Open Station Dashboard", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open_dashboard", "Open Loopbase Station Agent", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit_loopbase", "Quit Loopbase Station Agent", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
 

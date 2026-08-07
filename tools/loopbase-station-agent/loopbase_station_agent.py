@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.10"
+AGENT_VERSION_NUMBER = "0.3.11"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -782,6 +782,22 @@ class StationAgent:
             "update": self.check_for_updates(force=False),
             "printers": list_windows_printers(),
             "processes": {key: process.status() for key, process in self.processes.items()},
+        }
+
+    def desktop_config(self) -> dict[str, Any]:
+        cfg = deep_merge(default_config(), self.config)
+        printer = cfg["printer"]
+        station_name = text(cfg.get("station_name")) or "This station"
+        station_token = text(printer.get("station_token"))
+        return {
+            "ok": True,
+            "version": AGENT_VERSION,
+            "version_number": AGENT_VERSION_NUMBER,
+            "station_name": station_name,
+            "app_url": text(cfg.get("app_url")) or "https://loopbase.io",
+            "connected": bool(station_token),
+            "remote_print_enabled": bool_value(printer.get("remote_enabled")) and bool_value(printer.get("remote_poll_enabled")),
+            "update": self.check_for_updates(force=False),
         }
 
     def update_manifest_url(self) -> str:
@@ -1776,6 +1792,9 @@ def make_handler(agent: StationAgent):
             if path == "/status":
                 self.send_json(200, agent.status())
                 return
+            if path == "/desktop/config":
+                self.send_json(200, agent.desktop_config())
+                return
             if path == "/api/printers":
                 self.send_json(200, {"ok": True, "printers": list_windows_printers()})
                 return
@@ -1806,6 +1825,15 @@ def make_handler(agent: StationAgent):
                 if path == "/api/print-job":
                     payload = parse_json_body(self)
                     self.send_json(200, handle_remote_print_job(agent, payload))
+                    return
+                if path == "/desktop/config":
+                    payload = parse_json_body(self)
+                    agent.write_quick_setup({
+                        "app_url": text(payload.get("app_url")),
+                        "station_name": text(payload.get("station_name")),
+                        "station_token": text(payload.get("station_token")),
+                    })
+                    self.send_json(200, agent.desktop_config())
                     return
 
                 fields = parse_form(self)

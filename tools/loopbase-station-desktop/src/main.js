@@ -1,14 +1,21 @@
-const CURRENT_VERSION = '0.3.10'
+const CURRENT_VERSION = '0.3.11'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 const invoke = window.__TAURI__?.core?.invoke
 
 const statusEl = document.querySelector('#status')
-const fallbackEl = document.querySelector('#fallback')
 const updateBannerEl = document.querySelector('#updateBanner')
 const updateTitleEl = document.querySelector('#updateTitle')
 const updateNotesEl = document.querySelector('#updateNotes')
 const updateNowEl = document.querySelector('#updateNow')
+const connectionBadgeEl = document.querySelector('#connectionBadge')
+const setupPanelEl = document.querySelector('#setupPanel')
+const setupFormEl = document.querySelector('#setupForm')
+const stationNameEl = document.querySelector('#stationName')
+const stationTokenEl = document.querySelector('#stationToken')
+const appUrlEl = document.querySelector('#appUrl')
+const moduleGridEl = document.querySelector('#moduleGrid')
+const saveSetupEl = document.querySelector('#saveSetup')
 
 let availableUpdate = null
 
@@ -27,10 +34,43 @@ function setStatus(message) {
   if (statusEl) statusEl.textContent = message
 }
 
+function setBadge(message, className = '') {
+  if (!connectionBadgeEl) return
+  connectionBadgeEl.textContent = message
+  connectionBadgeEl.className = `connection-badge ${className}`.trim()
+}
+
+function renderStationConfig(config) {
+  if (appUrlEl && config?.app_url) appUrlEl.value = config.app_url
+  if (stationNameEl && config?.station_name) stationNameEl.value = config.station_name
+
+  if (config?.connected) {
+    setBadge(`✓ ${config.station_name || 'Station connected'}`, 'connected')
+    setupPanelEl?.classList.add('hidden')
+    moduleGridEl?.classList.remove('hidden')
+    setStatus(`Connected to Loopbase as ${config.station_name || 'this station'}.`)
+    return
+  }
+
+  setBadge('Token required', 'needs-token')
+  moduleGridEl?.classList.add('hidden')
+  setupPanelEl?.classList.remove('hidden')
+  setStatus('Enter the station token for this device to connect Loopbase services.')
+}
+
+async function loadStationConfig() {
+  const response = await fetch(`${dashboardUrl}/desktop/config`, { cache: 'no-store' })
+  const config = await response.json()
+  if (!response.ok || !config?.ok) {
+    throw new Error(config?.message || 'Could not load station settings.')
+  }
+  renderStationConfig(config)
+}
+
 async function waitForAgent() {
   if (!invoke) {
     setStatus('Station Agent desktop API did not load. Close Loopbase from the system tray, install the latest build, then open it again.')
-    fallbackEl?.classList.remove('hidden')
+    setBadge('Desktop API failed')
     return
   }
 
@@ -40,7 +80,7 @@ async function waitForAgent() {
     setStatus(message)
   } catch (error) {
     setStatus(`Station Agent launch failed: ${error}`)
-    fallbackEl?.classList.remove('hidden')
+    setBadge('Service failed')
     return
   }
 
@@ -48,16 +88,14 @@ async function waitForAgent() {
     try {
       const ready = await invoke('station_agent_status')
       if (ready) {
-        setStatus('Station Agent is ready. Use Open Station Dashboard when you need the local controls.')
-        fallbackEl?.classList.remove('hidden')
+        await loadStationConfig()
         return
       }
     } catch {
       try {
         const response = await fetch(`${dashboardUrl}/status`, { cache: 'no-store' })
         if (response.ok) {
-          setStatus('Station Agent is ready. Use Open Station Dashboard when you need the local controls.')
-          fallbackEl?.classList.remove('hidden')
+          await loadStationConfig()
           return
         }
       } catch {
@@ -66,12 +104,11 @@ async function waitForAgent() {
     }
 
     setStatus(`Starting Station Agent... ${attempt + 1}/120`)
-    if (attempt >= 10) fallbackEl?.classList.remove('hidden')
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
 
   setStatus('Station Agent did not respond. Check Windows security/firewall or whether port 8790 is already in use.')
-  fallbackEl?.classList.remove('hidden')
+  setBadge('Service offline')
 }
 
 async function checkForUpdates() {
@@ -120,6 +157,43 @@ updateNowEl?.addEventListener('click', async () => {
     updateNowEl.disabled = false
     updateNowEl.textContent = 'Update Now'
     setStatus(`Update failed: ${error}`)
+  }
+})
+
+setupFormEl?.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const stationToken = String(stationTokenEl?.value || '').trim()
+  if (!stationToken) {
+    setStatus('Paste the station token for this device first.')
+    stationTokenEl?.focus()
+    return
+  }
+
+  saveSetupEl.disabled = true
+  saveSetupEl.textContent = 'Connecting...'
+  setStatus('Saving station token...')
+
+  try {
+    const response = await fetch(`${dashboardUrl}/desktop/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        station_name: String(stationNameEl?.value || '').trim(),
+        station_token: stationToken,
+        app_url: String(appUrlEl?.value || '').trim() || 'https://loopbase.io',
+      }),
+    })
+    const config = await response.json()
+    if (!response.ok || !config?.ok) {
+      throw new Error(config?.message || 'Could not save station token.')
+    }
+    if (stationTokenEl) stationTokenEl.value = ''
+    renderStationConfig(config)
+  } catch (error) {
+    setStatus(`Station connection failed: ${error}`)
+  } finally {
+    saveSetupEl.disabled = false
+    saveSetupEl.textContent = 'Connect Station'
   }
 })
 

@@ -23,7 +23,7 @@ body {
 
 .hero {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
   border: 1px solid #26313a;
@@ -87,6 +87,31 @@ h1 {
   opacity: .72;
 }
 
+.connection-badge {
+  min-width: 190px;
+  border: 1px solid #2b3942;
+  border-radius: 999px;
+  background: #12181d;
+  color: #cbd3d9;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 950;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.connection-badge.connected {
+  border-color: #2f7d58;
+  background: #10221a;
+  color: #c8f5df;
+}
+
+.connection-badge.needs-token {
+  border-color: #806728;
+  background: #261f10;
+  color: #ffe1a3;
+}
+
 .update-banner {
   display: flex;
   align-items: center;
@@ -111,6 +136,53 @@ h1 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 18px;
+}
+
+.setup-panel {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.4fr);
+  gap: 18px;
+  margin-top: 18px;
+  border: 1px solid #26313a;
+  border-radius: 18px;
+  background: rgba(16, 20, 24, .94);
+  padding: 20px;
+}
+
+.setup-panel h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.setup-form {
+  display: grid;
+  gap: 12px;
+}
+
+.setup-form label {
+  display: grid;
+  gap: 6px;
+  color: #cbd3d9;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.setup-form input {
+  width: 100%;
+  border: 1px solid #33414c;
+  border-radius: 12px;
+  background: #070a0d;
+  color: #f6f8f9;
+  padding: 12px 13px;
+  font: inherit;
+  font-weight: 800;
+  outline: none;
+}
+
+.setup-form input:focus {
+  border-color: #17a56b;
+  box-shadow: 0 0 0 3px rgba(23, 165, 107, .18);
 }
 
 article {
@@ -144,17 +216,6 @@ article small {
   font-weight: 850;
 }
 
-.fallback {
-  margin: 10px 0 0;
-  color: #9ca8b3;
-  font-weight: 800;
-}
-
-.fallback a {
-  color: #9cf0c7;
-  font-weight: 950;
-}
-
 .hidden {
   display: none;
 }
@@ -167,6 +228,10 @@ article small {
   .update-banner {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .setup-panel {
+    grid-template-columns: 1fr;
   }
 
   .grid {

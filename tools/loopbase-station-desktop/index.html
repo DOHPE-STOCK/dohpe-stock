@@ -11,12 +11,9 @@
       <section class="hero">
         <div>
           <p class="eyebrow">Loopbase Station Agent</p>
-          <h1>Starting Local Hardware Control</h1>
-          <p class="muted">
-            The desktop app is opening the local Station Agent service. Keep this window open for native updates, printer setup and hardware controls.
-          </p>
+          <h1>Station Control</h1>
         </div>
-        <a class="button" href="http://127.0.0.1:8790">Open Station Dashboard</a>
+        <div id="connectionBadge" class="connection-badge">Starting...</div>
       </section>
 
       <section id="updateBanner" class="update-banner hidden">
@@ -28,7 +25,30 @@
         <button id="updateNow" class="button" type="button">Update Now</button>
       </section>
 
-      <section class="grid">
+      <section id="setupPanel" class="setup-panel hidden">
+        <div>
+          <p class="eyebrow">First Run</p>
+          <h2>Connect this station</h2>
+          <p class="muted">Enter station token for this device here.</p>
+        </div>
+        <form id="setupForm" class="setup-form">
+          <label>
+            Station name
+            <input id="stationName" name="station_name" autocomplete="off" placeholder="Photo station 1" />
+          </label>
+          <label>
+            Station token
+            <input id="stationToken" name="station_token" autocomplete="off" placeholder="Paste station token" />
+          </label>
+          <label>
+            Loopbase URL
+            <input id="appUrl" name="app_url" autocomplete="off" value="https://loopbase.io" />
+          </label>
+          <button id="saveSetup" class="button" type="submit">Connect Station</button>
+        </form>
+      </section>
+
+      <section id="moduleGrid" class="grid hidden">
         <article><strong>Remote Printer</strong><small>ZPL labels and A4 jobs from other company PCs.</small></article>
         <article><strong>Photography Stations</strong><small>Photo sources, station setup and phone pairing.</small></article>
         <article><strong>RFID Reader / Writer</strong><small>RFID table receiving and tag control.</small></article>
@@ -38,10 +58,6 @@
       </section>
 
       <p id="status" class="status">Desktop script has not loaded yet...</p>
-      <p id="fallback" class="fallback hidden">
-        If the dashboard is already running, open it directly:
-        <a href="http://127.0.0.1:8790">Open Local Dashboard</a>
-      </p>
     </main>
     <script src="./src/main.js"></script>
   </body>
