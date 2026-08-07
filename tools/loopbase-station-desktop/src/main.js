@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.21'
+const CURRENT_VERSION = '0.3.22'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -333,17 +333,10 @@ function renderPhotoConfig(data) {
   if (photoSourcesEl) {
     photoSourcesEl.innerHTML = sources.map((source, index) => `
       <div class="source-card" data-source-index="${index}">
-        <h3>Source ${index + 1}</h3>
-        <div>
-          <label>Source name<input data-photo-field="name" value="${escapeHtml(source.name || `Photo Source ${index + 1}`)}" placeholder="Camera import folder"></label>
-        </div>
+        <h3>Folder ${index + 1}</h3>
         <div class="path-row">
           <label>Watch folder<input data-photo-field="watch_folder" value="${escapeHtml(source.watch_folder || '')}" placeholder="C:\\Photography\\Station 1 or \\\\NAS\\Photos\\Station 1"></label>
           <button class="ghost-button compact" type="button" data-browse-source="${index}">Browse</button>
-        </div>
-        <div class="form-grid">
-          <label>Processed folder<input data-photo-field="processed_folder" value="${escapeHtml(source.processed_folder || '')}" placeholder="Optional"></label>
-          <label>Trash folder<input data-photo-field="trash_folder" value="${escapeHtml(source.trash_folder || '')}" placeholder="Optional"></label>
         </div>
       </div>
     `).join('')
@@ -466,6 +459,8 @@ photoFormEl?.addEventListener('submit', async (event) => {
     card.querySelectorAll('[data-photo-field]').forEach((input) => {
       row[input.dataset.photoField] = input.value || ''
     })
+    const index = Number.parseInt(card.dataset.sourceIndex || '0', 10)
+    row.name = `Photo Source ${index + 1}`
     return row
   })
   setStatus('Saving photography settings...')

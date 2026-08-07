@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.21'
+const STATION_AGENT_VERSION = '0.3.22'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -25,9 +25,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Verifies the in-app updater against the binary Loopbase download API route.',
-      'Forces the Station Agent download route to run as a Node binary response.',
-      'Keeps the installer filename as a Windows .exe for update downloads.',
+      'Simplifies Photography Stations so sources only require watch folders.',
+      'Keeps photo source tokens and internal processing folders managed automatically.',
+      'Preserves the previous update/install behaviour while testing this release.',
     ],
   })
 }

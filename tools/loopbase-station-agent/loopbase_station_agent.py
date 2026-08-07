@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.21"
+AGENT_VERSION_NUMBER = "0.3.22"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -603,11 +603,19 @@ class StationAgent:
         sources: list[dict[str, Any]] = []
         for index in range(1, 4):
             previous = existing[index - 1]
-            name = text(fields.get(f"photo_source_name_{index}")) or f"Photo Source {index}"
-            token = text(fields.get(f"photo_source_token_{index}"))
+            name = text(fields.get(f"photo_source_name_{index}")) or text(previous.get("name")) or f"Photo Source {index}"
+            token = text(fields.get(f"photo_source_token_{index}")) or text(previous.get("token"))
             watch_folder = text(fields.get(f"photo_source_watch_folder_{index}"))
-            processed_folder = text(fields.get(f"photo_source_processed_folder_{index}"))
-            trash_folder = text(fields.get(f"photo_source_trash_folder_{index}"))
+            processed_folder = (
+                text(fields.get(f"photo_source_processed_folder_{index}"))
+                if f"photo_source_processed_folder_{index}" in fields
+                else text(previous.get("processed_folder"))
+            )
+            trash_folder = (
+                text(fields.get(f"photo_source_trash_folder_{index}"))
+                if f"photo_source_trash_folder_{index}" in fields
+                else text(previous.get("trash_folder"))
+            )
             if not any([token, watch_folder, processed_folder, trash_folder]) and index > 1:
                 continue
             row = dict(previous)
@@ -650,11 +658,19 @@ class StationAgent:
             row = dict(previous)
             row.update(
                 {
-                    "name": text(incoming.get("name")) or f"Photo Source {index + 1}",
+                    "name": text(incoming.get("name")) or text(previous.get("name")) or f"Photo Source {index + 1}",
                     "token": text(incoming.get("token")) or text(previous.get("token")),
                     "watch_folder": text(incoming.get("watch_folder")),
-                    "processed_folder": text(incoming.get("processed_folder")),
-                    "trash_folder": text(incoming.get("trash_folder")),
+                    "processed_folder": (
+                        text(incoming.get("processed_folder"))
+                        if "processed_folder" in incoming
+                        else text(previous.get("processed_folder"))
+                    ),
+                    "trash_folder": (
+                        text(incoming.get("trash_folder"))
+                        if "trash_folder" in incoming
+                        else text(previous.get("trash_folder"))
+                    ),
                     "extensions": previous.get("extensions") or [".jpg", ".jpeg"],
                     "raw_extensions": previous.get("raw_extensions") or [".nef", ".arw", ".cr2", ".cr3", ".raf", ".dng"],
                 }
@@ -1412,11 +1428,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
             </form>
           </div>
           <div class="form-grid">
-            <label>Source name<input name="photo_source_name_{index}" value="{html_attr(source.get('name'))}" placeholder="Camera import folder"></label>
-            <label>Source token<input name="photo_source_token_{index}" value="{html_attr(source.get('token'))}" placeholder="Paste source token from Loopbase"></label>
             <label class="wide">Watch folder<input name="photo_source_watch_folder_{index}" value="{html_attr(source.get('watch_folder'))}" placeholder="C:\\Photography\\Station 1 or \\\\NAS\\Photos\\Station 1"></label>
-            <label>Processed folder<input name="photo_source_processed_folder_{index}" value="{html_attr(source.get('processed_folder'))}" placeholder="Optional"></label>
-            <label>Trash folder<input name="photo_source_trash_folder_{index}" value="{html_attr(source.get('trash_folder'))}" placeholder="Optional"></label>
           </div>
         </article>
         """
