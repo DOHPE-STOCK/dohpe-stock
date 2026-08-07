@@ -28,7 +28,7 @@ type StationDevice = {
 export default function StationAgentPanel() {
   const [release, setRelease] = useState<StationAgentRelease | null>(null)
   const [devices, setDevices] = useState<StationDevice[]>([])
-  const [deviceName, setDeviceName] = useState('Main Station PC')
+  const [deviceName, setDeviceName] = useState('')
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [editingName, setEditingName] = useState('')
   const [editingActive, setEditingActive] = useState(true)
@@ -77,7 +77,7 @@ export default function StationAgentPanel() {
   }, [])
 
   async function createDevice() {
-    setStatus('Creating station device...')
+    setStatus('Adding station...')
     setNewToken('')
     try {
       const response = await fetch('/api/station-agent/devices', {
@@ -89,7 +89,8 @@ export default function StationAgentPanel() {
       if (!response.ok || !data?.ok) throw new Error(data?.message || 'Could not create station device.')
       setNewToken(data.station_token || '')
       await loadDevices()
-      setStatus('Station device created. Paste the token into the Station Agent remote printer section.')
+      setDeviceName('')
+      setStatus('Station added. Enter the token in the Windows Station Agent on that PC.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Could not create station device.')
     }
@@ -190,8 +191,8 @@ export default function StationAgentPanel() {
               Station Devices
             </h3>
             <p className="mt-2 max-w-3xl text-sm font-bold text-zinc-400">
-              Create a station token for each PC running the desktop agent. The token lets the
-              agent poll Loopbase for remote print jobs and report service/printer status.
+              Add each Windows PC that will run the Station Agent. Loopbase creates a token and
+              a matching photography station so that PC can run photo, printer and RFID services.
             </p>
           </div>
           <div className="flex min-w-[280px] flex-wrap gap-2">
@@ -199,14 +200,14 @@ export default function StationAgentPanel() {
               value={deviceName}
               onChange={(event) => setDeviceName(event.target.value)}
               className="min-w-[220px] flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-bold text-white"
-              placeholder="Station name"
+              placeholder="Station name, e.g. Main Office PC"
             />
             <button
               type="button"
               onClick={createDevice}
               className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-black text-white hover:bg-emerald-500"
             >
-              Create Token
+              Add Station
             </button>
           </div>
         </div>
@@ -214,13 +215,13 @@ export default function StationAgentPanel() {
         {newToken && (
           <div className="mt-4 rounded-lg border border-emerald-700 bg-emerald-950/40 p-3">
             <p className="text-xs font-black uppercase tracking-wide text-emerald-300">
-              New Station Token
+              Station Token
             </p>
             <p className="mt-2 break-all rounded bg-zinc-950 p-3 text-sm font-bold text-white">
               {newToken}
             </p>
             <p className="mt-2 text-sm font-bold text-emerald-100">
-              This is shown once here. Paste it into the Station Agent `Station print token` field.
+              This is shown once here. Enter it in the Windows Station Agent on that PC.
             </p>
           </div>
         )}

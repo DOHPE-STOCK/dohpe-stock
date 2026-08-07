@@ -3067,7 +3067,7 @@ export default function PhotoMonitorPage() {
                 <div>
                   <h2 className="text-xl font-black">{station?.name || 'Station'} Settings</h2>
                   <p className="mt-1 text-sm font-bold text-zinc-400">
-                    Sources, calibration, phone pairing and station defaults for this capture bench.
+                    Sources and calibration settings for this capture bench.
                   </p>
                 </div>
                 <button
@@ -3083,134 +3083,31 @@ export default function PhotoMonitorPage() {
                 <div className="rounded-xl border border-zinc-800 bg-black p-4">
                   <h3 className="text-sm font-black text-white">Station</h3>
                   <p className="mt-1 text-xs font-bold text-zinc-400">
-                    Rename this station, create another bench, or archive an unused station.
+                    Stations are added and renamed from Settings - Station Agent or the Windows Station Agent.
                   </p>
-
-                  <div className="mt-3 space-y-2">
-                    <div className="flex gap-2">
-                      <input
-                        value={editingStationName}
-                        onChange={(event) => setEditingStationName(event.target.value)}
-                        placeholder="Selected station name"
-                        disabled={!station}
-                        className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs font-bold text-white outline-none focus:border-white disabled:opacity-50"
-                      />
-                      <button
-                        type="button"
-                        onClick={renameStation}
-                        disabled={busy || !station || !editingStationName.trim() || editingStationName.trim() === station.name}
-                        className="h-9 rounded-lg bg-zinc-800 px-3 text-xs font-black text-white disabled:opacity-50"
-                      >
-                        Save
-                      </button>
+                  {station ? (
+                    <div className="mt-3 grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs font-bold text-zinc-400">
+                      <p>Name: <span className="text-zinc-200">{station.name}</span></p>
+                      <p>Code: <span className="text-zinc-200">{station.code}</span></p>
+                      <p>Status: <span className="text-zinc-200">{station.status || 'active'}</span></p>
                     </div>
-
-                    <div className="flex gap-2">
-                      <input
-                        value={newStationName}
-                        onChange={(event) => setNewStationName(event.target.value)}
-                        placeholder="New station name"
-                        className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs font-bold text-white outline-none focus:border-white"
-                      />
-                      <button
-                        type="button"
-                        onClick={createStation}
-                        disabled={busy || !newStationName.trim()}
-                        className="h-9 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white disabled:opacity-50"
-                      >
-                        Add
-                      </button>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={archiveStation}
-                      disabled={busy || !station || Boolean(session)}
-                      className="w-full rounded-lg border border-red-900 bg-red-950 px-3 py-2 text-xs font-black text-red-100 disabled:opacity-50"
-                    >
-                      Archive Selected Station
-                    </button>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-zinc-800 bg-black p-4">
-                  <h3 className="text-sm font-black text-white">Phone Capture</h3>
-                  <p className="mt-1 text-xs font-bold text-zinc-400">
-                    Optional. Uses the phone camera/file picker and uploads the original selected file without app-side compression.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={createPhonePairing}
-                    disabled={busy || !station}
-                    className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                  >
-                    Pair Phone
-                  </button>
-                  {phonePairUrl && (
-                    <div className="mt-3 rounded-xl border border-zinc-800 bg-white p-3 text-black">
-                      <div className="mx-auto w-fit">
-                        <QRCode value={phonePairUrl} size={180} />
-                      </div>
-                      <p className="mt-3 break-all text-center text-[11px] font-bold text-zinc-700">{phonePairUrl}</p>
-                    </div>
+                  ) : (
+                    <p className="mt-3 rounded-lg border border-dashed border-zinc-700 p-3 text-center text-xs font-bold text-zinc-500">
+                      No station selected.
+                    </p>
                   )}
                 </div>
 
                 <div className="rounded-xl border border-zinc-800 bg-black p-4">
                   <h3 className="text-sm font-black text-white">Sources</h3>
                   <p className="mt-1 text-xs font-bold text-zinc-400">
-                    Add watched folders, phone sources, and worker tokens for this station.
+                    Sources are created by the Windows Station Agent when watched folders are saved there.
                   </p>
-
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      value={newSourceName}
-                      onChange={(event) => setNewSourceName(event.target.value)}
-                      placeholder="Source name"
-                      className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs font-bold text-white outline-none focus:border-white"
-                    />
-                    <button
-                      type="button"
-                      onClick={createPhotoSource}
-                      disabled={busy || !newSourceName.trim() || !station}
-                      className="h-9 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white disabled:opacity-50"
-                    >
-                      Add
-                    </button>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <a
-                      href="http://127.0.0.1:8780/"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex rounded-lg bg-white px-3 py-2 text-xs font-black text-black"
-                    >
-                      Worker Setup
-                    </a>
-                    {newSourceSetupUrl && (
-                      <a
-                        href={newSourceSetupUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white"
-                      >
-                        Setup New Source
-                      </a>
-                    )}
-                  </div>
-
-                  {newSourceToken && (
-                    <div className="mt-3 rounded-lg border border-yellow-700 bg-yellow-950 p-3">
-                      <p className="text-xs font-black text-yellow-200">Copy this token now</p>
-                      <code className="mt-2 block break-all text-xs text-yellow-100">{newSourceToken}</code>
-                    </div>
-                  )}
 
                   <div className="mt-3 space-y-2">
                     {sources.length === 0 ? (
                       <p className="rounded-lg border border-dashed border-zinc-700 p-3 text-center text-xs font-bold text-zinc-500">
-                        No sources yet.
+                        No sources yet. Add a watched folder in the Windows Station Agent for this station.
                       </p>
                     ) : (
                       sources.map((source) => (
@@ -3221,38 +3118,6 @@ export default function PhotoMonitorPage() {
                               <p className="mt-1 text-xs font-bold text-zinc-500">
                                 Last activity: {formatShortDateTime(source.last_activity_at)}
                               </p>
-                              <label className="mt-3 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
-                                Source file policy
-                                <select
-                                  value={source.source_file_policy || 'keep_source_file'}
-                                  onChange={(event) => updatePhotoSource(source, { source_file_policy: event.target.value })}
-                                  disabled={busy}
-                                  className="mt-1 h-9 w-full rounded-lg border border-zinc-700 bg-black px-2 text-xs font-bold normal-case tracking-normal text-white outline-none focus:border-white disabled:opacity-50"
-                                >
-                                  <option value="keep_source_file">Keep source file</option>
-                                  <option value="move_to_processed">Move to processed</option>
-                                  <option value="delete_source_when_product_photo_deleted">Delete when product photo deleted</option>
-                                  <option value="move_source_to_trash_when_product_photo_deleted">Move to trash when product photo deleted</option>
-                                </select>
-                              </label>
-                              <div className="mt-3 grid grid-cols-2 gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => updatePhotoSource(source, { enabled: !source.enabled })}
-                                  disabled={busy}
-                                  className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                                >
-                                  {source.enabled ? 'Disable' : 'Enable'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => updatePhotoSource(source, { action: 'rotate_token' })}
-                                  disabled={busy}
-                                  className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                                >
-                                  Rotate Token
-                                </button>
-                              </div>
                             </div>
                             <span
                               className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${
@@ -4958,96 +4823,6 @@ export default function PhotoMonitorPage() {
             </div>
 
             <div className="hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-              <h2 className="text-lg font-black">Station Setup</h2>
-              <p className="mt-1 text-xs font-bold text-zinc-400">
-                Create or rename camera benches for this company.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                <div className="flex gap-2">
-                  <input
-                    value={editingStationName}
-                    onChange={(event) => setEditingStationName(event.target.value)}
-                    placeholder="Selected station name"
-                    disabled={!station}
-                    className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white disabled:opacity-50"
-                  />
-                  <button
-                    type="button"
-                    onClick={renameStation}
-                    disabled={busy || !station || !editingStationName.trim() || editingStationName.trim() === station.name}
-                    className="h-9 rounded-lg bg-zinc-800 px-3 text-xs font-black text-white disabled:opacity-50"
-                  >
-                    Save
-                  </button>
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    value={newStationName}
-                    onChange={(event) => setNewStationName(event.target.value)}
-                    placeholder="New station name"
-                    className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={createStation}
-                    disabled={busy || !newStationName.trim()}
-                    className="h-9 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white disabled:opacity-50"
-                  >
-                    Add
-                  </button>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={archiveStation}
-                  disabled={busy || !station || Boolean(session)}
-                  className="w-full rounded-lg border border-red-900 bg-red-950 px-3 py-2 text-xs font-black text-red-100 disabled:opacity-50"
-                  title={session ? 'End the active session before archiving.' : 'Archive selected station'}
-                >
-                  Archive Selected Station
-                </button>
-
-              </div>
-            </div>
-
-            <div className="hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-black">Phone Capture</h2>
-                  <p className="mt-1 text-xs font-bold text-zinc-400">
-                    Pair a phone to this station. QR tokens expire after 10 minutes.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={createPhonePairing}
-                  disabled={busy || !station}
-                  className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                >
-                  Pair Phone
-                </button>
-              </div>
-
-              {phonePairUrl && (
-                <div className="mt-3 rounded-xl border border-zinc-800 bg-white p-3 text-black">
-                  <div className="mx-auto w-fit">
-                    <QRCode value={phonePairUrl} size={180} />
-                  </div>
-                  <p className="mt-3 break-all text-center text-[11px] font-bold text-zinc-700">
-                    {phonePairUrl}
-                  </p>
-                  {phonePairExpiresAt && (
-                    <p className="mt-2 text-center text-xs font-black text-zinc-500">
-                      Expires {formatShortDateTime(phonePairExpiresAt)}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
               <div className="mb-3">
                 <h2 className="text-lg font-black">Calibration Profiles</h2>
                 <p className="text-xs font-bold text-zinc-400">
@@ -5321,132 +5096,6 @@ export default function PhotoMonitorPage() {
               </div>
             </div>
 
-            <div className="hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-black">Sources</h2>
-                  <p className="text-xs font-bold text-zinc-400">
-                    Source tokens are for local workers and are shown once.
-                  </p>
-                </div>
-
-                <a
-                  href="http://127.0.0.1:8780/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="shrink-0 rounded-lg bg-white px-3 py-2 text-xs font-black text-black"
-                  title="Open the local photo worker setup page on this PC"
-                >
-                  Worker Setup
-                </a>
-              </div>
-
-              <p className="mb-3 rounded-lg border border-zinc-800 bg-zinc-950 p-2 text-[11px] font-bold text-zinc-500">
-                To get a source token, enter a source name such as Camera Folder 1 and click Add.
-                The token appears once, then Worker Setup opens the local folder setup page with that token.
-              </p>
-
-              <div className="flex gap-2">
-                <input
-                  value={newSourceName}
-                  onChange={(event) => setNewSourceName(event.target.value)}
-                  placeholder="Source name"
-                  className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-black px-3 text-xs font-bold text-white outline-none focus:border-white"
-                />
-                <button
-                  type="button"
-                  onClick={createPhotoSource}
-                  disabled={busy || !newSourceName.trim() || !station}
-                  className="h-9 rounded-lg bg-emerald-600 px-3 text-xs font-black text-white disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </div>
-
-              {newSourceToken && (
-                <div className="mt-3 rounded-lg border border-yellow-700 bg-yellow-950 p-3">
-                  <p className="text-xs font-black text-yellow-200">Copy this token now</p>
-                  <code className="mt-2 block break-all text-xs text-yellow-100">{newSourceToken}</code>
-                  {newSourceSetupUrl && (
-                    <a
-                      href={newSourceSetupUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-3 inline-flex rounded-lg bg-white px-3 py-2 text-xs font-black text-black"
-                    >
-                      Open Worker Setup With Token
-                    </a>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-3 space-y-2">
-                {sources.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-zinc-700 p-3 text-center text-xs font-bold text-zinc-500">
-                    No sources yet. Add one above to create the worker token.
-                  </p>
-                ) : (
-                  sources.map((source) => (
-                    <div key={source.id} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-sm font-black">{source.name}</p>
-                          <p className="mt-1 text-xs font-bold text-zinc-500">
-                            Last activity: {formatShortDateTime(source.last_activity_at)}
-                          </p>
-                          <label className="mt-3 block text-[10px] font-black uppercase tracking-wide text-zinc-500">
-                            Source file policy
-                            <select
-                              value={source.source_file_policy || 'keep_source_file'}
-                              onChange={(event) =>
-                                updatePhotoSource(source, { source_file_policy: event.target.value })
-                              }
-                              disabled={busy}
-                              className="mt-1 h-9 w-full rounded-lg border border-zinc-700 bg-black px-2 text-xs font-bold normal-case tracking-normal text-white outline-none focus:border-white disabled:opacity-50"
-                            >
-                              <option value="keep_source_file">Keep source file</option>
-                              <option value="move_to_processed">Move to processed</option>
-                              <option value="delete_source_when_product_photo_deleted">Delete when product photo deleted</option>
-                              <option value="move_source_to_trash_when_product_photo_deleted">Move to trash when product photo deleted</option>
-                            </select>
-                          </label>
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => updatePhotoSource(source, { enabled: !source.enabled })}
-                              disabled={busy}
-                              className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                            >
-                              {source.enabled ? 'Disable' : 'Enable'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => updatePhotoSource(source, { action: 'rotate_token' })}
-                              disabled={busy}
-                              className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                            >
-                              Rotate Token
-                            </button>
-                          </div>
-                        </div>
-                        <span
-                          className={`rounded-full px-2 py-1 text-[10px] font-black ${
-                            source.enabled && !source.token_revoked_at
-                              ? 'bg-green-600 text-white'
-                              : 'bg-zinc-700 text-zinc-300'
-                          }`}
-                        >
-                          {source.enabled && !source.token_revoked_at ? 'ACTIVE' : 'OFF'}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs font-bold text-zinc-500">
-                        {source.source_type} · token ****{source.token_last_four || 'none'}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
           </aside>
 
           <div

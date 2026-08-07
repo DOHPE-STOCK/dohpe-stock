@@ -92,6 +92,20 @@ export async function POST(request: Request) {
 
     if (insertError) return jsonError(insertError.message, 500)
     station = inserted
+  } else if (station.name !== displayName) {
+    const { data: updated, error: updateError } = await supabase
+      .from('photography_stations')
+      .update({
+        name: displayName,
+        status: 'active',
+      })
+      .eq('company_id', device.company_id)
+      .eq('id', station.id)
+      .select('id, name, code')
+      .single()
+
+    if (updateError) return jsonError(updateError.message, 500)
+    station = updated
   }
 
   const sources = []

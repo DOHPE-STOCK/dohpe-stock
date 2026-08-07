@@ -1153,7 +1153,11 @@ export default function ItemPage() {
   ) {
     if (!item?.id) return
     if (photoStations.length === 0) {
-      setMessage('No photography station found. Run the photography SQL migration first.')
+      const openSettings = window.confirm(
+        'No photography station is set up for this company yet.\n\nAdd a station in Settings now?'
+      )
+      setMessage('Add a station in Settings before starting a photo session.')
+      if (openSettings) window.open('/settings?section=station-agent', '_blank', 'noopener,noreferrer')
       return
     }
 
@@ -3376,8 +3380,8 @@ export default function ItemPage() {
             <button
               type="button"
               onClick={() => startPhotoSession({ askOpenMode: true, askStationChoice: true })}
-              disabled={photoSessionBusy || photoStations.length === 0}
-              title={photoStations.length === 0 ? photoStationMessage || 'No photography station found.' : ''}
+              disabled={photoSessionBusy}
+              title={photoStations.length === 0 ? photoStationMessage || 'Add a station before starting a photo session.' : ''}
               className={`rounded-lg px-4 py-2 text-sm font-bold text-white disabled:opacity-40 ${
                 photoSessionMatchesItem ? 'bg-green-700' : 'bg-emerald-600 hover:bg-emerald-500'
               }`}
