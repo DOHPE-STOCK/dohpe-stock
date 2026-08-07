@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
-const STATION_AGENT_VERSION = '0.3.13'
+const STATION_AGENT_VERSION = '0.3.14'
 const INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
 
 function baseUrl(request: NextRequest) {
@@ -39,9 +39,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Polishes the desktop setup screen and connected station state.',
-      'Stops using a default station name as a real saved station name.',
-      'Hides transient connected status text after the station has loaded.',
+      'Makes the six Station Agent cards open full section views.',
+      'Adds an Updates section with check and update actions inside the app.',
+      'Removes the fake traffic lights and title text from the top bar.',
     ],
   })
 }

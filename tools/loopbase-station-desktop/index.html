@@ -9,12 +9,6 @@
   <body>
     <main class="app-window">
       <div class="window-bar">
-        <div class="window-dots" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-        <strong>Loopbase Station Agent</strong>
         <div id="connectionBadge" class="connection-badge">Starting</div>
       </div>
 
@@ -57,12 +51,78 @@
       </section>
 
       <section id="moduleGrid" class="grid hidden">
-        <article><span>Print</span><strong>Remote Printer</strong><small>ZPL labels and A4 jobs from company devices.</small></article>
-        <article><span>Photo</span><strong>Photography Stations</strong><small>Watched folders, photo sources and phone pairing.</small></article>
-        <article><span>RFID</span><strong>RFID Reader / Writer</strong><small>RFID table receiving and tag control.</small></article>
-        <article><span>Zone</span><strong>RFID Zone Monitor</strong><small>Entrances, exits, changing rooms and stock rooms.</small></article>
-        <article><span>Config</span><strong>Station Config</strong><small>Token, Loopbase URL and local service settings.</small></article>
-        <article><span>Build</span><strong>Updates</strong><small>Install the latest Loopbase Station Agent.</small></article>
+        <button class="module-card" type="button" data-section="printer"><span>Print</span><strong>Remote Printer</strong><small>ZPL labels and A4 jobs from company devices.</small></button>
+        <button class="module-card" type="button" data-section="photography"><span>Photo</span><strong>Photography Stations</strong><small>Watched folders, photo sources and phone pairing.</small></button>
+        <button class="module-card" type="button" data-section="rfid"><span>RFID</span><strong>RFID Reader / Writer</strong><small>RFID table receiving and tag control.</small></button>
+        <button class="module-card" type="button" data-section="zones"><span>Zone</span><strong>RFID Zone Monitor</strong><small>Entrances, exits, changing rooms and stock rooms.</small></button>
+        <button class="module-card" type="button" data-section="config"><span>Config</span><strong>Station Config</strong><small>Token, Loopbase URL and local service settings.</small></button>
+        <button class="module-card" type="button" data-section="updates"><span>Build</span><strong>Updates</strong><small>Install the latest Loopbase Station Agent.</small></button>
+      </section>
+
+      <section id="moduleView" class="module-view hidden">
+        <div class="section-toolbar">
+          <button id="backToModules" class="ghost-button" type="button">Back</button>
+          <div>
+            <p id="sectionEyebrow" class="eyebrow">Station</p>
+            <h2 id="sectionTitle">Station section</h2>
+          </div>
+        </div>
+
+        <div class="section-body" data-panel="printer">
+          <div class="summary-card">
+            <strong>Remote Printer</strong>
+            <p class="muted">Use this PC as a Loopbase print station for label and document jobs from other devices.</p>
+          </div>
+          <div class="setting-row"><span>Windows printer discovery</span><strong id="printerCount">Loading...</strong></div>
+          <div class="setting-row"><span>Remote print polling</span><strong id="remotePrintState">Loading...</strong></div>
+        </div>
+
+        <div class="section-body hidden" data-panel="photography">
+          <div class="summary-card">
+            <strong>Photography Stations</strong>
+            <p class="muted">Configure watched folders, station sources and photo services for cataloguing sessions.</p>
+          </div>
+          <div class="setting-row"><span>Photo ingest service</span><strong id="photoState">Configured in Loopbase</strong></div>
+          <div class="setting-row"><span>Watched folders</span><strong>Use station settings</strong></div>
+        </div>
+
+        <div class="section-body hidden" data-panel="rfid">
+          <div class="summary-card">
+            <strong>RFID Reader / Writer</strong>
+            <p class="muted">Control receiving-table RFID hardware and tag write/read workflows from this station.</p>
+          </div>
+          <div class="setting-row"><span>RFID bridge</span><strong id="rfidState">Configured in Loopbase</strong></div>
+        </div>
+
+        <div class="section-body hidden" data-panel="zones">
+          <div class="summary-card">
+            <strong>RFID Zone Monitor</strong>
+            <p class="muted">Run entrance, exit, changing room and stock room monitoring services for this location.</p>
+          </div>
+          <div class="setting-row"><span>Zone monitor</span><strong id="zoneState">Configured in Loopbase</strong></div>
+        </div>
+
+        <div class="section-body hidden" data-panel="config">
+          <div class="summary-card">
+            <strong>Station Config</strong>
+            <p class="muted">Local station identity and Loopbase connection settings.</p>
+          </div>
+          <div class="setting-row"><span>Station</span><strong id="configStationName">Loading...</strong></div>
+          <div class="setting-row"><span>Loopbase URL</span><strong id="configAppUrl">Loading...</strong></div>
+        </div>
+
+        <div class="section-body hidden" data-panel="updates">
+          <div class="summary-card">
+            <strong>Updates</strong>
+            <p class="muted">Check for the latest Loopbase Station Agent and install it inside this Windows app.</p>
+          </div>
+          <div class="setting-row"><span>Current version</span><strong id="currentVersion">Loading...</strong></div>
+          <div class="setting-row"><span>Latest version</span><strong id="latestVersion">Not checked yet</strong></div>
+          <div class="action-row">
+            <button id="checkUpdates" class="button" type="button">Check for Updates</button>
+            <button id="sectionUpdateNow" class="button secondary-button" type="button" disabled>Update Now</button>
+          </div>
+        </div>
       </section>
 
       <p id="status" class="status">Desktop script has not loaded yet...</p>
