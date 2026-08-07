@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
-use std::io::Write;
-use std::net::{SocketAddr, TcpStream};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -16,6 +16,7 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const INSTANCE_PORT: u16 = 8791;
 
 struct AgentProcess(Mutex<Option<Child>>);
 
@@ -34,8 +35,44 @@ fn sanitize_version(version: &str) -> String {
 
 fn local_agent_ready() -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], 8790));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
+        return false;
+    };
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(600)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
+    if stream
+        .write_all(b"GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut response = [0_u8; 128];
+    match stream.read(&mut response) {
+        Ok(size) if size > 0 => String::from_utf8_lossy(&response[..size]).contains("200 OK"),
+        _ => false,
+    }
+}
+
+fn local_agent_port_open() -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], 8790));
     TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
 }
+
+#[cfg(target_os = "windows")]
+fn kill_helper_processes() {
+    let _ = Command::new("taskkill")
+        .args(["/IM", "Loopbase Station Agent.exe", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(target_os = "windows"))]
+fn kill_helper_processes() {}
 
 fn show_main_window(app_handle: &tauri::AppHandle) {
     if let Some(window) = app_handle.get_webview_window("main") {
@@ -53,6 +90,31 @@ fn stop_agent(app_handle: &tauri::AppHandle) {
         }
         *guard = None;
     };
+
+    kill_helper_processes();
+}
+
+fn claim_single_instance(app: &mut tauri::App) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], INSTANCE_PORT));
+    match TcpListener::bind(address) {
+        Ok(listener) => {
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stream.is_ok() {
+                        show_main_window(&app_handle);
+                    }
+                }
+            });
+            true
+        }
+        Err(_) => {
+            if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
+                let _ = stream.write_all(b"show");
+            }
+            false
+        }
+    }
 }
 
 fn candidate_agent_paths(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
@@ -94,6 +156,11 @@ fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
 
     if local_agent_ready() {
         return;
+    }
+
+    if local_agent_port_open() {
+        kill_helper_processes();
+        std::thread::sleep(Duration::from_millis(700));
     }
 
     let config_path = agent_config_path(app_handle);
@@ -259,6 +326,10 @@ fn main() {
             install_station_agent_update
         ])
         .setup(|app| {
+            if !claim_single_instance(app) {
+                app.handle().exit(0);
+                return Ok(());
+            }
             setup_tray(app)?;
             let handle = app.handle().clone();
             let state = app.state::<AgentProcess>();

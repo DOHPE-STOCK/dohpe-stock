@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 
-const CURRENT_VERSION = '0.3.7'
+const CURRENT_VERSION = '0.3.8'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 
