@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.17'
+const CURRENT_VERSION = '0.3.18'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -21,6 +21,18 @@ const moduleCards = [...document.querySelectorAll('[data-section]')]
 const sectionPanels = [...document.querySelectorAll('[data-panel]')]
 const printerCountEl = document.querySelector('#printerCount')
 const remotePrintStateEl = document.querySelector('#remotePrintState')
+const printerFormEl = document.querySelector('#printerForm')
+const printerEnabledEl = document.querySelector('#printerEnabled')
+const printerPollEnabledEl = document.querySelector('#printerPollEnabled')
+const printerModeEl = document.querySelector('#printerMode')
+const defaultPrinterEl = document.querySelector('#defaultPrinter')
+const printerNetworkHostEl = document.querySelector('#printerNetworkHost')
+const printerNetworkPortEl = document.querySelector('#printerNetworkPort')
+const allowedPrintersEl = document.querySelector('#allowedPrinters')
+const refreshPrintersEl = document.querySelector('#refreshPrinters')
+const photoFormEl = document.querySelector('#photoForm')
+const photoEnabledEl = document.querySelector('#photoEnabled')
+const photoSourcesEl = document.querySelector('#photoSources')
 const configStationNameEl = document.querySelector('#configStationName')
 const configAppUrlEl = document.querySelector('#configAppUrl')
 
@@ -28,6 +40,8 @@ let availableUpdate = null
 let statusFadeTimer = null
 let buildNumberResetTimer = null
 let currentStationConfig = null
+let currentPrinterConfig = null
+let currentPhotoConfig = null
 
 const sections = {
   printer: { eyebrow: 'Print', title: 'Remote Printer' },
@@ -46,6 +60,15 @@ function compareVersions(left, right) {
     if (diff !== 0) return diff
   }
   return 0
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
 }
 
 function setStatus(message) {
@@ -137,7 +160,10 @@ function openSection(section) {
   moduleViewEl?.classList.remove('hidden')
   renderSectionData()
   if (section === 'printer') {
-    void loadPrinterSummary()
+    void loadPrinterConfig()
+  }
+  if (section === 'photography') {
+    void loadPhotoConfig()
   }
 }
 
@@ -246,6 +272,96 @@ async function loadPrinterSummary() {
   }
 }
 
+function renderPrinterConfig(data) {
+  currentPrinterConfig = data
+  const printer = data?.printer || {}
+  const printers = Array.isArray(data?.printers) ? data.printers : []
+  if (printerCountEl) printerCountEl.textContent = `${printers.length} printer${printers.length === 1 ? '' : 's'} found`
+  if (printerEnabledEl) printerEnabledEl.checked = Boolean(printer.remote_enabled ?? printer.enabled)
+  if (printerPollEnabledEl) printerPollEnabledEl.checked = Boolean(printer.remote_poll_enabled)
+  if (printerModeEl) printerModeEl.value = printer.mode || 'windows'
+  if (printerNetworkHostEl) printerNetworkHostEl.value = printer.network_host || ''
+  if (printerNetworkPortEl) printerNetworkPortEl.value = String(printer.network_port || 9100)
+
+  if (defaultPrinterEl) {
+    defaultPrinterEl.innerHTML = '<option value="">Choose printer</option>'
+    printers.forEach((row) => {
+      const option = document.createElement('option')
+      option.value = row.name || ''
+      option.textContent = `${row.name || 'Unnamed printer'}${row.default ? ' (default)' : ''}`
+      option.selected = row.name === printer.windows_printer_name
+      defaultPrinterEl.appendChild(option)
+    })
+  }
+
+  if (allowedPrintersEl) {
+    const allowed = new Set(Array.isArray(printer.allowed_printers) ? printer.allowed_printers : [])
+    allowedPrintersEl.innerHTML = printers.length
+      ? printers.map((row, index) => {
+        const checked = !allowed.size || allowed.has(row.name) ? 'checked' : ''
+        return `
+          <label class="choice-row">
+            <span>${escapeHtml(row.name)}${row.default ? ' <small class="muted">Default</small>' : ''}</span>
+            <input type="checkbox" data-allowed-printer="${index}" value="${escapeHtml(row.name)}" ${checked}>
+          </label>
+        `
+      }).join('')
+      : '<p class="muted">No Windows printers detected on this PC yet.</p>'
+  }
+}
+
+async function loadPrinterConfig() {
+  try {
+    const response = await fetch(`${dashboardUrl}/api/printer/config`, { cache: 'no-store' })
+    const data = await response.json()
+    if (!response.ok || !data?.ok) throw new Error(data?.message || 'Could not load printers')
+    renderPrinterConfig(data)
+  } catch (error) {
+    if (printerCountEl) printerCountEl.textContent = 'Could not load printers'
+    setStatus(`Printer settings failed to load: ${error}`)
+  }
+}
+
+function renderPhotoConfig(data) {
+  currentPhotoConfig = data
+  const photo = data?.photo || {}
+  const sources = Array.isArray(data?.sources) ? data.sources.slice(0, 3) : []
+  while (sources.length < 3) {
+    sources.push({ name: `Photo Source ${sources.length + 1}`, token: '', watch_folder: '', processed_folder: '', trash_folder: '' })
+  }
+  if (photoEnabledEl) photoEnabledEl.checked = Boolean(photo.enabled)
+  if (photoSourcesEl) {
+    photoSourcesEl.innerHTML = sources.map((source, index) => `
+      <div class="source-card" data-source-index="${index}">
+        <h3>Source ${index + 1}</h3>
+        <div class="form-grid">
+          <label>Source name<input data-photo-field="name" value="${escapeHtml(source.name || `Photo Source ${index + 1}`)}" placeholder="Camera import folder"></label>
+          <label>Source token<input data-photo-field="token" value="${escapeHtml(source.token || '')}" placeholder="Paste source token from Loopbase"></label>
+        </div>
+        <div class="path-row">
+          <label>Watch folder<input data-photo-field="watch_folder" value="${escapeHtml(source.watch_folder || '')}" placeholder="C:\\Photography\\Station 1 or \\\\NAS\\Photos\\Station 1"></label>
+          <button class="ghost-button compact" type="button" data-browse-source="${index}">Browse</button>
+        </div>
+        <div class="form-grid">
+          <label>Processed folder<input data-photo-field="processed_folder" value="${escapeHtml(source.processed_folder || '')}" placeholder="Optional"></label>
+          <label>Trash folder<input data-photo-field="trash_folder" value="${escapeHtml(source.trash_folder || '')}" placeholder="Optional"></label>
+        </div>
+      </div>
+    `).join('')
+  }
+}
+
+async function loadPhotoConfig() {
+  try {
+    const response = await fetch(`${dashboardUrl}/api/photo/config`, { cache: 'no-store' })
+    const data = await response.json()
+    if (!response.ok || !data?.ok) throw new Error(data?.message || 'Could not load photography settings')
+    renderPhotoConfig(data)
+  } catch (error) {
+    setStatus(`Photography settings failed to load: ${error}`)
+  }
+}
+
 headerUpdateNowEl?.addEventListener('click', async () => {
   void installAvailableUpdate(headerUpdateNowEl)
 })
@@ -286,6 +402,92 @@ async function installAvailableUpdate(button) {
     setStatus(`Update failed: ${error}`)
   }
 }
+
+refreshPrintersEl?.addEventListener('click', () => {
+  void loadPrinterConfig()
+})
+
+printerFormEl?.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const allowedPrinters = [...document.querySelectorAll('[data-allowed-printer]')]
+    .filter((input) => input.checked)
+    .map((input) => input.value)
+    .filter(Boolean)
+  setStatus('Saving printer settings...')
+  try {
+    const response = await fetch(`${dashboardUrl}/api/printer/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        remote_enabled: Boolean(printerEnabledEl?.checked),
+        remote_poll_enabled: Boolean(printerPollEnabledEl?.checked),
+        mode: printerModeEl?.value || 'windows',
+        windows_printer_name: defaultPrinterEl?.value || '',
+        allowed_printers: allowedPrinters,
+        network_host: printerNetworkHostEl?.value || '',
+        network_port: printerNetworkPortEl?.value || '9100',
+      }),
+    })
+    const data = await response.json()
+    if (!response.ok || !data?.ok) throw new Error(data?.message || 'Could not save printers')
+    renderPrinterConfig(data)
+    await loadStationConfig()
+    setStatus('Printer settings saved.')
+    fadeStatusSoon()
+  } catch (error) {
+    setStatus(`Printer settings failed to save: ${error}`)
+  }
+})
+
+photoSourcesEl?.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-browse-source]')
+  if (!button) return
+  if (!invoke) {
+    setStatus('Folder selector is only available in the Windows desktop app.')
+    return
+  }
+  const index = Number.parseInt(button.dataset.browseSource, 10)
+  try {
+    const selected = await invoke('select_windows_folder', {
+      title: `Choose watch folder for Photo Source ${index + 1}`,
+    })
+    const card = button.closest('[data-source-index]')
+    const input = card?.querySelector('[data-photo-field="watch_folder"]')
+    if (input) input.value = selected
+  } catch (error) {
+    setStatus(`Folder selection cancelled or failed: ${error}`)
+  }
+})
+
+photoFormEl?.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const sources = [...document.querySelectorAll('[data-source-index]')].map((card) => {
+    const row = {}
+    card.querySelectorAll('[data-photo-field]').forEach((input) => {
+      row[input.dataset.photoField] = input.value || ''
+    })
+    return row
+  })
+  setStatus('Saving photography settings...')
+  try {
+    const response = await fetch(`${dashboardUrl}/api/photo/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        enabled: Boolean(photoEnabledEl?.checked),
+        sources,
+      }),
+    })
+    const data = await response.json()
+    if (!response.ok || !data?.ok) throw new Error(data?.message || 'Could not save photography settings')
+    renderPhotoConfig(data)
+    setStatus('Photography settings saved.')
+    fadeStatusSoon()
+  } catch (error) {
+    setStatus(`Photography settings failed to save: ${error}`)
+  }
+})
 
 setupFormEl?.addEventListener('submit', async (event) => {
   event.preventDefault()

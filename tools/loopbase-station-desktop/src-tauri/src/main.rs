@@ -323,6 +323,39 @@ start \"\" \"{installer}\"\r\n",
     ))
 }
 
+#[tauri::command]
+fn select_windows_folder(title: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let safe_title = title.replace('\'', "''");
+        let script = format!(
+            "$shell = New-Object -ComObject Shell.Application; \
+             $folder = $shell.BrowseForFolder(0, '{safe_title}', 0, 0); \
+             if ($folder -ne $null) {{ $folder.Self.Path }}"
+        );
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-STA", "-Command", &script])
+            .stdin(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| format!("Could not open folder selector: {error}"))?;
+        if !output.status.success() {
+            return Err("Folder selector was closed or failed to open.".to_string());
+        }
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if selected.is_empty() {
+            return Err("No folder selected.".to_string());
+        }
+        return Ok(selected);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = title;
+        Err("Folder selection is currently supported on Windows station PCs.".to_string())
+    }
+}
+
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open_dashboard", "Open Loopbase Station Agent", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit_loopbase", "Quit Loopbase Station Agent", true, None::<&str>)?;
@@ -361,7 +394,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             station_agent_status,
             ensure_station_agent,
-            install_station_agent_update
+            install_station_agent_update,
+            select_windows_folder
         ])
         .setup(|app| {
             if !claim_single_instance(app) {

@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.17"
+AGENT_VERSION_NUMBER = "0.3.18"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -547,6 +547,40 @@ class StationAgent:
         self.config = cfg
         save_config(self.config_path, cfg)
 
+    def write_printer_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        cfg = deep_merge(default_config(), self.config)
+        printer = cfg["printer"]
+        printer["enabled"] = bool_value(payload.get("enabled", printer.get("enabled")))
+        printer["remote_enabled"] = bool_value(payload.get("remote_enabled", printer.get("remote_enabled")))
+        printer["remote_poll_enabled"] = bool_value(payload.get("remote_poll_enabled", printer.get("remote_poll_enabled")))
+        printer["mode"] = text(payload.get("mode")) or text(printer.get("mode")) or "windows"
+        printer["windows_printer_name"] = text(payload.get("windows_printer_name"))
+        allowed = payload.get("allowed_printers")
+        if isinstance(allowed, list):
+            printer["allowed_printers"] = sorted(set(text(name) for name in allowed if text(name)))
+        printer["network_host"] = text(payload.get("network_host", printer.get("network_host")))
+        printer["network_port"] = int_value(payload.get("network_port"), int(printer.get("network_port") or 9100))
+        printer["default_label_width_mm"] = int_value(
+            payload.get("default_label_width_mm"),
+            int(printer.get("default_label_width_mm") or 60),
+        )
+        printer["default_label_height_mm"] = int_value(
+            payload.get("default_label_height_mm"),
+            int(printer.get("default_label_height_mm") or 40),
+        )
+        self.config = cfg
+        save_config(self.config_path, cfg)
+        return self.printer_config_payload()
+
+    def printer_config_payload(self) -> dict[str, Any]:
+        cfg = deep_merge(default_config(), self.config)
+        printer = cfg["printer"]
+        return {
+            "ok": True,
+            "printer": printer,
+            "printers": list_windows_printers(),
+        }
+
     def ensure_photo_config(self) -> Path:
         photo = self.config["photo_worker"]
         config_path = resolve_path(photo["config_path"], self.config_path.parent)
@@ -595,6 +629,56 @@ class StationAgent:
         self.config = cfg
         save_config(self.config_path, cfg)
         save_config(config_path, data)
+
+    def write_photo_sources_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        cfg = deep_merge(default_config(), self.config)
+        photo = cfg["photo_worker"]
+        photo["enabled"] = bool_value(payload.get("enabled", photo.get("enabled")))
+        photo["config_path"] = text(payload.get("config_path")) or text(photo.get("config_path"))
+        photo["setup_port"] = int_value(payload.get("setup_port"), int(photo.get("setup_port") or 8780))
+
+        config_path = resolve_path(photo["config_path"], self.config_path.parent)
+        data = make_photo_worker_config(cfg, config_path)
+        existing = photo_worker_sources(cfg, config_path)
+        incoming_sources = payload.get("sources")
+        if not isinstance(incoming_sources, list):
+            incoming_sources = []
+        sources: list[dict[str, Any]] = []
+        for index in range(3):
+            previous = existing[index]
+            incoming = incoming_sources[index] if index < len(incoming_sources) and isinstance(incoming_sources[index], dict) else {}
+            row = dict(previous)
+            row.update(
+                {
+                    "name": text(incoming.get("name")) or f"Photo Source {index + 1}",
+                    "token": text(incoming.get("token")),
+                    "watch_folder": text(incoming.get("watch_folder")),
+                    "processed_folder": text(incoming.get("processed_folder")),
+                    "trash_folder": text(incoming.get("trash_folder")),
+                    "extensions": previous.get("extensions") or [".jpg", ".jpeg"],
+                    "raw_extensions": previous.get("raw_extensions") or [".nef", ".arw", ".cr2", ".cr3", ".raf", ".dng"],
+                }
+            )
+            if index == 0 or any(text(row.get(key)) for key in ("token", "watch_folder", "processed_folder", "trash_folder")):
+                sources.append(row)
+
+        data["app_url"] = cfg["app_url"]
+        data["enable_processing_jobs"] = True
+        data["sources"] = sources
+        self.config = cfg
+        save_config(self.config_path, cfg)
+        save_config(config_path, data)
+        return self.photo_config_payload()
+
+    def photo_config_payload(self) -> dict[str, Any]:
+        cfg = deep_merge(default_config(), self.config)
+        photo = cfg["photo_worker"]
+        config_path = resolve_path(photo["config_path"], self.config_path.parent)
+        return {
+            "ok": True,
+            "photo": photo,
+            "sources": photo_worker_sources(cfg, config_path),
+        }
 
     def pick_photo_source_folder(self, index: int) -> Path:
         if index < 1 or index > 3:
@@ -1805,6 +1889,12 @@ def make_handler(agent: StationAgent):
             if path == "/api/printers":
                 self.send_json(200, {"ok": True, "printers": list_windows_printers()})
                 return
+            if path == "/api/printer/config":
+                self.send_json(200, agent.printer_config_payload())
+                return
+            if path == "/api/photo/config":
+                self.send_json(200, agent.photo_config_payload())
+                return
             if path == "/api/update/check":
                 self.send_json(200, agent.check_for_updates(force=True))
                 return
@@ -1844,6 +1934,14 @@ def make_handler(agent: StationAgent):
                         "station_token": text(payload.get("station_token")),
                     })
                     self.send_json(200, agent.desktop_config())
+                    return
+                if path == "/api/printer/config":
+                    payload = parse_json_body(self)
+                    self.send_json(200, agent.write_printer_from_payload(payload))
+                    return
+                if path == "/api/photo/config":
+                    payload = parse_json_body(self)
+                    self.send_json(200, agent.write_photo_sources_from_payload(payload))
                     return
 
                 fields = parse_form(self)

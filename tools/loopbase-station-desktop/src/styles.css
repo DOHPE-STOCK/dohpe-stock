@@ -384,6 +384,127 @@ h1 {
   text-align: right;
 }
 
+.station-form {
+  display: grid;
+  gap: 16px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 14px;
+  background: #30323a;
+  padding: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.station-form label {
+  display: grid;
+  gap: 7px;
+  color: #d9dbe0;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.station-form input,
+.station-form select {
+  min-height: 44px;
+  border: 1px solid #4a4c55;
+  border-radius: 8px;
+  background: #45464d;
+  color: #f8f8fa;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 850;
+  outline: none;
+}
+
+.station-form input::placeholder {
+  color: rgba(248, 248, 250, .42);
+}
+
+.station-form input:focus,
+.station-form select:focus {
+  border-color: #6b8cff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .22);
+}
+
+.toggle-row {
+  min-height: 44px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 10px;
+  background: #272a31;
+  padding: 10px 12px;
+}
+
+.toggle-row input {
+  width: 18px;
+  min-height: 18px;
+}
+
+.subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.compact {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.choice-list,
+.source-list {
+  display: grid;
+  gap: 10px;
+}
+
+.choice-row,
+.source-card {
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 12px;
+  background: #272a31;
+  padding: 12px;
+}
+
+.choice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: #f3f5f8;
+  font-weight: 850;
+}
+
+.choice-row input {
+  width: 18px;
+  min-height: 18px;
+}
+
+.source-card {
+  display: grid;
+  gap: 12px;
+}
+
+.source-card h3 {
+  margin: 0;
+  color: #f5f6f8;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;
