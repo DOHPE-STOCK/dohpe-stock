@@ -199,3 +199,38 @@ export async function PUT(request: Request) {
     station: Array.isArray(pairing.station) ? pairing.station[0] : pairing.station,
   })
 }
+
+function getBearerToken(request: Request) {
+  const header = request.headers.get('authorization') || ''
+  const match = header.match(/^Bearer\s+(.+)$/i)
+  return match?.[1]?.trim() || ''
+}
+
+export async function DELETE(request: Request) {
+  const token = getBearerToken(request)
+  if (!token) return failure(401, 'Missing photo source token.')
+
+  const supabase = getSupabaseAdmin()
+  const { data: source, error: sourceError } = await supabase
+    .from('photo_sources')
+    .select('id, company_id, enabled, token_revoked_at')
+    .eq('token_hash', tokenHash(token))
+    .maybeSingle()
+
+  if (sourceError) return failure(500, sourceError.message)
+  if (!source) return failure(401, 'Invalid photo source token.')
+
+  const { error } = await supabase
+    .from('photo_sources')
+    .update({
+      enabled: false,
+      token_hash: null,
+      token_revoked_at: new Date().toISOString(),
+    })
+    .eq('id', source.id)
+    .eq('company_id', source.company_id)
+
+  if (error) return failure(500, error.message)
+
+  return NextResponse.json({ ok: true })
+}

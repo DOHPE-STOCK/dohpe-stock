@@ -27,13 +27,22 @@ export async function GET(request: Request) {
     const supabase = getSupabaseAdmin()
     const { data: source, error: sourceError } = await supabase
       .from('photo_sources')
-      .select('id, company_id, station_id, name, source_type, enabled, token_revoked_at')
+      .select('id, company_id, station_id, name, source_type, enabled, token_revoked_at, last_activity_at')
       .eq('token_hash', tokenHash(token))
       .maybeSingle()
 
     if (sourceError) return failure(500, sourceError.message)
     if (!source || source.enabled === false || source.token_revoked_at) {
       return failure(401, 'Invalid photo source token.')
+    }
+
+    const lastActivityAt = source.last_activity_at ? new Date(source.last_activity_at).getTime() : 0
+    if (!lastActivityAt || Date.now() - lastActivityAt > 60 * 1000) {
+      await supabase
+        .from('photo_sources')
+        .update({ last_activity_at: new Date().toISOString() })
+        .eq('id', source.id)
+        .eq('company_id', source.company_id)
     }
 
     const { data: station, error: stationError } = await supabase

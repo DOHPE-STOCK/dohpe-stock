@@ -206,6 +206,12 @@ function sourceIsUsable(source: PhotoSource) {
   return source.enabled && !source.token_revoked_at && Boolean(source.token_last_four)
 }
 
+function phoneSourceIsPaired(source: PhotoSource) {
+  if (source.source_type !== 'phone' || !sourceIsUsable(source)) return false
+  const lastActivityAt = source.last_activity_at ? new Date(source.last_activity_at).getTime() : 0
+  return Boolean(lastActivityAt && Date.now() - lastActivityAt <= 12 * 60 * 60 * 1000)
+}
+
 function itemTitle(item: any) {
   return item?.final_title || item?.ai_title || item?.basic_title || item?.website_title || item?.brand || 'Active item'
 }
@@ -431,6 +437,12 @@ export default function PhotoMonitorPage() {
   }, [station?.id, activeCompanyId, schemaReady])
 
   useEffect(() => {
+    if (!station?.id) return
+    const timer = window.setInterval(() => fetchSources(false), 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [station?.id, activeCompanyId, schemaReady])
+
+  useEffect(() => {
     fetchRepresentations()
     fetchProcessingJobs()
   }, [selectedImageId, captures, activeCompanyId])
@@ -487,6 +499,16 @@ export default function PhotoMonitorPage() {
           filter: `company_id=eq.${activeCompanyId}`,
         },
         () => fetchStations(false)
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'photo_sources',
+          filter: `company_id=eq.${activeCompanyId}`,
+        },
+        () => fetchSources(false)
       )
       .subscribe()
 
@@ -2428,7 +2450,7 @@ export default function PhotoMonitorPage() {
           ? calibratedRepresentation
           : null
   const phonePairExpanded = Boolean(phonePairUrl && (phonePairHoverExpanded || phonePairPinned))
-  const usablePhoneSources = sources.filter((source) => source.source_type === 'phone' && sourceIsUsable(source))
+  const usablePhoneSources = sources.filter(phoneSourceIsPaired)
   const usableFolderSources = sources.filter((source) => source.source_type === 'watched_folder' && sourceIsUsable(source))
   const pairedDeviceLabel = `${usablePhoneSources.length} device${usablePhoneSources.length === 1 ? '' : 's'} paired`
   const watchedFolderLabel = `${usableFolderSources.length} folder${usableFolderSources.length === 1 ? '' : 's'} active`
@@ -3156,12 +3178,20 @@ export default function PhotoMonitorPage() {
                             <div className="flex shrink-0 items-center gap-2">
                               <span
                                 className={`rounded-full px-2 py-1 text-[10px] font-black ${
-                                  sourceIsUsable(source)
+                                  source.source_type === 'phone' ? phoneSourceIsPaired(source) : sourceIsUsable(source)
                                     ? 'bg-green-600 text-white'
                                     : 'bg-zinc-700 text-zinc-300'
                                 }`}
                               >
-                                {sourceIsUsable(source) ? 'READY' : 'OFF'}
+                                {source.source_type === 'phone'
+                                  ? phoneSourceIsPaired(source)
+                                    ? 'PAIRED'
+                                    : sourceIsUsable(source)
+                                      ? 'STALE'
+                                      : 'OFF'
+                                  : sourceIsUsable(source)
+                                    ? 'READY'
+                                    : 'OFF'}
                               </span>
                               <button
                                 type="button"

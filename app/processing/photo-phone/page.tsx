@@ -382,11 +382,34 @@ export default function PhotoPhonePage() {
     }
   }
 
-  function unpair() {
+  async function unpair() {
+    const token = pairing?.source_token || ''
+    setBusy(true)
+
+    if (token && navigator.onLine) {
+      try {
+        const response = await fetch('/api/photography/phone-pairing', {
+          method: 'DELETE',
+          headers: {
+            authorization: `Bearer ${token}`,
+          },
+        })
+        const data = await response.json().catch(() => null)
+        if (!response.ok || !data?.ok) {
+          throw new Error(data?.message || 'Could not unpair this phone.')
+        }
+      } catch (error: any) {
+        setMessage(error.message || 'Could not unpair this phone.')
+        setBusy(false)
+        return
+      }
+    }
+
     window.localStorage.removeItem(PHONE_PAIRING_STORAGE)
     setPairing(null)
     setStation(null)
-    setMessage('Phone unpaired.')
+    setMessage(navigator.onLine ? 'Phone unpaired.' : 'Phone unpaired locally. Server pairing will expire if unused.')
+    setBusy(false)
   }
 
   const statusText = useMemo(() => {
