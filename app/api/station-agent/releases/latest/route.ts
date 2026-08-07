@@ -4,6 +4,7 @@ import path from 'node:path'
 
 const STATION_AGENT_VERSION = '0.3.18'
 const INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
+const UPDATER_INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.download'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -20,11 +21,20 @@ export async function GET(request: NextRequest) {
     'loopbase-station-agent',
     'Loopbase-Station-Agent-Setup.exe',
   )
+  const bundledUpdaterInstaller = path.join(
+    process.cwd(),
+    'public',
+    'downloads',
+    'loopbase-station-agent',
+    'Loopbase-Station-Agent-Setup.download',
+  )
   const configuredDownload =
     process.env.STATION_AGENT_DOWNLOAD_URL ||
     process.env.NEXT_PUBLIC_STATION_AGENT_DOWNLOAD_URL ||
     ''
   const downloadUrl =
+    existsSync(bundledUpdaterInstaller)
+      ? `${origin}${UPDATER_INSTALLER_PATH}?v=${STATION_AGENT_VERSION}` :
     existsSync(bundledInstaller)
       ? `${origin}${INSTALLER_PATH}?v=${STATION_AGENT_VERSION}`
       : configuredDownload ||
