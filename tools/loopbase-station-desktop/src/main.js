@@ -1,8 +1,7 @@
-import { invoke } from '@tauri-apps/api/core'
-
-const CURRENT_VERSION = '0.3.9'
+const CURRENT_VERSION = '0.3.10'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
+const invoke = window.__TAURI__?.core?.invoke
 
 const statusEl = document.querySelector('#status')
 const fallbackEl = document.querySelector('#fallback')
@@ -29,6 +28,12 @@ function setStatus(message) {
 }
 
 async function waitForAgent() {
+  if (!invoke) {
+    setStatus('Station Agent desktop API did not load. Close Loopbase from the system tray, install the latest build, then open it again.')
+    fallbackEl?.classList.remove('hidden')
+    return
+  }
+
   try {
     setStatus('Starting Station Agent service...')
     const message = await invoke('ensure_station_agent')
@@ -91,6 +96,11 @@ async function checkForUpdates() {
 
 updateNowEl?.addEventListener('click', async () => {
   if (!availableUpdate?.download_url) return
+  if (!invoke) {
+    setStatus('Station Agent desktop API did not load, so the app cannot run the installer from inside Windows.')
+    return
+  }
+
   const confirmed = window.confirm(
     `Update Loopbase Station Agent to ${availableUpdate.version}? This will download the installer, close this app, and start the installer. Saved station settings will be kept.`
   )

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.9'
+const STATION_AGENT_VERSION = '0.3.10'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -27,9 +27,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Adds visible startup diagnostics when the bundled local helper cannot start.',
-      'Starts/checks the helper from the desktop UI instead of leaving a blind waiting spinner.',
-      'Removes the always-visible system tray notice from the main dashboard.',
+      'Fixes packaged desktop startup by loading the Tauri desktop API through the Windows app runtime.',
+      'Shows a clear desktop API error instead of silently waiting when the UI script fails to boot.',
+      'Keeps the local helper startup diagnostics from the previous release.',
     ],
   })
 }

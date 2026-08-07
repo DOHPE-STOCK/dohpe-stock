@@ -4,19 +4,11 @@ cd /d "%~dp0"
 
 set ORIGINAL_DIR=%CD%
 set STAGING_ROOT=C:\LoopbaseBuild
-set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop-%RANDOM%
+set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop-%RANDOM%-%RANDOM%-%RANDOM%
 set npm_config_cache=%STAGING_ROOT%\npm-cache
 
-if exist "..\loopbase-station-agent\dist\Loopbase Station Agent.exe" (
-  echo Reusing existing Loopbase Station Agent helper EXE.
-) else if exist "..\..\public\downloads\loopbase-station-agent\Loopbase-Station-Agent.exe" (
-  if not exist "..\loopbase-station-agent\dist" mkdir "..\loopbase-station-agent\dist"
-  copy /Y "..\..\public\downloads\loopbase-station-agent\Loopbase-Station-Agent.exe" "..\loopbase-station-agent\dist\Loopbase Station Agent.exe"
-  if errorlevel 1 exit /b %errorlevel%
-) else (
-  call "..\loopbase-station-agent\build-release.cmd"
-  if errorlevel 1 exit /b %errorlevel%
-)
+call "..\loopbase-station-agent\build-release.cmd"
+if errorlevel 1 exit /b %errorlevel%
 
 where rustc >nul 2>nul
 if errorlevel 1 (
@@ -78,7 +70,9 @@ if /I "%CD%"=="%STAGING_DIR%" (
 set RELEASE_DIR=%ORIGINAL_DIR%\..\..\public\downloads\loopbase-station-agent
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 set SETUP_FILE=
-for %%F in ("%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis\Loopbase Station Agent_*_x64-setup.exe") do set SETUP_FILE=%%~fF
+for /F "delims=" %%F in ('dir /B /A:-D /O:-D "%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis\Loopbase Station Agent_*_x64-setup.exe" 2^>nul') do (
+  if "%SETUP_FILE%"=="" set SETUP_FILE=%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis\%%F
+)
 if not "%SETUP_FILE%"=="" (
   copy /Y "%SETUP_FILE%" "%RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe"
   if errorlevel 1 exit /b %errorlevel%
