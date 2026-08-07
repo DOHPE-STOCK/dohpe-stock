@@ -148,14 +148,21 @@ fn agent_config_path(app_handle: &tauri::AppHandle) -> PathBuf {
     PathBuf::from("config.local.json")
 }
 
-fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
+fn spawn_agent(app_handle: &tauri::AppHandle, state: State<'_, AgentProcess>) {
+    let _ = start_agent_with_diagnostics(app_handle, state);
+}
+
+fn start_agent_with_diagnostics(
+    app_handle: &tauri::AppHandle,
+    state: State<'_, AgentProcess>,
+) -> Result<String, String> {
     let mut process_guard = state.0.lock().expect("agent process lock");
     if process_guard.is_some() {
-        return;
+        return Ok("Station helper process is already tracked by the desktop app.".to_string());
     }
 
     if local_agent_ready() {
-        return;
+        return Ok("Station helper is already running and /status responded.".to_string());
     }
 
     if local_agent_port_open() {
@@ -169,17 +176,19 @@ fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
         .map(|path| path.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
+    let mut attempts: Vec<String> = Vec::new();
     for path in candidate_agent_paths(app_handle) {
         if !path.exists() {
+            attempts.push(format!("not found: {}", path.display()));
             continue;
         }
 
         let mut command = if path.extension().and_then(|value| value.to_str()) == Some("py") {
             let mut cmd = Command::new("python");
-            cmd.arg(path);
+            cmd.arg(&path);
             cmd
         } else {
-            Command::new(path)
+            Command::new(&path)
         };
 
         command
@@ -193,16 +202,44 @@ fn spawn_agent(app_handle: &tauri::AppHandle, state: State<AgentProcess>) {
         #[cfg(target_os = "windows")]
         command.creation_flags(CREATE_NO_WINDOW);
 
-        if let Ok(child) = command.spawn() {
-            *process_guard = Some(child);
-            return;
+        match command.spawn() {
+            Ok(child) => {
+                let spawned_path = path.display().to_string();
+                *process_guard = Some(child);
+                drop(process_guard);
+
+                for _ in 0..12 {
+                    if local_agent_ready() {
+                        return Ok(format!("Started station helper from {spawned_path}."));
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+
+                return Err(format!(
+                    "Started helper from {spawned_path}, but /status did not respond within 6 seconds."
+                ));
+            }
+            Err(error) => attempts.push(format!("failed: {} ({error})", path.display())),
         }
     }
+
+    Err(format!(
+        "Could not start station helper. Attempts: {}",
+        attempts.join(" | ")
+    ))
 }
 
 #[tauri::command]
 fn station_agent_status() -> bool {
     local_agent_ready()
+}
+
+#[tauri::command]
+fn ensure_station_agent(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AgentProcess>,
+) -> Result<String, String> {
+    start_agent_with_diagnostics(&app_handle, state)
 }
 
 #[tauri::command]
@@ -323,6 +360,7 @@ fn main() {
         .manage(AgentProcess(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             station_agent_status,
+            ensure_station_agent,
             install_station_agent_update
         ])
         .setup(|app| {

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 
-const CURRENT_VERSION = '0.3.8'
+const CURRENT_VERSION = '0.3.9'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 
@@ -29,6 +29,16 @@ function setStatus(message) {
 }
 
 async function waitForAgent() {
+  try {
+    setStatus('Starting Station Agent service...')
+    const message = await invoke('ensure_station_agent')
+    setStatus(message)
+  } catch (error) {
+    setStatus(`Station Agent launch failed: ${error}`)
+    fallbackEl?.classList.remove('hidden')
+    return
+  }
+
   for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const ready = await invoke('station_agent_status')
