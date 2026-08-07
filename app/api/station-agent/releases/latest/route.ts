@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.0'
+const STATION_AGENT_VERSION = '0.3.2'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -27,9 +27,10 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-06',
     release_notes: [
+      'Test release for validating Station Agent in-app update discovery from the Windows app.',
+      'Shows the hosted installer URL directly in the update banner as a copyable fallback.',
       'Fixes Update Now inside the desktop app by using a normal form button that opens the hosted installer in the default browser.',
       'Keeps updates as a hosted installer download, avoiding local cache/self-install execution.',
-      'Preserves the new six-card Station Agent settings layout.',
     ],
   })
 }

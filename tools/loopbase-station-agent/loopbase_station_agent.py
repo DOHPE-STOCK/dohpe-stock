@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.0"
+AGENT_VERSION_NUMBER = "0.3.2"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -1145,6 +1145,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
             <p class="eyebrow">Update Available</p>
             <h2>Loopbase Station Agent {html.escape(update_version)} is ready</h2>
             <p class="muted">Current version: {html.escape(AGENT_VERSION_NUMBER)}.</p>
+            <p class="download-url">{html.escape(update_download_url)}</p>
           </div>
           <form method="post" action="/update/open-browser">
             <button type="submit">Update Now</button>
@@ -1363,6 +1364,11 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     }}
     .setup-form {{ display: grid; grid-template-columns: 1fr; gap: 10px; }}
     .update-banner.subtle {{ border-color: #394652; background: rgba(16,20,24,.92); }}
+    .download-url {{
+      margin-top: 10px; max-width: 640px; overflow-wrap: anywhere; user-select: all;
+      color: #d7f5e6; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      border: 1px solid #2f7d58; border-radius: 10px; background: rgba(7,10,13,.72); padding: 8px 10px;
+    }}
     .top-actions {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
     .station-badge {{
       min-height: 36px; display: inline-flex; align-items: center; gap: 8px; border-radius: 999px;
