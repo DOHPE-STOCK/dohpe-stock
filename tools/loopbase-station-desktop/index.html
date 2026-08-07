@@ -11,7 +11,7 @@
       <div class="window-bar">
         <div id="connectionBadge" class="connection-badge">Starting</div>
         <button id="headerUpdateNow" class="header-update hidden" type="button">Update available</button>
-        <button id="buildNumber" class="build-number" type="button">Build 0.3.25</button>
+        <button id="buildNumber" class="build-number" type="button">Build 0.3.26</button>
       </div>
 
       <section class="hero">
@@ -88,6 +88,10 @@
             <div>
               <div class="subhead">
                 <strong>Allowed Local Printers</strong>
+                <select id="printerPicker">
+                  <option value="">Choose printer to add</option>
+                </select>
+                <button id="addPrinter" class="ghost-button compact" type="button">Add Printer</button>
                 <button id="refreshPrinters" class="ghost-button compact" type="button">Refresh</button>
               </div>
               <div id="allowedPrinters" class="choice-list"><p class="muted">Loading printers...</p></div>

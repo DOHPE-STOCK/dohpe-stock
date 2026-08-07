@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.25'
+const CURRENT_VERSION = '0.3.26'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -28,6 +28,8 @@ const printerModeEl = document.querySelector('#printerMode')
 const defaultPrinterEl = document.querySelector('#defaultPrinter')
 const printerNetworkHostEl = document.querySelector('#printerNetworkHost')
 const printerNetworkPortEl = document.querySelector('#printerNetworkPort')
+const printerPickerEl = document.querySelector('#printerPicker')
+const addPrinterEl = document.querySelector('#addPrinter')
 const allowedPrintersEl = document.querySelector('#allowedPrinters')
 const refreshPrintersEl = document.querySelector('#refreshPrinters')
 const photoFormEl = document.querySelector('#photoForm')
@@ -42,6 +44,7 @@ let buildNumberResetTimer = null
 let currentStationConfig = null
 let currentPrinterConfig = null
 let currentPhotoConfig = null
+let selectedAllowedPrinters = []
 
 const sections = {
   printer: { eyebrow: 'Print', title: 'Remote Printer' },
@@ -280,6 +283,7 @@ function renderPrinterConfig(data) {
   currentPrinterConfig = data
   const printer = data?.printer || {}
   const printers = Array.isArray(data?.printers) ? data.printers : []
+  selectedAllowedPrinters = Array.isArray(printer.allowed_printers) ? [...new Set(printer.allowed_printers.filter(Boolean))] : []
   if (printerCountEl) printerCountEl.textContent = `${printers.length} printer${printers.length === 1 ? '' : 's'} found`
   if (printerEnabledEl) printerEnabledEl.checked = Boolean(printer.remote_enabled ?? printer.enabled)
   if (printerPollEnabledEl) printerPollEnabledEl.checked = Boolean(printer.remote_poll_enabled)
@@ -298,19 +302,31 @@ function renderPrinterConfig(data) {
     })
   }
 
+  if (printerPickerEl) {
+    printerPickerEl.innerHTML = '<option value="">Choose printer to add</option>'
+    printers.forEach((row) => {
+      const option = document.createElement('option')
+      option.value = row.name || ''
+      option.textContent = `${row.name || 'Unnamed printer'}${row.default ? ' (default)' : ''}`
+      printerPickerEl.appendChild(option)
+    })
+  }
+
+  renderAllowedPrinters()
+}
+
+function renderAllowedPrinters() {
   if (allowedPrintersEl) {
-    const allowed = new Set(Array.isArray(printer.allowed_printers) ? printer.allowed_printers : [])
-    allowedPrintersEl.innerHTML = printers.length
-      ? printers.map((row, index) => {
-        const checked = !allowed.size || allowed.has(row.name) ? 'checked' : ''
+    allowedPrintersEl.innerHTML = selectedAllowedPrinters.length
+      ? selectedAllowedPrinters.map((name, index) => {
         return `
-          <label class="choice-row">
-            <span>${escapeHtml(row.name)}${row.default ? ' <small class="muted">Default</small>' : ''}</span>
-            <input type="checkbox" data-allowed-printer="${index}" value="${escapeHtml(row.name)}" ${checked}>
-          </label>
+          <div class="choice-row">
+            <span>${escapeHtml(name)}</span>
+            <button class="ghost-button compact" type="button" data-remove-printer="${index}">Remove</button>
+          </div>
         `
       }).join('')
-      : '<p class="muted">No Windows printers detected on this PC yet.</p>'
+      : '<p class="muted">No printers added yet. Choose a Windows printer above, then click Add Printer.</p>'
   }
 }
 
@@ -398,12 +414,34 @@ refreshPrintersEl?.addEventListener('click', () => {
   void loadPrinterConfig()
 })
 
+addPrinterEl?.addEventListener('click', () => {
+  const printerName = String(printerPickerEl?.value || '').trim()
+  if (!printerName) {
+    setStatus('Choose a Windows printer to add first.')
+    return
+  }
+  if (!selectedAllowedPrinters.includes(printerName)) {
+    selectedAllowedPrinters = [...selectedAllowedPrinters, printerName].sort((left, right) => left.localeCompare(right))
+    renderAllowedPrinters()
+  }
+  if (!defaultPrinterEl?.value) defaultPrinterEl.value = printerName
+  if (printerPickerEl) printerPickerEl.value = ''
+  setStatus('Printer added. Click Save Printers to keep this change.')
+})
+
+allowedPrintersEl?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-printer]')
+  if (!button) return
+  const index = Number.parseInt(button.dataset.removePrinter || '-1', 10)
+  if (index < 0) return
+  selectedAllowedPrinters = selectedAllowedPrinters.filter((_, printerIndex) => printerIndex !== index)
+  renderAllowedPrinters()
+  setStatus('Printer removed. Click Save Printers to keep this change.')
+})
+
 printerFormEl?.addEventListener('submit', async (event) => {
   event.preventDefault()
-  const allowedPrinters = [...document.querySelectorAll('[data-allowed-printer]')]
-    .filter((input) => input.checked)
-    .map((input) => input.value)
-    .filter(Boolean)
+  const allowedPrinters = [...new Set(selectedAllowedPrinters.filter(Boolean))]
   setStatus('Saving printer settings...')
   try {
     const response = await fetch(`${dashboardUrl}/api/printer/config`, {
