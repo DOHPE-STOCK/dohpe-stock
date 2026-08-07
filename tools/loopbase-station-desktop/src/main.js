@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.22'
+const CURRENT_VERSION = '0.3.23'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -374,13 +374,13 @@ async function installAvailableUpdate(button) {
   }
 
   const confirmed = window.confirm(
-    `Update Loopbase Station Agent to ${availableUpdate.version}? This will download the installer, close this app, and start the installer. Saved station settings will be kept.`
+    `Update Loopbase Station Agent to ${availableUpdate.version}? Loopbase will close, update automatically, keep saved station settings, and reopen.`
   )
   if (!confirmed) return
 
   button.disabled = true
   button.textContent = 'Updating...'
-  setStatus('Downloading Station Agent update...')
+  setStatus('Downloading and installing Station Agent update...')
 
   try {
     const message = await invoke('install_station_agent_update', {

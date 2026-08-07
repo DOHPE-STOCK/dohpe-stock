@@ -33,6 +33,10 @@ fn sanitize_version(version: &str) -> String {
     }
 }
 
+fn quote_powershell_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 fn local_agent_ready() -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], 8790));
     let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
@@ -292,16 +296,23 @@ fn install_station_agent_update(
         return Err("The downloaded installer was too small to be valid.".to_string());
     }
 
-    let update_script = base_dir.join("run-loopbase-update.cmd");
+    let update_script = base_dir.join("run-loopbase-update.ps1");
     let current_pid = std::process::id();
+    let app_exe = std::env::current_exe()
+        .map_err(|error| format!("Could not resolve current app path: {error}"))?;
     let script = format!(
-        "@echo off\r\n\
-timeout /t 2 /nobreak >nul\r\n\
-taskkill /PID {current_pid} /F >nul 2>nul\r\n\
-taskkill /IM \"loopbase-station-desktop.exe\" /F >nul 2>nul\r\n\
-taskkill /IM \"Loopbase Station Agent.exe\" /F >nul 2>nul\r\n\
-start \"\" \"{installer}\"\r\n",
-        installer = installer_path.display()
+        "$ErrorActionPreference = 'SilentlyContinue'\r\n\
+Start-Sleep -Seconds 2\r\n\
+Stop-Process -Id {current_pid} -Force\r\n\
+Get-Process -Name 'loopbase-station-desktop' | Stop-Process -Force\r\n\
+Get-Process -Name 'Loopbase Station Agent' | Stop-Process -Force\r\n\
+$installer = {installer}\r\n\
+$appExe = {app_exe}\r\n\
+Start-Process -FilePath $installer -ArgumentList '/S' -Wait\r\n\
+Start-Sleep -Seconds 2\r\n\
+if (Test-Path $appExe) {{ Start-Process -FilePath $appExe }}\r\n",
+        installer = quote_powershell_string(&installer_path.display().to_string()),
+        app_exe = quote_powershell_string(&app_exe.display().to_string())
     );
     let mut handle = fs::File::create(&update_script)
         .map_err(|error| format!("Could not create update launcher: {error}"))?;
@@ -309,8 +320,16 @@ start \"\" \"{installer}\"\r\n",
         .write_all(script.as_bytes())
         .map_err(|error| format!("Could not write update launcher: {error}"))?;
 
-    Command::new("cmd.exe")
-        .args(["/C", &update_script.display().to_string()])
+    Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            &update_script.display().to_string(),
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -319,7 +338,7 @@ start \"\" \"{installer}\"\r\n",
         .map_err(|error| format!("Could not start update installer: {error}"))?;
 
     Ok(format!(
-        "Loopbase Station Agent {safe_version} installer started. Your station settings are kept."
+        "Loopbase Station Agent {safe_version} update started. Loopbase will close, update, and reopen automatically."
     ))
 }
 

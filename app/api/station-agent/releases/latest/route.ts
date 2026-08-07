@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.22'
+const STATION_AGENT_VERSION = '0.3.23'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     release_notes: [
       'Simplifies Photography Stations so sources only require watch folders.',
       'Keeps photo source tokens and internal processing folders managed automatically.',
-      'Preserves the previous update/install behaviour while testing this release.',
+      'Installs updates automatically, keeps settings, and reopens Loopbase after updating.',
     ],
   })
 }
