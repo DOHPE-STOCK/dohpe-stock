@@ -70,6 +70,7 @@ h1 {
 }
 
 .button {
+  border: 0;
   border-radius: 12px;
   background: #17a56b;
   color: white;
@@ -77,6 +78,32 @@ h1 {
   font-weight: 950;
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
+  font: inherit;
+}
+
+.button:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 16px;
+  border: 1px solid #2f7d58;
+  border-radius: 18px;
+  background: rgba(18, 49, 35, .94);
+  padding: 18px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, .24);
+}
+
+.update-banner h2 {
+  margin: 4px 0 0;
+  font-size: 19px;
+  letter-spacing: 0;
 }
 
 .grid {
@@ -134,6 +161,11 @@ article small {
 
 @media (max-width: 900px) {
   .hero {
+    flex-direction: column;
+  }
+
+  .update-banner {
+    align-items: stretch;
     flex-direction: column;
   }
 
