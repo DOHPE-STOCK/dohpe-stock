@@ -69,9 +69,10 @@ if /I "%CD%"=="%STAGING_DIR%" (
 
 set RELEASE_DIR=%ORIGINAL_DIR%\..\..\public\downloads\loopbase-station-agent
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
+set NSIS_DIR=%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis
 set SETUP_FILE=
-for /F "delims=" %%F in ('dir /B /A:-D /O:-D "%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis\Loopbase Station Agent_*_x64-setup.exe" 2^>nul') do (
-  if "%SETUP_FILE%"=="" set SETUP_FILE=%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis\%%F
+for /F "usebackq delims=" %%F in (`powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%NSIS_DIR%' -Filter 'Loopbase Station Agent_*_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName"`) do (
+  set SETUP_FILE=%%F
 )
 if not "%SETUP_FILE%"=="" (
   copy /Y "%SETUP_FILE%" "%RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe"
