@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.3"
+AGENT_VERSION_NUMBER = "0.3.4"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
