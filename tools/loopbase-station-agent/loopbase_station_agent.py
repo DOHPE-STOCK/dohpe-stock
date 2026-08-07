@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.4"
+AGENT_VERSION_NUMBER = "0.3.5"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -493,7 +493,14 @@ class StationAgent:
         printer["mode"] = fields.get("printer_mode", printer["mode"])
         printer["windows_printer_name"] = fields.get("windows_printer_name", printer["windows_printer_name"])
         allowed_printers_raw = fields.get("allowed_printers_json", "")
-        if allowed_printers_raw:
+        selected_local_printers = [
+            value
+            for key, value in fields.items()
+            if key.startswith("allowed_printer_") and text(value)
+        ]
+        if selected_local_printers:
+            printer["allowed_printers"] = sorted(set(text(name) for name in selected_local_printers if text(name)))
+        elif allowed_printers_raw:
             parsed_printers = json.loads(allowed_printers_raw)
             if not isinstance(parsed_printers, list):
                 raise RuntimeError("Allowed remote printers must be a JSON array.")
@@ -507,6 +514,38 @@ class StationAgent:
         save_config(self.config_path, cfg)
         self.ensure_photo_config()
         self.ensure_rfid_zone_config()
+
+    def write_printer_from_form(self, fields: dict[str, str]) -> None:
+        cfg = deep_merge(default_config(), self.config)
+        printer = cfg["printer"]
+        printer["enabled"] = bool_value(fields.get("printer_enabled"))
+        printer["remote_enabled"] = bool_value(fields.get("printer_remote_enabled"))
+        printer["remote_poll_enabled"] = bool_value(fields.get("printer_remote_poll_enabled"))
+        printer["station_token"] = fields.get("printer_station_token", printer.get("station_token") or "")
+        printer["poll_interval_seconds"] = int_value(
+            fields.get("printer_poll_interval_seconds"),
+            int(printer.get("poll_interval_seconds") or 5),
+        )
+        printer["mode"] = fields.get("printer_mode", printer.get("mode") or "windows")
+        printer["windows_printer_name"] = fields.get("windows_printer_name", printer.get("windows_printer_name") or "")
+        selected_local_printers = [
+            value
+            for key, value in fields.items()
+            if key.startswith("allowed_printer_") and text(value)
+        ]
+        printer["allowed_printers"] = sorted(set(text(name) for name in selected_local_printers if text(name)))
+        printer["network_host"] = fields.get("network_host", printer.get("network_host") or "")
+        printer["network_port"] = int_value(fields.get("network_port"), int(printer.get("network_port") or 9100))
+        printer["default_label_width_mm"] = int_value(
+            fields.get("label_width_mm"),
+            int(printer.get("default_label_width_mm") or 60),
+        )
+        printer["default_label_height_mm"] = int_value(
+            fields.get("label_height_mm"),
+            int(printer.get("default_label_height_mm") or 40),
+        )
+        self.config = cfg
+        save_config(self.config_path, cfg)
 
     def ensure_photo_config(self) -> Path:
         photo = self.config["photo_worker"]
@@ -1131,7 +1170,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     printer = cfg["printer"]
     status = agent.status()
     printers = status.get("printers") or []
-    allowed_printers_json = json.dumps(printer.get("allowed_printers") or [], indent=2)
+    allowed_printers = {text(name) for name in printer.get("allowed_printers") or [] if text(name)}
     update = status.get("update") or {}
     update_available = update.get("available") is True
     update_download_url = text(update.get("download_url"))
@@ -1147,7 +1186,7 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
             <p class="muted">Current version: {html.escape(AGENT_VERSION_NUMBER)}.</p>
             <p class="download-url">{html.escape(update_download_url)}</p>
           </div>
-          <form method="post" action="/update/open-browser">
+          <form method="post" action="/update/install" onsubmit="return confirm('Update Loopbase Station Agent now? This will download the installer, close this app, and restart the installer. Your station settings will be kept.');">
             <button type="submit">Update Now</button>
           </form>
         </div>
@@ -1241,6 +1280,18 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     printer_options = "".join(
         f"<option value=\"{html_attr(row.get('name'))}\" {selected(printer.get('windows_printer_name'), text(row.get('name')))}>{html.escape(text(row.get('name')))}{' (default)' if row.get('default') else ''}</option>"
         for row in printers
+    )
+    local_printer_checks = "".join(
+        f"""
+        <label class="check printer-choice">
+          <span>
+            {html.escape(text(row.get('name')))}
+            {'<small>Default Windows printer</small>' if row.get('default') else ''}
+          </span>
+          <input type="checkbox" name="allowed_printer_{index}" value="{html_attr(row.get('name'))}" {checked(not allowed_printers or text(row.get('name')) in allowed_printers)}>
+        </label>
+        """
+        for index, row in enumerate(printers, start=1)
     )
     first_run_setup = ""
     if not text(printer.get("station_token")):
@@ -1385,6 +1436,9 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
     .source-card {{ border: 1px solid #26313a; border-radius: 14px; background: #0c1014; padding: 14px; }}
     .source-head {{ display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }}
     .printer-list {{ display: grid; gap: 6px; margin-top: 10px; color: #cbd3d9; font-size: 13px; font-weight: 800; }}
+    .printer-checks {{ display: grid; gap: 8px; margin-top: 10px; }}
+    .printer-choice span {{ display: grid; gap: 3px; }}
+    .printer-choice small {{ color: var(--muted); font-size: 11px; font-weight: 800; }}
     @media (max-width: 900px) {{ .grid, .form-grid, .module-grid, .setup-banner {{ grid-template-columns: 1fr; }} header {{ flex-direction: column; }} }}
   </style>
 </head>
@@ -1509,7 +1563,6 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
                   {printer_options}
                 </select>
               </label>
-              <label class="wide">Allowed remote printers JSON<textarea name="allowed_printers_json">{html.escape(allowed_printers_json)}</textarea></label>
               <label>Network host<input name="network_host" value="{html_attr(printer.get('network_host'))}"></label>
               <label>Network port<input name="network_port" value="{html_attr(printer.get('network_port'))}"></label>
               <label>Label width mm<input name="label_width_mm" value="{html_attr(printer.get('default_label_width_mm'))}"></label>
@@ -1583,8 +1636,44 @@ def render_page(agent: StationAgent, message: str = "") -> bytes:
           <div class="printer-list">
             {''.join(f"<span>{'Default: ' if row.get('default') else ''}{html.escape(text(row.get('name')))}</span>" for row in printers) or '<span>No Windows printers detected. Install pywin32 and check Windows printer settings.</span>'}
           </div>
+          <form method="post" action="/printer/save" style="margin-top:12px">
+            <div class="form-grid">
+              <label class="check">Remote printer enabled<input type="checkbox" name="printer_enabled" {checked(printer.get('enabled'))}></label>
+              <label class="check">Accept print jobs from Loopbase<input type="checkbox" name="printer_remote_enabled" {checked(printer.get('remote_enabled'))}></label>
+              <label class="check">Poll remote print queue<input type="checkbox" name="printer_remote_poll_enabled" {checked(printer.get('remote_poll_enabled'))}></label>
+              <label class="wide">Station print token<input name="printer_station_token" value="{html_attr(printer.get('station_token'))}" placeholder="Paste the station token from Loopbase settings"></label>
+              <label>Poll interval seconds<input name="printer_poll_interval_seconds" value="{html_attr(printer.get('poll_interval_seconds'))}"></label>
+              <label>Printer mode
+                <select name="printer_mode">
+                  <option value="windows" {selected(printer.get('mode'), 'windows')}>Windows printer</option>
+                  <option value="network" {selected(printer.get('mode'), 'network')}>Network TCP/ZPL</option>
+                </select>
+              </label>
+              <label>Default Windows printer
+                <select name="windows_printer_name">
+                  <option value="">Choose local printer</option>
+                  {printer_options}
+                </select>
+              </label>
+              <label>Network printer host<input name="network_host" value="{html_attr(printer.get('network_host'))}" placeholder="192.168.1.50"></label>
+              <label>Network printer port<input name="network_port" value="{html_attr(printer.get('network_port'))}"></label>
+              <label>Label width mm<input name="label_width_mm" value="{html_attr(printer.get('default_label_width_mm'))}"></label>
+              <label>Label height mm<input name="label_height_mm" value="{html_attr(printer.get('default_label_height_mm'))}"></label>
+              <div class="wide">
+                <p class="eyebrow">Printers available to Loopbase</p>
+                <p class="muted">Tick the Windows printers this station can expose to users in this company. If none are ticked, all detected local printers are allowed.</p>
+                <div class="printer-checks">
+                  {local_printer_checks or '<p class="muted">No Windows printers detected on this PC.</p>'}
+                </div>
+              </div>
+            </div>
+            <p style="margin-top:12px" class="panel-actions">
+              <a class="button secondary" href="#">Cancel</a>
+              <button>Save Printers</button>
+            </p>
+          </form>
           <form method="post" action="/printer/test" style="margin-top:12px">
-            <button>Print ZPL Test Label</button>
+            <button class="secondary">Print ZPL Test Label</button>
           </form>
         </div>
 
@@ -1761,6 +1850,10 @@ def make_handler(agent: StationAgent):
                         send_zpl_windows(printer_name, zpl)
                     redirect(self, "ZPL test sent")
                     return
+                if path == "/printer/save":
+                    agent.write_printer_from_form(fields)
+                    redirect(self, "Printer settings saved")
+                    return
                 if path == "/update/check":
                     info = agent.check_for_updates(force=True)
                     if info.get("available"):
@@ -1779,7 +1872,8 @@ def make_handler(agent: StationAgent):
                     redirect(self, f"Opening installer download in your browser: {download_url}")
                     return
                 if path == "/update/install":
-                    redirect(self, "Use Update Now to download the latest installer from Loopbase.")
+                    target = agent.download_and_start_update()
+                    redirect(self, f"Update installer started: {target}")
                     return
                 self.send_json(404, {"ok": False, "message": "Not found."})
             except Exception as exc:
