@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { existsSync } from 'node:fs'
-import path from 'node:path'
 
-const STATION_AGENT_VERSION = '0.3.19'
-const INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
-const UPDATER_INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.download'
+const STATION_AGENT_VERSION = '0.3.21'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -14,31 +10,11 @@ function baseUrl(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const origin = baseUrl(request)
-  const bundledInstaller = path.join(
-    process.cwd(),
-    'public',
-    'downloads',
-    'loopbase-station-agent',
-    'Loopbase-Station-Agent-Setup.exe',
-  )
-  const bundledUpdaterInstaller = path.join(
-    process.cwd(),
-    'public',
-    'downloads',
-    'loopbase-station-agent',
-    'Loopbase-Station-Agent-Setup.download',
-  )
   const configuredDownload =
     process.env.STATION_AGENT_DOWNLOAD_URL ||
     process.env.NEXT_PUBLIC_STATION_AGENT_DOWNLOAD_URL ||
     ''
-  const downloadUrl =
-    existsSync(bundledUpdaterInstaller)
-      ? `${origin}${UPDATER_INSTALLER_PATH}?v=${STATION_AGENT_VERSION}` :
-    existsSync(bundledInstaller)
-      ? `${origin}${INSTALLER_PATH}?v=${STATION_AGENT_VERSION}`
-      : configuredDownload ||
-    `${origin}/api/station-agent/download`
+  const downloadUrl = configuredDownload || `${origin}/api/station-agent/download?v=${STATION_AGENT_VERSION}`
 
   return NextResponse.json({
     ok: true,
@@ -49,9 +25,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Automatically links photography watch folders to the connected station token.',
-      'Removes manual photo source token entry from the Station Agent desktop flow.',
-      'Keeps the neutral installer download used by the in-app updater.',
+      'Verifies the in-app updater against the binary Loopbase download API route.',
+      'Forces the Station Agent download route to run as a Node binary response.',
+      'Keeps the installer filename as a Windows .exe for update downloads.',
     ],
   })
 }

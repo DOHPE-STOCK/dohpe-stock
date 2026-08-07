@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { existsSync } from 'fs'
+import { readFile } from 'fs/promises'
 import path from 'path'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
   const configuredDownload =
@@ -13,11 +17,9 @@ export async function GET(request: NextRequest) {
 
   const downloads = [
     {
-      relativePath: '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe',
       fileName: 'Loopbase-Station-Agent-Setup.exe',
     },
     {
-      relativePath: '/downloads/loopbase-station-agent/Loopbase-Station-Agent.exe',
       fileName: 'Loopbase-Station-Agent.exe',
     },
   ]
@@ -25,7 +27,17 @@ export async function GET(request: NextRequest) {
   for (const download of downloads) {
     const staticPath = path.join(process.cwd(), 'public', 'downloads', 'loopbase-station-agent', download.fileName)
     if (existsSync(staticPath)) {
-      return NextResponse.redirect(new URL(download.relativePath, request.nextUrl.origin))
+      const file = await readFile(staticPath)
+      return new NextResponse(file, {
+        status: 200,
+        headers: {
+          'content-type': 'application/vnd.microsoft.portable-executable',
+          'content-disposition': `attachment; filename="${download.fileName}"`,
+          'content-length': String(file.length),
+          'cache-control': 'no-store, max-age=0',
+          'x-content-type-options': 'nosniff',
+        },
+      })
     }
   }
 
