@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.11"
+AGENT_VERSION_NUMBER = "0.3.12"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -887,10 +887,16 @@ class StationAgent:
 
         request = urllib.request.Request(download_url, headers={"User-Agent": AGENT_VERSION})
         with urllib.request.urlopen(request, timeout=90) as response, partial.open("wb") as handle:
+            response_url = response.geturl()
+            content_type = response.headers.get("content-type", "")
             shutil.copyfileobj(response, handle, length=1024 * 1024)
 
-        if partial.stat().st_size < 1024 * 1024:
-            raise RuntimeError("Downloaded update was too small to be a valid installer.")
+        downloaded_size = partial.stat().st_size
+        if downloaded_size < 1024 * 1024:
+            raise RuntimeError(
+                f"Downloaded update was too small to be a valid installer "
+                f"({downloaded_size} bytes, content-type: {content_type or 'unknown'}, url: {response_url})."
+            )
 
         with partial.open("rb") as handle:
             if handle.read(2) != b"MZ":

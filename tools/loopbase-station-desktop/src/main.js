@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.11'
+const CURRENT_VERSION = '0.3.12'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const manifestUrl = 'https://loopbase.io/api/station-agent/releases/latest'
 const invoke = window.__TAURI__?.core?.invoke

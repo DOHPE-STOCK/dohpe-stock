@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 
-const STATION_AGENT_VERSION = '0.3.11'
+const STATION_AGENT_VERSION = '0.3.12'
+const INSTALLER_PATH = '/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
@@ -10,12 +13,21 @@ function baseUrl(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const origin = baseUrl(request)
+  const bundledInstaller = path.join(
+    process.cwd(),
+    'public',
+    'downloads',
+    'loopbase-station-agent',
+    'Loopbase-Station-Agent-Setup.exe',
+  )
   const configuredDownload =
     process.env.STATION_AGENT_DOWNLOAD_URL ||
     process.env.NEXT_PUBLIC_STATION_AGENT_DOWNLOAD_URL ||
     ''
   const downloadUrl =
-    configuredDownload ||
+    existsSync(bundledInstaller)
+      ? `${origin}${INSTALLER_PATH}?v=${STATION_AGENT_VERSION}`
+      : configuredDownload ||
     `${origin}/api/station-agent/download`
 
   return NextResponse.json({
@@ -27,9 +39,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-07',
     release_notes: [
-      'Adds first-run station token entry directly inside the Windows app.',
-      'Shows the connected station name in the header after setup.',
-      'Removes the local dashboard button and bottom browser fallback text from the desktop shell.',
+      'Points in-app updates directly at the bundled Windows installer instead of a redirect route.',
+      'Improves update download validation errors with file size and response details.',
+      'Keeps the first-run station token setup screen from the previous release.',
     ],
   })
 }
