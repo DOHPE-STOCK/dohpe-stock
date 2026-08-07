@@ -23,6 +23,25 @@ function makeSourceToken() {
   return `phsrc_live_${crypto.randomBytes(32).toString('base64url')}`
 }
 
+async function revokeStalePhoneSources(companyId: string, stationId: string) {
+  const supabase = getSupabaseAdmin()
+  const staleBefore = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString()
+
+  await supabase
+    .from('photo_sources')
+    .update({
+      enabled: false,
+      token_hash: null,
+      token_revoked_at: new Date().toISOString(),
+    })
+    .eq('company_id', companyId)
+    .eq('station_id', stationId)
+    .eq('source_type', 'phone')
+    .eq('enabled', true)
+    .is('token_revoked_at', null)
+    .or(`last_activity_at.is.null,last_activity_at.lt.${staleBefore}`)
+}
+
 export async function GET(request: Request) {
   const access = await requireCompanyAccess(request)
   if (!access.ok) return failure(access.status, access.message)
@@ -34,6 +53,8 @@ export async function GET(request: Request) {
   const stationId = text(url.searchParams.get('station_id'))
 
   const supabase = getSupabaseAdmin()
+  if (stationId) await revokeStalePhoneSources(access.company.id, stationId)
+
   let query = supabase
     .from('photo_sources')
     .select(

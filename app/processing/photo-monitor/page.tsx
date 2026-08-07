@@ -206,10 +206,10 @@ function sourceIsUsable(source: PhotoSource) {
   return source.enabled && !source.token_revoked_at && Boolean(source.token_last_four)
 }
 
-function phoneSourceIsPaired(source: PhotoSource) {
+function phoneSourceIsConnected(source: PhotoSource) {
   if (source.source_type !== 'phone' || !sourceIsUsable(source)) return false
   const lastActivityAt = source.last_activity_at ? new Date(source.last_activity_at).getTime() : 0
-  return Boolean(lastActivityAt && Date.now() - lastActivityAt <= 12 * 60 * 60 * 1000)
+  return Boolean(lastActivityAt && Date.now() - lastActivityAt <= 3 * 60 * 1000)
 }
 
 function itemTitle(item: any) {
@@ -2450,9 +2450,9 @@ export default function PhotoMonitorPage() {
           ? calibratedRepresentation
           : null
   const phonePairExpanded = Boolean(phonePairUrl && (phonePairHoverExpanded || phonePairPinned))
-  const usablePhoneSources = sources.filter(phoneSourceIsPaired)
+  const usablePhoneSources = sources.filter(phoneSourceIsConnected)
   const usableFolderSources = sources.filter((source) => source.source_type === 'watched_folder' && sourceIsUsable(source))
-  const pairedDeviceLabel = `${usablePhoneSources.length} device${usablePhoneSources.length === 1 ? '' : 's'} paired`
+  const pairedDeviceLabel = `${usablePhoneSources.length} device${usablePhoneSources.length === 1 ? '' : 's'} connected`
   const watchedFolderLabel = `${usableFolderSources.length} folder${usableFolderSources.length === 1 ? '' : 's'} active`
 
   function makeWorkerSetupUrl(sourceName: string, token: string) {
@@ -3178,14 +3178,14 @@ export default function PhotoMonitorPage() {
                             <div className="flex shrink-0 items-center gap-2">
                               <span
                                 className={`rounded-full px-2 py-1 text-[10px] font-black ${
-                                  source.source_type === 'phone' ? phoneSourceIsPaired(source) : sourceIsUsable(source)
+                                  source.source_type === 'phone' ? phoneSourceIsConnected(source) : sourceIsUsable(source)
                                     ? 'bg-green-600 text-white'
                                     : 'bg-zinc-700 text-zinc-300'
                                 }`}
                               >
                                 {source.source_type === 'phone'
-                                  ? phoneSourceIsPaired(source)
-                                    ? 'PAIRED'
+                                  ? phoneSourceIsConnected(source)
+                                    ? 'CONNECTED'
                                     : sourceIsUsable(source)
                                       ? 'STALE'
                                       : 'OFF'

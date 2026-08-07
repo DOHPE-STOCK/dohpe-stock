@@ -390,6 +390,7 @@ export default function PhotoPhonePage() {
       try {
         const response = await fetch('/api/photography/phone-pairing', {
           method: 'DELETE',
+          keepalive: true,
           headers: {
             authorization: `Bearer ${token}`,
           },
