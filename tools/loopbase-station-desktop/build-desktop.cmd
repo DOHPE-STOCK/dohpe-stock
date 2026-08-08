@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 set ORIGINAL_DIR=%CD%
-set STAGING_ROOT=C:\LoopbaseBuild
+set STAGING_ROOT=%PUBLIC%\LoopbaseBuild
 set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop-%RANDOM%-%RANDOM%-%RANDOM%
 set npm_config_cache=%STAGING_ROOT%\npm-cache
 set APP_VERSION=
@@ -36,6 +36,7 @@ copy /Y "..\loopbase-station-agent\dist\Loopbase Station Agent.exe" ".\src-tauri
 if errorlevel 1 exit /b %errorlevel%
 
 if /I not "%CD%"=="%STAGING_DIR%" (
+  if exist "%STAGING_ROOT%" rmdir /S /Q "%STAGING_ROOT%"
   if not exist "%STAGING_ROOT%" mkdir "%STAGING_ROOT%"
   if errorlevel 1 (
     echo.
@@ -50,8 +51,13 @@ if /I not "%CD%"=="%STAGING_DIR%" (
     echo Close any running Loopbase Station Agent windows and rerun this from a normal PowerShell.
     exit /b %errorlevel%
   )
-  robocopy "%ORIGINAL_DIR%" "%STAGING_DIR%" /E /XD dist src-tauri\target /XF package-lock.json >nul
+  robocopy "%ORIGINAL_DIR%" "%STAGING_DIR%" /E /XD .build dist src-tauri\target /XF package-lock.json >nul
   if errorlevel 8 exit /b %errorlevel%
+  if not exist "%STAGING_DIR%\src-tauri\icons\icon.ico" (
+    if not exist "%STAGING_DIR%\src-tauri\icons" mkdir "%STAGING_DIR%\src-tauri\icons"
+    copy /Y "%ORIGINAL_DIR%\src-tauri\icons\icon.ico" "%STAGING_DIR%\src-tauri\icons\icon.ico" >nul
+    if errorlevel 1 exit /b %errorlevel%
+  )
   copy /Y "%ORIGINAL_DIR%\package-lock.json" "%STAGING_DIR%\package-lock.json" >nul 2>nul
   cd /d "%STAGING_DIR%"
 )

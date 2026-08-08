@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.27'
+const STATION_AGENT_VERSION = '0.3.28'
 
 function baseUrl(request: NextRequest) {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')

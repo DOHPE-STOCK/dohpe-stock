@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.27'
+const CURRENT_VERSION = '0.3.28'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -347,7 +347,7 @@ function renderPhotoConfig(data) {
   const photo = data?.photo || {}
   const sources = Array.isArray(data?.sources) ? data.sources.slice(0, 3) : []
   while (sources.length < 3) {
-    sources.push({ name: `Photo Source ${sources.length + 1}`, token: '', watch_folder: '', processed_folder: '', trash_folder: '' })
+    sources.push({ name: `Photo Folder ${sources.length + 1}`, token: '', watch_folder: '', processed_folder: '', trash_folder: '' })
   }
   if (photoEnabledEl) photoEnabledEl.checked = Boolean(photo.enabled)
   if (photoSourcesEl) {
@@ -361,6 +361,13 @@ function renderPhotoConfig(data) {
       </div>
     `).join('')
   }
+}
+
+function folderDisplayName(folderPath, fallback) {
+  const clean = String(folderPath || '').trim().replace(/[\\/]+$/, '')
+  if (!clean) return fallback
+  const parts = clean.split(/[\\/]+/).filter(Boolean)
+  return parts[parts.length - 1] || clean || fallback
 }
 
 async function loadPhotoConfig() {
@@ -479,7 +486,7 @@ photoSourcesEl?.addEventListener('click', async (event) => {
   const index = Number.parseInt(button.dataset.browseSource, 10)
   try {
     const selected = await invoke('select_windows_folder', {
-      title: `Choose watch folder for Photo Source ${index + 1}`,
+      title: `Choose photo folder ${index + 1}`,
     })
     const card = button.closest('[data-source-index]')
     const input = card?.querySelector('[data-photo-field="watch_folder"]')
@@ -497,7 +504,7 @@ photoFormEl?.addEventListener('submit', async (event) => {
       row[input.dataset.photoField] = input.value || ''
     })
     const index = Number.parseInt(card.dataset.sourceIndex || '0', 10)
-    row.name = `Photo Source ${index + 1}`
+    row.name = folderDisplayName(row.watch_folder, `Photo Folder ${index + 1}`)
     return row
   })
   setStatus('Saving photography settings...')

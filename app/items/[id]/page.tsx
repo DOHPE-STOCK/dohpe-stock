@@ -1182,7 +1182,9 @@ export default function ItemPage() {
     }
 
     const openInNewWindow = options.askOpenMode
-      ? window.confirm('Open Photo Monitor in a new window?\n\nOK = new window\nCancel = use this window')
+      ? window.confirm(
+          'This will open Photo Monitor in a new window.\n\nPlease allow pop-ups from Loopbase if your browser asks.\n\nPress Enter or OK to continue.\nCancel will open Photo Monitor in this window.'
+        )
       : true
 
     if (!stationId) {

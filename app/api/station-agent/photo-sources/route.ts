@@ -19,14 +19,21 @@ function makeSourceToken() {
   return `phsrc_live_${crypto.randomBytes(32).toString('base64url')}`
 }
 
+function folderDisplayName(folderPath: string, fallback: string) {
+  const clean = folderPath.trim().replace(/[\\/]+$/g, '')
+  if (!clean) return fallback
+  const parts = clean.split(/[\\/]+/).filter(Boolean)
+  return parts[parts.length - 1] || clean || fallback
+}
+
 function sourceRows(value: unknown) {
   if (!Array.isArray(value)) return []
   return value
     .map((row, index) => {
       if (!row || typeof row !== 'object') return null
       const record = row as Record<string, unknown>
-      const name = text(record.name) || `Photo Source ${index + 1}`
       const watchFolder = text(record.watch_folder || record.watchFolder)
+      const name = text(record.name) || folderDisplayName(watchFolder, `Photo Folder ${index + 1}`)
       const processedFolder = text(record.processed_folder || record.processedFolder)
       const trashFolder = text(record.trash_folder || record.trashFolder)
       if (!watchFolder && index > 0) return null
