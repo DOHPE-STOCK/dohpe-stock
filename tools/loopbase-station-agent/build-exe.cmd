@@ -18,6 +18,8 @@ if errorlevel 1 (
   --onefile ^
   --noconsole ^
   --clean ^
+  --hidden-import sqlite3 ^
+  --hidden-import _sqlite3 ^
   --add-data "..\photo-ingest-worker\photo_ingest_worker.py;photo-ingest-worker" ^
   --add-data "..\rfid-bridge\rfid_bridge.py;rfid-bridge" ^
   --add-data "..\rfid-zone-monitor\rfid_zone_monitor.py;rfid-zone-monitor" ^
