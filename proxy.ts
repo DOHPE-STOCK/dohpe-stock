@@ -35,6 +35,10 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
+  if (pathname.startsWith('/downloads/')) {
+    return NextResponse.next()
+  }
+
   if (pathname.startsWith('/processing/photo-phone')) {
     return NextResponse.next()
   }
@@ -123,5 +127,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!api|downloads|_next/static|_next/image|favicon.ico).*)'],
 }
