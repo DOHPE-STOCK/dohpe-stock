@@ -5,6 +5,7 @@ import base64
 import html
 import json
 import os
+import runpy
 import shutil
 import signal
 import socket
@@ -22,7 +23,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.34"
+AGENT_VERSION_NUMBER = "0.3.35"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -77,6 +78,19 @@ def repo_tools_dir() -> Path:
 
 def default_python() -> str:
     return sys.executable
+
+
+def maybe_run_bundled_helper() -> None:
+    if not getattr(sys, "frozen", False) or len(sys.argv) < 2:
+        return
+
+    helper_path = Path(sys.argv[1])
+    if helper_path.name not in {"photo_ingest_worker.py", "rfid_bridge.py", "rfid_zone_monitor.py"}:
+        return
+
+    sys.argv = [str(helper_path), *sys.argv[2:]]
+    runpy.run_path(str(helper_path), run_name="__main__")
+    raise SystemExit(0)
 
 
 def default_config() -> dict[str, Any]:
@@ -2136,6 +2150,8 @@ def make_handler(agent: StationAgent):
 
 
 def main() -> None:
+    maybe_run_bundled_helper()
+
     parser = argparse.ArgumentParser(description="Loopbase Station Agent")
     parser.add_argument("--config", default="config.local.json")
     parser.add_argument("--open", action="store_true", help="Open the local UI in the default browser.")

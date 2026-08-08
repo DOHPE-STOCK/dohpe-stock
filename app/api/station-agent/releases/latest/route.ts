@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const STATION_AGENT_VERSION = '0.3.34'
+const STATION_AGENT_VERSION = '0.3.35'
 
 function baseUrl(request: NextRequest) {
   // Use the request origin for desktop updates so a stale NEXT_PUBLIC_APP_URL
@@ -21,9 +21,9 @@ export async function GET(request: NextRequest) {
     min_supported_app_version: '0.1.0',
     published_at: '2026-08-08',
     release_notes: [
+      'Fixes bundled helper launch so the photo ingest worker runs inside packaged Windows builds.',
       'Automatically starts and restarts the photo ingest worker after watched folder changes.',
       'Keeps watched folder uploads active after saving photography station settings.',
-      'Keeps the Station Agent UI unchanged.',
     ],
   })
 }
