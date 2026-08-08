@@ -152,6 +152,7 @@ def default_config() -> dict[str, Any]:
             "station_token": "",
             "poll_interval_seconds": 5,
             "allowed_printers": [],
+            "printer_aliases": {},
             "network_host": "",
             "network_port": 9100,
             "default_label_width_mm": 60,
@@ -558,6 +559,14 @@ class StationAgent:
         allowed = payload.get("allowed_printers")
         if isinstance(allowed, list):
             printer["allowed_printers"] = sorted(set(text(name) for name in allowed if text(name)))
+        aliases = payload.get("printer_aliases")
+        if isinstance(aliases, dict):
+            allowed_names = set(printer.get("allowed_printers") or [])
+            printer["printer_aliases"] = {
+                text(key): text(value)
+                for key, value in aliases.items()
+                if text(key) in allowed_names and text(value)
+            }
         printer["network_host"] = text(payload.get("network_host", printer.get("network_host")))
         printer["network_port"] = int_value(payload.get("network_port"), int(printer.get("network_port") or 9100))
         printer["default_label_width_mm"] = int_value(

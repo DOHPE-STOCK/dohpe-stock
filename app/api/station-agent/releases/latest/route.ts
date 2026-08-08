@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { existsSync, statSync } from 'fs'
 import path from 'path'
 
-const STATION_AGENT_VERSION = '0.3.29'
+const STATION_AGENT_VERSION = '0.3.30'
 const STATION_AGENT_FILE = 'downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
 
 function baseUrl(request: NextRequest) {

@@ -396,6 +396,27 @@ fn select_windows_folder(title: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn open_windows_printer_settings() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd.exe")
+            .args(["/C", "start", "", "ms-settings:printers"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|error| format!("Could not open Windows printer settings: {error}"))?;
+        return Ok("Windows printer settings opened.".to_string());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Windows printer settings are only available on Windows station PCs.".to_string())
+    }
+}
+
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open_dashboard", "Open Loopbase Station Agent", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit_loopbase", "Quit Loopbase Station Agent", true, None::<&str>)?;
@@ -435,7 +456,8 @@ fn main() {
             station_agent_status,
             ensure_station_agent,
             install_station_agent_update,
-            select_windows_folder
+            select_windows_folder,
+            open_windows_printer_settings
         ])
         .setup(|app| {
             if !claim_single_instance(app) {

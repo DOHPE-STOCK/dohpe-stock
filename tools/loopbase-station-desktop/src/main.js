@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.29'
+const CURRENT_VERSION = '0.3.30'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -24,11 +24,6 @@ const remotePrintStateEl = document.querySelector('#remotePrintState')
 const printerFormEl = document.querySelector('#printerForm')
 const printerEnabledEl = document.querySelector('#printerEnabled')
 const printerPollEnabledEl = document.querySelector('#printerPollEnabled')
-const printerModeEl = document.querySelector('#printerMode')
-const defaultPrinterEl = document.querySelector('#defaultPrinter')
-const printerNetworkHostEl = document.querySelector('#printerNetworkHost')
-const printerNetworkPortEl = document.querySelector('#printerNetworkPort')
-const printerPickerEl = document.querySelector('#printerPicker')
 const addPrinterEl = document.querySelector('#addPrinter')
 const allowedPrintersEl = document.querySelector('#allowedPrinters')
 const refreshPrintersEl = document.querySelector('#refreshPrinters')
@@ -45,6 +40,8 @@ let currentStationConfig = null
 let currentPrinterConfig = null
 let currentPhotoConfig = null
 let selectedAllowedPrinters = []
+let printerAliases = {}
+let activeWindowsPrinterName = ''
 
 const sections = {
   printer: { eyebrow: 'Print', title: 'Remote Printer' },
@@ -284,50 +281,61 @@ function renderPrinterConfig(data) {
   const printer = data?.printer || {}
   const printers = Array.isArray(data?.printers) ? data.printers : []
   selectedAllowedPrinters = Array.isArray(printer.allowed_printers) ? [...new Set(printer.allowed_printers.filter(Boolean))] : []
-  if (printerCountEl) printerCountEl.textContent = `${printers.length} printer${printers.length === 1 ? '' : 's'} found`
+  printerAliases = printer.printer_aliases && typeof printer.printer_aliases === 'object' ? { ...printer.printer_aliases } : {}
+  activeWindowsPrinterName = printer.windows_printer_name || selectedAllowedPrinters[0] || ''
+  if (printerCountEl) printerCountEl.textContent = `${selectedAllowedPrinters.length} saved / ${printers.length} detected`
   if (printerEnabledEl) printerEnabledEl.checked = Boolean(printer.remote_enabled ?? printer.enabled)
   if (printerPollEnabledEl) printerPollEnabledEl.checked = Boolean(printer.remote_poll_enabled)
-  if (printerModeEl) printerModeEl.value = printer.mode || 'windows'
-  if (printerNetworkHostEl) printerNetworkHostEl.value = printer.network_host || ''
-  if (printerNetworkPortEl) printerNetworkPortEl.value = String(printer.network_port || 9100)
-
-  if (defaultPrinterEl) {
-    defaultPrinterEl.innerHTML = '<option value="">Choose printer</option>'
-    printers.forEach((row) => {
-      const option = document.createElement('option')
-      option.value = row.name || ''
-      option.textContent = `${row.name || 'Unnamed printer'}${row.default ? ' (default)' : ''}`
-      option.selected = row.name === printer.windows_printer_name
-      defaultPrinterEl.appendChild(option)
-    })
-  }
-
-  if (printerPickerEl) {
-    printerPickerEl.innerHTML = '<option value="">Choose printer to add</option>'
-    printers.forEach((row) => {
-      const option = document.createElement('option')
-      option.value = row.name || ''
-      option.textContent = `${row.name || 'Unnamed printer'}${row.default ? ' (default)' : ''}`
-      printerPickerEl.appendChild(option)
-    })
-  }
-
   renderAllowedPrinters()
 }
 
 function renderAllowedPrinters() {
-  if (allowedPrintersEl) {
-    allowedPrintersEl.innerHTML = selectedAllowedPrinters.length
-      ? selectedAllowedPrinters.map((name, index) => {
-        return `
-          <div class="choice-row">
-            <span>${escapeHtml(name)}</span>
+  if (!allowedPrintersEl) return
+  const detectedPrinters = Array.isArray(currentPrinterConfig?.printers) ? currentPrinterConfig.printers : []
+  const detectedNames = detectedPrinters.map((row) => row.name).filter(Boolean)
+  const savedHtml = selectedAllowedPrinters.length
+    ? selectedAllowedPrinters.map((name, index) => {
+      const alias = printerAliases[name] || ''
+      const active = name === activeWindowsPrinterName
+      const detected = detectedNames.includes(name)
+      return `
+        <div class="choice-row printer-row ${active ? 'active-printer' : ''}">
+          <div class="printer-main">
+            <strong>${escapeHtml(alias || name)}</strong>
+            <small>${escapeHtml(name)}${detected ? '' : ' - not currently detected'}</small>
+          </div>
+          <input class="printer-alias" data-printer-alias="${index}" value="${escapeHtml(alias)}" placeholder="Display name">
+          <div class="printer-actions">
+            <button class="ghost-button compact" type="button" data-active-printer="${index}">${active ? 'Active' : 'Make Active'}</button>
             <button class="ghost-button compact" type="button" data-remove-printer="${index}">Remove</button>
           </div>
-        `
-      }).join('')
-      : '<p class="muted">No printers added yet. Choose a Windows printer above, then click Add Printer.</p>'
-  }
+        </div>
+      `
+    }).join('')
+    : '<p class="muted">No printers saved yet. Click Add New Printer, add or confirm the printer in Windows, then choose it from the detected list below.</p>'
+
+  const availableHtml = detectedNames
+    .filter((name) => !selectedAllowedPrinters.includes(name))
+    .map((name) => `
+      <div class="choice-row printer-row">
+        <div class="printer-main">
+          <strong>${escapeHtml(name)}</strong>
+          <small>Detected on this PC</small>
+        </div>
+        <button class="ghost-button compact" type="button" data-add-detected-printer="${escapeHtml(name)}">Save Printer</button>
+      </div>
+    `).join('')
+
+  allowedPrintersEl.innerHTML = `
+    <div class="printer-section">
+      <p class="eyebrow">Active and saved</p>
+      ${savedHtml}
+    </div>
+    <div class="printer-section">
+      <p class="eyebrow">Detected by Windows</p>
+      ${availableHtml || '<p class="muted">No additional Windows printers detected.</p>'}
+    </div>
+  `
 }
 
 async function loadPrinterConfig() {
@@ -422,27 +430,61 @@ refreshPrintersEl?.addEventListener('click', () => {
   void loadPrinterConfig()
 })
 
-addPrinterEl?.addEventListener('click', () => {
-  const printerName = String(printerPickerEl?.value || '').trim()
-  if (!printerName) {
-    setStatus('Choose a Windows printer to add first.')
+addPrinterEl?.addEventListener('click', async () => {
+  if (!invoke) {
+    setStatus('Windows printer setup is only available in the desktop app.')
     return
   }
-  if (!selectedAllowedPrinters.includes(printerName)) {
-    selectedAllowedPrinters = [...selectedAllowedPrinters, printerName].sort((left, right) => left.localeCompare(right))
-    renderAllowedPrinters()
+  try {
+    await invoke('open_windows_printer_settings')
+    setStatus('Windows printer settings opened. Add or confirm the printer, then click Refresh here.')
+  } catch (error) {
+    setStatus(`Could not open Windows printer settings: ${error}`)
   }
-  if (!defaultPrinterEl?.value) defaultPrinterEl.value = printerName
-  if (printerPickerEl) printerPickerEl.value = ''
-  setStatus('Printer added. Click Save Printers to keep this change.')
+})
+
+allowedPrintersEl?.addEventListener('input', (event) => {
+  const input = event.target.closest('[data-printer-alias]')
+  if (!input) return
+  const index = Number.parseInt(input.dataset.printerAlias || '-1', 10)
+  const printerName = selectedAllowedPrinters[index]
+  if (!printerName) return
+  printerAliases[printerName] = input.value.trim()
 })
 
 allowedPrintersEl?.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-remove-printer]')
-  if (!button) return
-  const index = Number.parseInt(button.dataset.removePrinter || '-1', 10)
+  const addButton = event.target.closest('[data-add-detected-printer]')
+  if (addButton) {
+    const printerName = String(addButton.dataset.addDetectedPrinter || '').trim()
+    if (printerName && !selectedAllowedPrinters.includes(printerName)) {
+      selectedAllowedPrinters = [...selectedAllowedPrinters, printerName].sort((left, right) => left.localeCompare(right))
+      if (!activeWindowsPrinterName) activeWindowsPrinterName = printerName
+      renderAllowedPrinters()
+      setStatus('Printer saved. Click Save Printers to keep this change.')
+    }
+    return
+  }
+
+  const activeButton = event.target.closest('[data-active-printer]')
+  if (activeButton) {
+    const index = Number.parseInt(activeButton.dataset.activePrinter || '-1', 10)
+    const printerName = selectedAllowedPrinters[index]
+    if (printerName) {
+      activeWindowsPrinterName = printerName
+      renderAllowedPrinters()
+      setStatus('Active printer changed. Click Save Printers to keep this change.')
+    }
+    return
+  }
+
+  const removeButton = event.target.closest('[data-remove-printer]')
+  if (!removeButton) return
+  const index = Number.parseInt(removeButton.dataset.removePrinter || '-1', 10)
   if (index < 0) return
+  const removed = selectedAllowedPrinters[index]
   selectedAllowedPrinters = selectedAllowedPrinters.filter((_, printerIndex) => printerIndex !== index)
+  if (removed) delete printerAliases[removed]
+  if (activeWindowsPrinterName === removed) activeWindowsPrinterName = selectedAllowedPrinters[0] || ''
   renderAllowedPrinters()
   setStatus('Printer removed. Click Save Printers to keep this change.')
 })
@@ -459,11 +501,10 @@ printerFormEl?.addEventListener('submit', async (event) => {
         enabled: true,
         remote_enabled: Boolean(printerEnabledEl?.checked),
         remote_poll_enabled: Boolean(printerPollEnabledEl?.checked),
-        mode: printerModeEl?.value || 'windows',
-        windows_printer_name: defaultPrinterEl?.value || '',
+        mode: 'windows',
+        windows_printer_name: activeWindowsPrinterName || allowedPrinters[0] || '',
         allowed_printers: allowedPrinters,
-        network_host: printerNetworkHostEl?.value || '',
-        network_port: printerNetworkPortEl?.value || '9100',
+        printer_aliases: printerAliases,
       }),
     })
     const data = await response.json()

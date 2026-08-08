@@ -453,6 +453,13 @@ h1 {
   margin-bottom: 10px;
 }
 
+.subhead-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .compact {
   padding: 7px 10px;
   font-size: 12px;
@@ -484,6 +491,50 @@ h1 {
 .choice-row input {
   width: 18px;
   min-height: 18px;
+}
+
+.printer-section {
+  display: grid;
+  gap: 10px;
+}
+
+.printer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(180px, .8fr) auto;
+  align-items: center;
+}
+
+.printer-row.active-printer {
+  border-color: rgba(40, 201, 65, .26);
+  background: rgba(40, 201, 65, .08);
+}
+
+.printer-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.printer-main strong,
+.printer-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.printer-main small {
+  color: #9da3ad;
+  font-size: 12px;
+}
+
+.printer-alias {
+  width: 100%;
+  min-height: 38px;
+}
+
+.printer-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .source-card {

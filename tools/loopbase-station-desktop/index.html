@@ -11,7 +11,7 @@
       <div class="window-bar">
         <div id="connectionBadge" class="connection-badge">Starting</div>
         <button id="headerUpdateNow" class="header-update hidden" type="button">Update available</button>
-        <button id="buildNumber" class="build-number" type="button">Build 0.3.28</button>
+        <button id="buildNumber" class="build-number" type="button">Build 0.3.30</button>
       </div>
 
       <section class="hero">
@@ -65,34 +65,20 @@
             <strong>Remote Printer</strong>
             <p class="muted">Use this PC as a Loopbase print station for label and document jobs from other devices.</p>
           </div>
-          <div class="setting-row"><span>Windows printer discovery</span><strong id="printerCount">Loading...</strong></div>
+          <div class="setting-row"><span>Saved printers</span><strong id="printerCount">Loading...</strong></div>
           <div class="setting-row"><span>Remote print polling</span><strong id="remotePrintState">Loading...</strong></div>
           <form id="printerForm" class="station-form">
             <div class="form-grid">
               <label class="toggle-row">Remote printer enabled<input id="printerEnabled" type="checkbox"></label>
               <label class="toggle-row">Poll remote print queue<input id="printerPollEnabled" type="checkbox"></label>
-              <label>Printer mode
-                <select id="printerMode">
-                  <option value="windows">Windows printer</option>
-                  <option value="network">Network TCP/ZPL</option>
-                </select>
-              </label>
-              <label>Default Windows printer
-                <select id="defaultPrinter">
-                  <option value="">Choose printer</option>
-                </select>
-              </label>
-              <label>Network host<input id="printerNetworkHost" placeholder="192.168.1.50"></label>
-              <label>Network port<input id="printerNetworkPort" inputmode="numeric" placeholder="9100"></label>
             </div>
             <div>
               <div class="subhead">
-                <strong>Allowed Local Printers</strong>
-                <select id="printerPicker">
-                  <option value="">Choose printer to add</option>
-                </select>
-                <button id="addPrinter" class="ghost-button compact" type="button">Add Printer</button>
-                <button id="refreshPrinters" class="ghost-button compact" type="button">Refresh</button>
+                <strong>Saved Printers</strong>
+                <div class="subhead-actions">
+                  <button id="addPrinter" class="button compact" type="button">Add New Printer</button>
+                  <button id="refreshPrinters" class="ghost-button compact" type="button">Refresh</button>
+                </div>
               </div>
               <div id="allowedPrinters" class="choice-list"><p class="muted">Loading printers...</p></div>
             </div>
