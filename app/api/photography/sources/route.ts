@@ -61,7 +61,7 @@ export async function GET(request: Request) {
       `id, company_id, station_id, name, source_type, manufacturer, camera_model,
       enabled, timezone, clock_offset_seconds, capture_tolerance_seconds,
       source_file_policy, token_last_four, token_created_at, token_revoked_at,
-      last_activity_at, created_at, updated_at,
+      last_activity_at, local_reference, created_at, updated_at,
       station:photography_stations(id, name, code)`
     )
     .eq('company_id', access.company.id)
@@ -215,6 +215,12 @@ export async function PATCH(request: Request) {
       capture_tolerance_seconds:
         body.capture_tolerance_seconds === undefined ? undefined : Number(body.capture_tolerance_seconds) || 90,
       source_file_policy: body.source_file_policy === undefined ? undefined : text(body.source_file_policy),
+      local_reference:
+        body.local_reference === undefined
+          ? undefined
+          : body.local_reference && typeof body.local_reference === 'object'
+            ? body.local_reference
+            : {},
     })
     .eq('company_id', access.company.id)
     .eq('id', sourceId)

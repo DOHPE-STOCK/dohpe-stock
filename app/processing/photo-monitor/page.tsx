@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'react-qr-code'
 import StaffPermissionGate from '@/app/components/StaffPermissionGate'
@@ -66,6 +65,12 @@ type PhotoSource = {
   token_created_at: string | null
   token_revoked_at: string | null
   last_activity_at: string | null
+  local_reference?: {
+    watch_folder?: string | null
+    processed_folder?: string | null
+    trash_folder?: string | null
+    station_agent_source?: boolean | null
+  } | null
 }
 
 type CalibrationProfile = {
@@ -2566,15 +2571,6 @@ export default function PhotoMonitorPage() {
               {calibrationCapturePending ? 'Waiting For Calibration' : 'Refresh Calibration Image'}
             </button>
 
-            {item?.id && (
-              <Link
-                href={`/items/${item.id}`}
-                className="h-10 rounded-lg bg-white px-4 py-2 text-sm font-black text-black"
-              >
-                Edit SKU
-              </Link>
-            )}
-
             <button
               type="button"
               onClick={startCompletePhotosWorkflow}
@@ -3206,6 +3202,11 @@ export default function PhotoMonitorPage() {
                           <p className="mt-2 text-xs font-bold text-zinc-500">
                             {source.source_type === 'phone' ? 'Paired phone' : 'Watched folder'} - token ****{source.token_last_four || 'none'}
                           </p>
+                          {source.source_type === 'watched_folder' && (
+                            <p className="mt-2 break-all rounded-md border border-zinc-800 bg-black px-2 py-1 text-[11px] font-bold text-zinc-300">
+                              Folder: {source.local_reference?.watch_folder || 'Path not synced yet. Re-save the folder in Station Agent.'}
+                            </p>
+                          )}
                         </div>
                       ))
                     )}

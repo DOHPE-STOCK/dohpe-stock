@@ -138,6 +138,12 @@ export async function POST(request: Request) {
       enabled: true,
       timezone: 'Europe/London',
       source_file_policy: 'keep_source_file',
+      local_reference: {
+        watch_folder: row.watch_folder,
+        processed_folder: row.processed_folder || null,
+        trash_folder: row.trash_folder || null,
+        station_agent_source: true,
+      },
       token_hash: tokenHash(token),
       token_last_four: token.slice(-4),
       token_created_at: now,
@@ -150,12 +156,12 @@ export async function POST(request: Request) {
           .update(payload)
           .eq('company_id', device.company_id)
           .eq('id', existingSource.id)
-          .select('id, station_id, name, source_type, enabled, token_last_four, token_created_at')
+          .select('id, station_id, name, source_type, enabled, token_last_four, token_created_at, local_reference')
           .single()
       : supabase
           .from('photo_sources')
           .insert(payload)
-          .select('id, station_id, name, source_type, enabled, token_last_four, token_created_at')
+          .select('id, station_id, name, source_type, enabled, token_last_four, token_created_at, local_reference')
           .single()
 
     const { data: source, error: sourceError } = await query
@@ -167,6 +173,7 @@ export async function POST(request: Request) {
       station_id: source.station_id,
       source_type: source.source_type,
       enabled: source.enabled,
+      local_reference: source.local_reference,
       token,
       token_last_four: source.token_last_four,
     })

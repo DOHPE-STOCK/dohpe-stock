@@ -1181,11 +1181,17 @@ export default function ItemPage() {
       stationId = selectedStation.id
     }
 
-    const openInNewWindow = options.askOpenMode
-      ? window.confirm(
-          'This will open Photo Monitor in a new window.\n\nPlease allow pop-ups from Loopbase if your browser asks.\n\nPress Enter or OK to continue.\nCancel will open Photo Monitor in this window.'
-        )
-      : true
+    if (
+      options.askOpenMode &&
+      !window.confirm(
+        'This will open Photo Monitor in a new window.\n\nPlease allow pop-ups from Loopbase if your browser asks.\n\nPress Enter or OK to continue.'
+      )
+    ) {
+      setMessage('Photo session cancelled.')
+      return
+    }
+
+    const openInNewWindow = true
 
     if (!stationId) {
       setMessage('No photography station selected.')
