@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.28'
+const CURRENT_VERSION = '0.3.29'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 
@@ -408,6 +408,7 @@ async function installAvailableUpdate(button) {
     const message = await invoke('install_station_agent_update', {
       downloadUrl: availableUpdate.download_url,
       version: availableUpdate.version || 'latest',
+      expectedSizeBytes: availableUpdate.download_size_bytes || null,
     })
     setStatus(message)
   } catch (error) {

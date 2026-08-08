@@ -251,6 +251,7 @@ fn install_station_agent_update(
     app_handle: tauri::AppHandle,
     download_url: String,
     version: String,
+    expected_size_bytes: Option<u64>,
 ) -> Result<String, String> {
     if download_url.trim().is_empty() {
         return Err("The update did not include a download URL.".to_string());
@@ -292,8 +293,28 @@ fn install_station_agent_update(
 
     let metadata = fs::metadata(&installer_path)
         .map_err(|error| format!("The downloaded installer could not be read: {error}"))?;
-    if metadata.len() < 1024 * 1024 {
-        return Err("The downloaded installer was too small to be valid.".to_string());
+    let downloaded_size = metadata.len();
+    if downloaded_size < 1024 * 1024 {
+        return Err(format!(
+            "The downloaded file was only {downloaded_size} bytes, so Loopbase did not run it. The update URL probably returned an error page instead of the installer."
+        ));
+    }
+    if let Some(expected_size) = expected_size_bytes {
+        if expected_size > 0 && downloaded_size != expected_size {
+            return Err(format!(
+                "The downloaded installer size did not match the release manifest. Expected {expected_size} bytes, got {downloaded_size} bytes."
+            ));
+        }
+    }
+
+    let mut magic = [0_u8; 2];
+    let mut installer_file = fs::File::open(&installer_path)
+        .map_err(|error| format!("The downloaded installer could not be opened: {error}"))?;
+    installer_file
+        .read_exact(&mut magic)
+        .map_err(|error| format!("The downloaded installer could not be checked: {error}"))?;
+    if magic != [b'M', b'Z'] {
+        return Err("The downloaded file is not a Windows installer. The update URL returned the wrong content.".to_string());
     }
 
     let update_script = base_dir.join("run-loopbase-update.ps1");

@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 set ORIGINAL_DIR=%CD%
-set STAGING_ROOT=%PUBLIC%\LoopbaseBuild
+set STAGING_ROOT=C:\LoopbaseBuild
 set STAGING_DIR=%STAGING_ROOT%\loopbase-station-desktop-%RANDOM%-%RANDOM%-%RANDOM%
 set npm_config_cache=%STAGING_ROOT%\npm-cache
 set APP_VERSION=
@@ -37,6 +37,12 @@ if errorlevel 1 exit /b %errorlevel%
 
 if /I not "%CD%"=="%STAGING_DIR%" (
   if exist "%STAGING_ROOT%" rmdir /S /Q "%STAGING_ROOT%"
+  if errorlevel 1 (
+    echo.
+    echo Could not remove %STAGING_ROOT%.
+    echo Close any running Loopbase Station Agent windows, or delete that folder manually, then rerun this build.
+    exit /b %errorlevel%
+  )
   if not exist "%STAGING_ROOT%" mkdir "%STAGING_ROOT%"
   if errorlevel 1 (
     echo.
@@ -83,21 +89,30 @@ if /I "%CD%"=="%STAGING_DIR%" (
 
 set RELEASE_DIR=%ORIGINAL_DIR%\..\..\public\downloads\loopbase-station-agent
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
+if errorlevel 1 exit /b %errorlevel%
 set NSIS_DIR=%ORIGINAL_DIR%\src-tauri\target\release\bundle\nsis
-set SETUP_FILE=
-for /F "usebackq delims=" %%F in (`powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%NSIS_DIR%' -Filter 'Loopbase Station Agent_%APP_VERSION%_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName"`) do (
-  set SETUP_FILE=%%F
-)
-if not "%SETUP_FILE%"=="" (
+set SETUP_FILE=%NSIS_DIR%\Loopbase Station Agent_%APP_VERSION%_x64-setup.exe
+if exist "%SETUP_FILE%" (
   copy /Y "%SETUP_FILE%" "%RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe"
   if errorlevel 1 exit /b %errorlevel%
   echo Desktop installer copied to:
   echo %RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe
   exit /b 0
 )
+set MSI_DIR=%ORIGINAL_DIR%\src-tauri\target\release\bundle\msi
+set MSI_FILE=%MSI_DIR%\Loopbase Station Agent_%APP_VERSION%_x64_en-US.msi
+if exist "%MSI_FILE%" (
+  copy /Y "%MSI_FILE%" "%RELEASE_DIR%\Loopbase-Station-Agent-Setup.msi"
+  if errorlevel 1 exit /b %errorlevel%
+  echo Desktop MSI copied to:
+  echo %RELEASE_DIR%\Loopbase-Station-Agent-Setup.msi
+  exit /b 0
+)
 echo.
 echo Could not find desktop setup installer for version %APP_VERSION%.
 echo Expected:
 echo %NSIS_DIR%\Loopbase Station Agent_%APP_VERSION%_x64-setup.exe
+echo or:
+echo %MSI_DIR%\Loopbase Station Agent_%APP_VERSION%_x64_en-US.msi
 echo Refusing to publish a stale installer.
 exit /b 1
