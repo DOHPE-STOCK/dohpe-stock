@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-AGENT_VERSION_NUMBER = "0.3.27"
+AGENT_VERSION_NUMBER = "0.3.34"
 AGENT_VERSION = f"loopbase-station-agent/{AGENT_VERSION_NUMBER}"
 
 
@@ -396,6 +396,10 @@ class StationAgent:
         self.update_error = ""
         self.remote_print_reports: list[dict[str, Any]] = []
         self.stop_event = threading.Event()
+        try:
+            self.sync_photo_worker_service(restart=False)
+        except Exception as exc:
+            print(f"Photo ingest worker auto-start skipped: {exc}")
 
     def reload(self) -> None:
         self.config = load_config(self.config_path)
@@ -418,6 +422,7 @@ class StationAgent:
         save_config(self.config_path, cfg)
         self.ensure_photo_config()
         self.ensure_rfid_zone_config()
+        self.sync_photo_worker_service(restart=True)
 
     def write_config_from_form(self, fields: dict[str, str]) -> None:
         cfg = deep_merge(default_config(), self.config)
@@ -515,6 +520,7 @@ class StationAgent:
         save_config(self.config_path, cfg)
         self.ensure_photo_config()
         self.ensure_rfid_zone_config()
+        self.sync_photo_worker_service(restart=True)
 
     def write_printer_from_form(self, fields: dict[str, str]) -> None:
         cfg = deep_merge(default_config(), self.config)
@@ -646,6 +652,7 @@ class StationAgent:
         self.config = cfg
         save_config(self.config_path, cfg)
         save_config(config_path, data)
+        self.sync_photo_worker_service(restart=True)
 
     def write_photo_sources_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         cfg = deep_merge(default_config(), self.config)
@@ -693,6 +700,7 @@ class StationAgent:
         self.config = cfg
         save_config(self.config_path, cfg)
         save_config(config_path, data)
+        self.sync_photo_worker_service(restart=True)
         return self.photo_config_payload()
 
     def provision_photo_source_tokens(self, cfg: dict[str, Any], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -930,6 +938,28 @@ class StationAgent:
                 raise RuntimeError("Unknown service.")
             self.processes[service] = process
             process.start()
+
+    def restart_service(self, service: str) -> None:
+        self.stop_service(service)
+        self.start_service(service)
+
+    def sync_photo_worker_service(self, restart: bool = False) -> None:
+        cfg = deep_merge(default_config(), self.config)
+        photo = cfg["photo_worker"]
+        config_path = resolve_path(photo["config_path"], self.config_path.parent)
+        sources = photo_worker_sources(cfg, config_path)
+        has_active_source = any(text(row.get("token")) and text(row.get("watch_folder")) for row in sources)
+        should_run = bool_value(photo.get("enabled")) and has_active_source
+
+        if should_run:
+            if restart:
+                self.restart_service("photo")
+            else:
+                self.start_service("photo")
+            return
+
+        if restart:
+            self.stop_service("photo")
 
     def stop_service(self, service: str) -> None:
         with self.lock:
