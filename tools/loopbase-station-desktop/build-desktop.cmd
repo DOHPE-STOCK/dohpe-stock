@@ -36,13 +36,6 @@ copy /Y "..\loopbase-station-agent\dist\Loopbase Station Agent.exe" ".\src-tauri
 if errorlevel 1 exit /b %errorlevel%
 
 if /I not "%CD%"=="%STAGING_DIR%" (
-  if exist "%STAGING_ROOT%" rmdir /S /Q "%STAGING_ROOT%"
-  if errorlevel 1 (
-    echo.
-    echo Could not remove %STAGING_ROOT%.
-    echo Close any running Loopbase Station Agent windows, or delete that folder manually, then rerun this build.
-    exit /b %errorlevel%
-  )
   if not exist "%STAGING_ROOT%" mkdir "%STAGING_ROOT%"
   if errorlevel 1 (
     echo.
@@ -57,7 +50,7 @@ if /I not "%CD%"=="%STAGING_DIR%" (
     echo Close any running Loopbase Station Agent windows and rerun this from a normal PowerShell.
     exit /b %errorlevel%
   )
-  robocopy "%ORIGINAL_DIR%" "%STAGING_DIR%" /E /XD .build dist src-tauri\target /XF package-lock.json >nul
+  robocopy "%ORIGINAL_DIR%" "%STAGING_DIR%" /E /XD "%ORIGINAL_DIR%\.build" "%ORIGINAL_DIR%\dist" "%ORIGINAL_DIR%\src-tauri\target" /XF package-lock.json >nul
   if errorlevel 8 exit /b %errorlevel%
   if not exist "%STAGING_DIR%\src-tauri\icons\icon.ico" (
     if not exist "%STAGING_DIR%\src-tauri\icons" mkdir "%STAGING_DIR%\src-tauri\icons"

@@ -7,14 +7,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
-  const configuredDownload =
-    process.env.STATION_AGENT_DOWNLOAD_URL ||
-    process.env.NEXT_PUBLIC_STATION_AGENT_DOWNLOAD_URL ||
-    ''
-  if (configuredDownload) {
-    return NextResponse.redirect(configuredDownload)
-  }
-
   const downloads = [
     {
       fileName: 'Loopbase-Station-Agent-Setup.exe',
