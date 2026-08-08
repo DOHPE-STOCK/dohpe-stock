@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { existsSync, statSync } from 'fs'
 import path from 'path'
 
-const STATION_AGENT_VERSION = '0.3.30'
+const STATION_AGENT_VERSION = '0.3.31'
 const STATION_AGENT_FILE = 'downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
 
 function baseUrl(request: NextRequest) {
@@ -13,15 +13,9 @@ function baseUrl(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const origin = baseUrl(request)
-  const configuredDownload =
-    process.env.STATION_AGENT_DOWNLOAD_URL ||
-    process.env.NEXT_PUBLIC_STATION_AGENT_DOWNLOAD_URL ||
-    ''
   const installerPath = path.join(process.cwd(), 'public', STATION_AGENT_FILE)
   const installerSize = existsSync(installerPath) ? statSync(installerPath).size : null
-  const downloadUrl =
-    configuredDownload ||
-    `${origin}/${STATION_AGENT_FILE}?v=${STATION_AGENT_VERSION}`
+  const downloadUrl = `${origin}/${STATION_AGENT_FILE}?v=${STATION_AGENT_VERSION}`
 
   return NextResponse.json({
     ok: true,
