@@ -14,7 +14,9 @@ export async function GET(request: NextRequest) {
     process.env.STATION_AGENT_DOWNLOAD_URL ||
     process.env.NEXT_PUBLIC_STATION_AGENT_DOWNLOAD_URL ||
     ''
-  const downloadUrl = configuredDownload || `${origin}/api/station-agent/download?v=${STATION_AGENT_VERSION}`
+  const downloadUrl =
+    configuredDownload ||
+    `${origin}/downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe?v=${STATION_AGENT_VERSION}`
 
   return NextResponse.json({
     ok: true,
