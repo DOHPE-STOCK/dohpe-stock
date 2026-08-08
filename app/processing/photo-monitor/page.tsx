@@ -323,6 +323,7 @@ export default function PhotoMonitorPage() {
   const { staff } = useStaff()
   const [stations, setStations] = useState<PhotoStation[]>([])
   const [stationId, setStationId] = useState('')
+  const [monitorItemId, setMonitorItemId] = useState('')
   const [images, setImages] = useState<ItemImage[]>([])
   const [captures, setCaptures] = useState<PhotoCapture[]>([])
   const [representations, setRepresentations] = useState<CaptureRepresentation[]>([])
@@ -391,6 +392,7 @@ export default function PhotoMonitorPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     setStationId(params.get('station') || '')
+    setMonitorItemId(params.get('item_id') || '')
     if (params.get('calibration_prompt') === '1') {
       setCalibrationPromptOpen(true)
       params.delete('calibration_prompt')
@@ -2031,7 +2033,17 @@ export default function PhotoMonitorPage() {
   async function endSession() {
     if (!station?.id) return
 
-    const confirmed = window.confirm('End the active photo session on this station?')
+    if (images.length > 0) {
+      const completeFirst = window.confirm(
+        'This photo session has photos.\n\nComplete photos before ending this session?'
+      )
+      if (completeFirst) {
+        startCompletePhotosWorkflow()
+        return
+      }
+    }
+
+    const confirmed = window.confirm('End the active photo session without completing photos?')
     if (!confirmed) return
 
     setBusy(true)
@@ -2058,6 +2070,42 @@ export default function PhotoMonitorPage() {
       setMessage('Photo session ended.')
     } catch (error: any) {
       setMessage(error.message || 'Could not end photo session.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function startSessionFromMonitor() {
+    if (!station?.id) return
+    if (!monitorItemId) {
+      setMessage('Open Photo Monitor from Edit SKU to start a session for that item.')
+      return
+    }
+
+    setBusy(true)
+    setMessage('Starting photo session...')
+
+    try {
+      const response = await fetch('/api/photography/sessions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          station_id: station.id,
+          item_id: monitorItemId,
+          start_method: 'manual_button',
+          staff_id: staff?.id || null,
+        }),
+      })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || 'Photo session failed to start.')
+      }
+
+      await fetchStations(false)
+      setMessage('Photo session started.')
+    } catch (error: any) {
+      setMessage(error.message || 'Photo session failed to start.')
     } finally {
       setBusy(false)
     }
@@ -2571,23 +2619,26 @@ export default function PhotoMonitorPage() {
               {calibrationCapturePending ? 'Waiting For Calibration' : 'Refresh Calibration Image'}
             </button>
 
-            <button
-              type="button"
-              onClick={startCompletePhotosWorkflow}
-              disabled={busy || !session || images.length === 0}
-              className="h-10 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white disabled:opacity-50"
-            >
-              Complete Photos
-            </button>
-
-            <button
-              type="button"
-              onClick={endSession}
-              disabled={busy || !session}
-              className="h-10 rounded-lg bg-zinc-800 px-4 text-sm font-black text-white disabled:opacity-50"
-            >
-              End Session
-            </button>
+            {session?.status === 'active' ? (
+              <button
+                type="button"
+                onClick={endSession}
+                disabled={busy}
+                className="h-10 rounded-lg bg-zinc-800 px-4 text-sm font-black text-white disabled:opacity-50"
+              >
+                End Session
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={startSessionFromMonitor}
+                disabled={busy || !station}
+                className="h-10 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white disabled:opacity-50"
+                title={monitorItemId ? 'Start a photo session for this SKU.' : 'Open Photo Monitor from Edit SKU to start a session.'}
+              >
+                Start Session
+              </button>
+            )}
           </div>
         </header>
 
@@ -4214,14 +4265,6 @@ export default function PhotoMonitorPage() {
                   className="rounded-lg bg-red-700 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
                 >
                   Delete Selected
-                </button>
-                <button
-                  type="button"
-                  onClick={startCompletePhotosWorkflow}
-                  disabled={busy || !session || images.length === 0}
-                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
-                >
-                  Complete Photos
                 </button>
               </div>
             </div>

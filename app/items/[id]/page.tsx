@@ -1431,6 +1431,7 @@ export default function ItemPage() {
     options: { calibrationPrompt?: boolean } = {}
   ) {
     const query = new URLSearchParams({ station: stationId })
+    if (item?.id) query.set('item_id', item.id)
     if (options.calibrationPrompt) query.set('calibration_prompt', '1')
     const url = `/processing/photo-monitor?${query.toString()}`
     if (!newWindow) {
