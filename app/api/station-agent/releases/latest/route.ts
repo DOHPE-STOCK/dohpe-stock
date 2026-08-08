@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from 'next/server'
 const STATION_AGENT_VERSION = '0.3.28'
 
 function baseUrl(request: NextRequest) {
-  const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
-  if (configured) return configured
+  // Use the request origin for desktop updates so a stale NEXT_PUBLIC_APP_URL
+  // cannot point installed agents at localhost or an old deployment.
   return request.nextUrl.origin
 }
 
