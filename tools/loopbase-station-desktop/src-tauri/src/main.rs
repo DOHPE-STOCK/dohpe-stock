@@ -296,7 +296,7 @@ fn install_station_agent_update(
     let downloaded_size = metadata.len();
     if downloaded_size < 1024 * 1024 {
         return Err(format!(
-            "The downloaded file was only {downloaded_size} bytes, so Loopbase did not run it. The update URL probably returned an error page instead of the installer."
+            "The downloaded file was only {downloaded_size} bytes, so Loopbase did not run it. The update URL probably returned an error page instead of the installer. URL: {download_url}"
         ));
     }
     if let Some(expected_size) = expected_size_bytes {

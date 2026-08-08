@@ -95,8 +95,11 @@ set SETUP_FILE=%NSIS_DIR%\Loopbase Station Agent_%APP_VERSION%_x64-setup.exe
 if exist "%SETUP_FILE%" (
   copy /Y "%SETUP_FILE%" "%RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe"
   if errorlevel 1 exit /b %errorlevel%
+  copy /Y "%SETUP_FILE%" "%RELEASE_DIR%\Loopbase-Station-Agent-Setup.download"
+  if errorlevel 1 exit /b %errorlevel%
   echo Desktop installer copied to:
   echo %RELEASE_DIR%\Loopbase-Station-Agent-Setup.exe
+  echo %RELEASE_DIR%\Loopbase-Station-Agent-Setup.download
   exit /b 0
 )
 set MSI_DIR=%ORIGINAL_DIR%\src-tauri\target\release\bundle\msi

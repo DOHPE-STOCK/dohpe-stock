@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '0.3.31'
+const CURRENT_VERSION = '0.3.32'
 const dashboardUrl = 'http://127.0.0.1:8790'
 const invoke = window.__TAURI__?.core?.invoke
 

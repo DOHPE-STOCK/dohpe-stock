@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { existsSync, statSync } from 'fs'
 import path from 'path'
 
-const STATION_AGENT_VERSION = '0.3.31'
-const STATION_AGENT_FILE = 'downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.exe'
+const STATION_AGENT_VERSION = '0.3.32'
+const STATION_AGENT_FILE = 'downloads/loopbase-station-agent/Loopbase-Station-Agent-Setup.download'
 
 function baseUrl(request: NextRequest) {
   // Use the request origin for desktop updates so a stale NEXT_PUBLIC_APP_URL
