@@ -18,8 +18,26 @@ if errorlevel 1 (
   --onefile ^
   --noconsole ^
   --clean ^
+  --hidden-import argparse ^
+  --hidden-import hashlib ^
+  --hidden-import html ^
+  --hidden-import json ^
+  --hidden-import mimetypes ^
+  --hidden-import os ^
+  --hidden-import signal ^
   --hidden-import sqlite3 ^
   --hidden-import _sqlite3 ^
+  --hidden-import subprocess ^
+  --hidden-import sys ^
+  --hidden-import time ^
+  --hidden-import uuid ^
+  --hidden-import dataclasses ^
+  --hidden-import pathlib ^
+  --hidden-import http.server ^
+  --hidden-import socketserver ^
+  --hidden-import urllib.parse ^
+  --hidden-import urllib.request ^
+  --hidden-import urllib.error ^
   --add-data "..\photo-ingest-worker\photo_ingest_worker.py;photo-ingest-worker" ^
   --add-data "..\rfid-bridge\rfid_bridge.py;rfid-bridge" ^
   --add-data "..\rfid-zone-monitor\rfid_zone_monitor.py;rfid-zone-monitor" ^
